@@ -1,0 +1,62 @@
+extends ../layout
+
+block content
+  .container
+    h1.text-center Blockchain Lab
+    p.text-center.lead A classroom blockchain network for learning
+
+    .row.mt-5
+      .col-md-6
+        .panel.panel-default
+          .panel-heading
+            h3.panel-title.text-center Instructor
+          .panel-body.text-center
+            p.lead Create and manage a classroom blockchain
+            button.btn.btn-primary.btn-lg#createSessionBtn Create Session
+            p.mt-3
+              small Please use a secure password or save your admin token
+            div#adminTokenDisplay.alert.alert-warning.mt-3(style="display: none;")
+              p.text-center Your Admin Token:
+              code#adminToken
+              p.text-center.small Save this token to manage your session
+
+      .col-md-6
+        .panel.panel-default
+          .panel-heading
+            h3.panel-title.text-center Student
+          .panel-body
+            p.lead Join a classroom blockchain with a code
+            form#joinForm
+              .form-group
+                label(for="joinCode") Session Code:
+                input.form-control(type="text", id="joinCode", name="joinCode", placeholder="e.g., ABC123", required, maxlength="6")
+              .form-group
+                label(for="roleSelect") Select your role:
+                select.form-control#roleSelect(name="role")
+                  option(value="observer") Observer (Watch the network)
+                  option(value="participant") Participant (Mine blocks)
+              button.btn.btn-success.btn-lg(type="submit") Join
+
+    .row.mt-5
+      .col-md-12
+        .panel.panel-info
+          .panel-heading
+            h3.panel-title About Blockchain Lab
+          .panel-body
+            p
+              | This interactive demonstration shows how blockchains work in a peer-to-peer network.
+              | As an instructor, you can create a session and give students a code to join.
+              | Students can observe the blockchain or participate in mining blocks.
+            p
+              strong Key concepts demonstrated:
+              ul
+                li Proof of Work (PoW) mining
+                li Block validation and chain integrity
+                li Network consensus
+                li 51% attack vulnerability
+                li Transaction processing
+            p
+              | Based on #{' '}
+              a(href="http://andersbrownworth.com/blockchain/") Anders Brownworth's Blockchain Demo
+
+  script(src="/javascripts/lab/landing.js")

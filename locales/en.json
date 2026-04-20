@@ -15,5 +15,8 @@
 	"Tx": "Tx",
 	"$": "$",
 	"From": "From",
-	"Coinbase Transactions": "Coinbase Transactions"
+	"Coinbase Transactions": "Coinbase Transactions",
+	"The Blockchain Lab": "The Blockchain Lab",
+	"Learning Demos": "Learning Demos",
+	"Full Simulation": "Full Simulation"
 }

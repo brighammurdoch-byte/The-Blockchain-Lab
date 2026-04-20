@@ -8,7 +8,56 @@ the idea of an immutable ledger using an interactive web demo that is available 
 
 http://andersbrownworth.com/blockchain/
 
-## Setup
+## 🔥 NEW: Blockchain Lab - Classroom Network Edition
+
+**Blockchain Lab** transforms this demo into a full educational platform where students can participate in a real classroom blockchain network!
+
+### Features:
+- **Instructors** create isolated blockchain networks and control difficulty in real-time
+- **Students** join via code (like Kahoot!) and choose to observe or participate
+- **Observers** watch the network in real-time on any device (mobile-friendly)
+- **Participants** actually mine blocks using their computer's CPU (with resource limits)
+- **Real Proof-of-Work** - genuine SHA256 hashing and consensus mechanism
+- **51% Attack Simulation** - demonstrates blockchain vulnerability
+- **Transactions** - students can send coins to each other
+
+Perfect for teaching at scale - your whole class works together on one blockchain!
+
+### Quick Start - Blockchain Lab
+```bash
+npm install
+npm start
+# Then visit http://localhost:3000/lab
+```
+
+See [BLOCKCHAIN_LAB_README.md](BLOCKCHAIN_LAB_README.md) for complete documentation, deployment instructions, and educational materials.
+
+### Advanced Features - Code Transparency & Guided Demos ✨
+
+**NEW:** Students can now view and modify the actual validation code running on their computer!
+
+#### 🔬 Validator Code Editor
+- View the complete `blockValidator.js` that validates all blocks
+- Modify validation rules to create forks, demonstrate attacks, etc.
+- Experiment with:
+  - **Soft Forks** - Backward-compatible upgrades
+  - **Hard Forks** - Breaking changes that split the network
+  - **Double-Spend attacks** - See consensus failures
+  - **51% attacks** - Override the blockchain with majority hashrate
+
+#### 📚 Guided Demos
+11 complete educational scenarios including:
+- **Soft Fork:** Extended transaction format, larger block size
+- **Hard Fork:** Increase difficulty, require signatures
+- **BIPs:** Transaction fees, block timing proposals
+- **Attacks:** 51% success/failure, double-spend, selfish mining, eclipse attacks
+- **Real-World Examples:** Bitcoin Cash fork, Ethereum Classic, SegWit
+
+See [CODE_EDITOR_GUIDE.md](CODE_EDITOR_GUIDE.md) for detailed instructions on running demos and teaching lessons with code modification activities.
+
+---
+
+## Setup (Classic Demo)
 Get the code:
 
 ```

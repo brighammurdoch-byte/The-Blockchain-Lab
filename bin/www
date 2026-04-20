@@ -4,9 +4,12 @@
  * Module dependencies.
  */
 
+var express = require('express');
 var app = require('../app');
-var debug = require('debug')('zurveys:server');
+var debug = require('debug')('blockchain-demo:server');
 var http = require('http');
+var io = require('socket.io');
+var socketHandlers = require('../lib/socketHandlers');
 
 /**
  * Get port from environment and store in Express.
@@ -16,10 +19,22 @@ var port = normalizePort(process.env.PORT || '3000');
 app.set('port', port);
 
 /**
- * Create HTTP server.
+ * Create HTTP server with Socket.io
  */
 
 var server = http.createServer(app);
+var socket = io(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST']
+  }
+});
+
+// Attach socket.io to app for use in routes
+app.io = socket;
+
+// Initialize Socket.io handlers
+socketHandlers(socket, app);
 
 /**
  * Listen on provided port, on all network interfaces.

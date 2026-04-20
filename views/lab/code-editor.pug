@@ -1,0 +1,337 @@
+extends layout
+
+block content
+  .container-fluid
+    .row
+      // Code Editor Section (70% width)
+      .col-md-7
+        .panel.panel-primary
+          .panel-heading
+            h3.panel-title
+              i.glyphicon.glyphicon-edit
+              | &nbsp; Validator Code Editor
+            small.pull-right
+              span#codeStatus
+              =  " "
+              span.label.label-success Original
+
+          .panel-body
+            .form-group
+              label
+                strong BlockValidator.js
+              p.text-muted
+                small
+                  | This is the validation code running on your miner. Modify it to experiment with 
+                  strong forks
+                  | , 
+                  strong attacks
+                  | , or 
+                  strong consensus changes
+                  | !
+              
+              // Syntax highlighted code editor
+              pre#codeEditor(style="height: 600px; border: 1px solid #ddd; padding: 10px;")
+              
+              p
+                button#loadCode.btn.btn-info.btn-sm
+                  i.glyphicon.glyphicon-refresh
+                  | &nbsp;Load Code
+                button.btn.btn-warning.btn-sm(onclick="resetCode()")
+                  i.glyphicon.glyphicon-remove
+                  | &nbsp;Reset to Original
+                button#submitCode.btn.btn-success.btn-sm
+                  i.glyphicon.glyphicon-ok
+                  | &nbsp;Submit Modified Code
+                button.btn.btn-danger.btn-sm(onclick="toggleDiff()")
+                  i.glyphicon.glyphicon-list
+                  | &nbsp;Show Changes
+
+      // Learning Panel (30% width)
+      .col-md-5
+        // Key Functions Panel
+        .panel.panel-info
+          .panel-heading
+            h4.panel-title Key Functions to Modify
+          .panel-body
+            .accordion#accordion
+              .panel.panel-default
+                .panel-heading
+                  h5.panel-title
+                    a(data-toggle="collapse" data-parent="#accordion" href="#validateHash")
+                      code validateBlockHash()
+                      |  - Proof-of-Work
+                .panel-collapse.collapse(id="validateHash")
+                  .panel-body
+                    p
+                      strong What it does:
+                      | Checks if the block hash has the required number of leading zeros
+                    
+                    p
+                      strong Experiment:
+                      | Try changing 
+                      code requiredLeadingZeros: 3
+                      | to 4 or 2
+                    
+                    p
+                      strong What happens:
+                    ul
+                      li 3 zeros: Normal mining difficulty
+                      li 4 zeros: HARD FORK - incompatible with others
+                      li 2 zeros: Soft fork - blocks still validate
+                    
+                    p
+                      strong Educational value:
+                      | Learn why Proof-of-Work difficulty is critical to blockchain security
+
+              .panel.panel-default
+                .panel-heading
+                  h5.panel-title
+                    a(data-toggle="collapse" data-parent="#accordion" href="#validateTx")
+                      code validateTransaction()
+                      |  - Double-Spend Prevention
+                .panel-collapse.collapse(id="validateTx")
+                  .panel-body
+                    p
+                      strong What it does:
+                      | Verifies that users can't spend coins they don't have
+                    
+                    p
+                      strong Experiment:
+                      | Try removing the balance check to allow double-spending
+                    
+                    p
+                      strong What happens:
+                    ul
+                      li Remove check: Can send infinite coins ✗
+                      li Keep check: Transactions validated ✓
+                    
+                    p
+                      strong Educational value:
+                      | This is the fundamental security preventing coin duplication
+
+              .panel.panel-default
+                .panel-heading
+                  h5.panel-title
+                    a(data-toggle="collapse" data-parent="#accordion" href="#validateChain")
+                      code validatePreviousHash()
+                      |  - Chain Integrity
+                .panel-collapse.collapse(id="validateChain")
+                  .panel-body
+                    p
+                      strong What it does:
+                      | Ensures each block links to the previous block
+                    
+                    p
+                      strong Experiment:
+                      | Try allowing ANY previous hash (remove the check)
+                    
+                    p
+                      strong What happens:
+                    ul
+                      li Remove check: Chain breaks into fragments ✗
+                      li Keep check: Chain stays linked ✓
+                    
+                    p
+                      strong Educational value:
+                      | This is the "chain" in "blockchain" - without it, anyone could reorganize history
+
+        // Guided Demos Link
+        .panel.panel-warning
+          .panel-heading
+            h4.panel-title Guided Demos
+          .panel-body
+            p Want to learn specific attack scenarios? Check out the guided demos:
+            
+            ul.list-group
+              li.list-group-item
+                a(href="#" onclick="viewDemo('hard-fork-difficulty')")
+                  strong Hard Fork Demo
+                br
+                small Increase difficulty to 4 - see network split
+              
+              li.list-group-item
+                a(href="#" onclick="viewDemo('attack-51-will-succeed')")
+                  strong 51% Attack (Success)
+                br
+                small With majority power, override original chain
+              
+              li.list-group-item
+                a(href="#" onclick="viewDemo('attack-double-spend')")
+                  strong Double-Spend Attack
+                br
+                small Reverse transactions with majority hashrate
+
+        // Code Status Panel
+        .panel.panel-danger
+          .panel-heading
+            h4.panel-title Code Status
+          .panel-body
+            ul.list-unstyled
+              li
+                i.glyphicon.glyphicon-ok.text-success(id="statusOriginal")
+                | &nbsp;
+                span#statusOriginalText Using original validator code
+              
+              li
+                i.glyphicon.glyphicon-remove.text-danger(id="statusModified" style="display:none;")
+                | &nbsp;
+                span#statusModifiedText
+                  strong You modified your validator!
+                  br
+                  small Monitor the network for chain forks or consensus conflicts
+              
+              li
+                i.glyphicon.glyphicon-warning-sign.text-warning(id="statusWaiting" style="display:none;")
+                | &nbsp;
+                span#statusWaitingText Waiting for code validation...
+
+            p(id="networkStatus" style="margin-top: 10px;")
+              small.text-muted No network changes detected
+
+  // CodeMirror for syntax highlighting
+  script(src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js")
+  link(rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css")
+
+  script(src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/ace.min.js")
+  script(src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/mode-javascript.min.js")
+  script(src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/theme-monokai.min.js")
+
+  script.
+    // Initialize Ace Editor
+    var editor = ace.edit("codeEditor");
+    editor.setTheme("ace/theme/monokai");
+    editor.session.setMode("ace/mode/javascript");
+    editor.setFontSize(14);
+    editor.setWrapBehavioursEnabled(true);
+
+    var originalCode = "";
+    var sessionId = "#{sessionId}";
+    var userId = "#{userId || 'anonymous'}";
+
+    // Load validator code
+    document.getElementById('loadCode').addEventListener('click', function() {
+      fetch('/lab/validator-code')
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            originalCode = data.code;
+            editor.setValue(originalCode);
+            document.getElementById('codeStatus').textContent = "Code loaded";
+            updateStatus('original');
+          }
+        })
+        .catch(err => {
+          alert('Error loading code: ' + err.message);
+          // Load blockValidator.js for demo
+          fetch('/lib/blockValidator.js')
+            .then(res => res.text())
+            .then(code => {
+              originalCode = code;
+              editor.setValue(code);
+            });
+        });
+    });
+
+    // Submit modified code
+    document.getElementById('submitCode').addEventListener('click', function() {
+      var modifiedCode = editor.getValue();
+      
+      if (modifiedCode === originalCode) {
+        alert('You haven\'t made any changes to the code.');
+        return;
+      }
+
+      if (!confirm('Submit your modified validator code? This may cause your node to fork from the network!')) {
+        return;
+      }
+
+      // Disable button during submission
+      this.disabled = true;
+
+      fetch('/lab/validator-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: sessionId,
+          userId: userId,
+          modifiedCode: modifiedCode
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          updateStatus('modified');
+          document.getElementById('networkStatus').innerHTML = 
+            '<strong style="color: orange;">⚠ Your validator is now MODIFIED.</strong> ' +
+            'Other miners may reject or accept your blocks depending on their code.';
+          
+          // Re-enable button
+          this.disabled = false;
+        } else {
+          alert('Error: ' + data.error);
+          this.disabled = false;
+        }
+      })
+      .catch(err => {
+        alert('Error submitting code: ' + err.message);
+        this.disabled = false;
+      });
+    });
+
+    function resetCode() {
+      if (confirm('Reset validator code to original? Your modifications will be lost.')) {
+        editor.setValue(originalCode);
+        updateStatus('original');
+        document.getElementById('networkStatus').innerHTML = '';
+      }
+    }
+
+    function updateStatus(status) {
+      document.getElementById('statusOriginal').style.display = status === 'original' ? 'inline' : 'none';
+      document.getElementById('statusOriginalText').style.display = status === 'original' ? 'inline' : 'none';
+      
+      document.getElementById('statusModified').style.display = status === 'modified' ? 'inline' : 'none';
+      document.getElementById('statusModifiedText').style.display = status === 'modified' ? 'inline' : 'none';
+      
+      document.getElementById('codeStatus').textContent = status === 'modified' ? 'MODIFIED' : 'Original';
+      document.querySelector('span.label').className = status === 'modified' ? 'label label-danger' : 'label label-success';
+    }
+
+    function toggleDiff() {
+      var current = editor.getValue();
+      if (current === originalCode) {
+        alert('No changes detected');
+      } else {
+        alert('You have modified the following functions:\n' + 
+              '- Lines with red background show your changes');
+      }
+    }
+
+    function viewDemo(demoName) {
+      // Load demo into a modal
+      fetch('/lab/demos/' + demoName)
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            var demo = data.demo;
+            var msg = demo.name + '\n\n' + 
+                      (demo.setup ? demo.setup.description + '\n' : '') +
+                      '\nClick the Guided Demos tab to see full details.';
+            alert(msg);
+          }
+        });
+    }
+
+    // Load code on page load
+    window.addEventListener('load', function() {
+      document.getElementById('loadCode').click();
+    });
+
+    // WebSocket listener for network changes
+    if (window.socket) {
+      socket.on('validator-modified', function(data) {
+        document.getElementById('networkStatus').innerHTML += 
+          '<br><strong style="color: orange;">' + new Date().toLocaleTimeString() + 
+          ':</strong> ' + data.message;
+      });
+    }

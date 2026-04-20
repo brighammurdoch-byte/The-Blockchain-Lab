@@ -1,0 +1,119 @@
+extends ../layout
+
+block content
+  .container-fluid
+    .row
+      .col-md-12.mb-3
+        .panel.panel-info
+          .panel-heading
+            h3.panel-title Session Information
+          .panel-body
+            .row
+              .col-md-12
+                p
+                  strong Session Code:
+                  br
+                  code#sessionCode.text-center(style="display: block; font-size: 1.5em; padding: 10px; background: #f5f5f5;") Loading...
+
+    .row
+      .col-md-3
+        .panel.panel-success
+          .panel-heading
+            h3.panel-title Your Wallet
+          .panel-body
+            .well
+              p.text-center
+                strong Your Address
+                br
+                code.small#yourAddress(style="word-break: break-all;") Loading...
+            .well
+              p.text-center
+                strong Balance
+                br
+                h3#yourBalance 0
+                | coins
+
+        .panel.panel-info
+          .panel-heading
+            h3.panel-title Network Overview
+          .panel-body
+            .well
+              p.text-center
+                strong Block Height
+                br
+                h3#blockHeight 0
+            .well
+              p.text-center
+                strong Participants
+                br
+                h3#participantCount 0
+            .well
+              p.text-center
+                strong Network Hashrate
+                br
+                h4#totalHashrate 0 H/s
+            .well
+              p.text-center
+                strong Last Block
+                br
+                h4#lastBlockTime 0s ago
+
+        .panel.panel-default
+          .panel-heading
+            h3.panel-title Active Participants
+          .panel-body(style="max-height: 400px; overflow-y: auto;")
+            ul#participantList.list-group
+              li.list-group-item.text-muted Waiting for participants...
+
+        .panel.panel-default
+          .panel-heading
+            h3.panel-title Send Transaction
+          .panel-body
+            form#transactionForm
+              .form-group
+                label Recipient
+                input.form-control#recipientAddress(type="text", placeholder="Address or name")
+              .form-group
+                label Amount
+                input.form-control#transactionAmount(type="number", min="0.01", step="0.01", placeholder="Amount")
+              button.btn.btn-primary.btn-block(type="submit") Send Transaction
+
+        .panel.panel-default
+          .panel-heading
+            h3.panel-title Admin Settings
+          .panel-body
+            dl.dl-horizontal
+              dt Leading Zeros
+              dd#adminDifficultyLeading N/A
+              dt Secondary
+              dd#adminDifficultySecondary N/A
+              dt Mining Reward
+              dd#adminMiningReward N/A
+              dt Parameters
+              dd#adminParams Unlocked
+
+      .col-md-9
+        .panel.panel-default
+          .panel-heading
+            h3.panel-title Blockchain
+          .panel-body(style="max-height: 800px; overflow-y: auto;")
+            div#blockchainView
+              p.text-center.text-muted Loading blockchain...
+
+        .panel.panel-default
+          .panel-heading
+            h3.panel-title Pending Transactions
+          .panel-body(style="max-height: 300px; overflow-y: auto;")
+            table.table.table-striped.table-hover
+              thead
+                tr
+                  th From
+                  th To
+                  th Amount
+                  th Time
+              tbody#pendingTransactions
+                tr
+                  td(colspan="4").text-center No pending transactions
+
+  script(src="/socket.io/socket.io.js")
+  script(src="/javascripts/lab/observe.js")

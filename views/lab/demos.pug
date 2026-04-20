@@ -1,0 +1,339 @@
+extends layout
+
+block content
+  .container-fluid
+    .row
+      .col-md-12
+        h1 Blockchain Lab - Guided Demos
+        p.lead Learn blockchain concepts through hands-on attack and fork scenarios
+        hr
+
+    // Demo Categories
+    .row
+      .col-md-3
+        .panel.panel-default
+          .panel-heading
+            h5 Categories
+          .panel-body
+            ul.list-group
+              li.list-group-item(onclick="filterDemos('soft-fork')" style="cursor: pointer;")
+                i.glyphicon.glyphicon-random
+                | &nbsp;
+                strong Soft Forks
+                .text-muted.small Backward-compatible upgrades
+              
+              li.list-group-item(onclick="filterDemos('hard-fork')" style="cursor: pointer;")
+                i.glyphicon.glyphicon-resize-full
+                | &nbsp;
+                strong Hard Forks
+                .text-muted.small Network-splitting changes
+              
+              li.list-group-item(onclick="filterDemos('bip')" style="cursor: pointer;")
+                i.glyphicon.glyphicon-list
+                | &nbsp;
+                strong BIPs
+                .text-muted.small Improvement proposals (not yet implemented)
+              
+              li.list-group-item(onclick="filterDemos('attack')" style="cursor: pointer;")
+                i.glyphicon.glyphicon-fire
+                | &nbsp;
+                strong Attacks
+                .text-muted.small 51%, double-spend, and more
+              
+              li.list-group-item(onclick="showAllDemos()" style="cursor: pointer;")
+                i.glyphicon.glyphicon-th-list
+                | &nbsp;
+                strong All Demos
+                .text-muted.small View everything
+
+      .col-md-9
+        #demosContainer
+          p.text-center
+            i.fa.fa-spinner.fa-spin
+            | Loading demos...
+
+  // Demo Detail Modal
+  #demoModal.modal.fade(tabindex="-1" role="dialog")
+    .modal-dialog.modal-lg(role="document")
+      .modal-content
+        .modal-header
+          button.close(type="button" data-dismiss="modal") &times;
+          h4.modal-title#demoTitle Demo Title
+        
+        .modal-body#demoContent
+          p Loading...
+
+        .modal-footer
+          button.btn.btn-default(data-dismiss="modal") Close
+          button.btn.btn-primary#startDemoBtn Start This Demo
+
+  script.
+    var sessionId = "#{sessionId}";
+    var allDemos = [];
+
+    // Load all demos
+    function loadDemos() {
+      fetch('/lab/demos')
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            allDemos = data.demos;
+            showAllDemos();
+          }
+        })
+        .catch(err => console.error('Error loading demos:', err));
+    }
+
+    function showAllDemos() {
+      renderDemos(allDemos);
+    }
+
+    function filterDemos(category) {
+      var filtered = allDemos.filter(d => d.category === category);
+      if (filtered.length === 0) {
+        document.getElementById('demosContainer').innerHTML = 
+          '<p class="text-warning">No demos in this category yet.</p>';
+      } else {
+        renderDemos(filtered);
+      }
+    }
+
+    function renderDemos(demos) {
+      var html = '';
+      
+      if (demos.length === 0) {
+        html = '<p class="text-warning">No demos found.</p>';
+      } else {
+        // Group by category
+        var byCategory = {};
+        demos.forEach(d => {
+          if (!byCategory[d.category]) {
+            byCategory[d.category] = [];
+          }
+          byCategory[d.category].push(d);
+        });
+
+        Object.keys(byCategory).forEach(cat => {
+          html += '<h4>' + getCategoryName(cat) + '</h4>';
+          html += '<div class="row">';
+          
+          byCategory[cat].forEach(d => {
+            var difficultyColor = d.difficulty === 'Beginner' ? 'success' : 
+                                  d.difficulty === 'Intermediate' ? 'warning' : 'danger';
+            
+            html += `
+              <div class="col-md-6 demo-card" style="margin-bottom: 20px;">
+                <div class="panel panel-default">
+                  <div class="panel-body">
+                    <h5 onclick="viewDemo('${d.id}')" style="cursor: pointer; color: #0066cc;">
+                      <i class="glyphicon glyphicon-play"></i> ${d.name}
+                    </h5>
+                    <p class="text-muted small">${d.category}</p>
+                    <p class="small">
+                      <span class="label label-${difficultyColor}">${d.difficulty}</span>
+                    </p>
+                    <button class="btn btn-sm btn-primary" onclick="viewDemo('${d.id}')">
+                      View Details →
+                    </button>
+                  </div>
+                </div>
+              </div>
+            `;
+          });
+          
+          html += '</div>';
+        });
+      }
+      
+      document.getElementById('demosContainer').innerHTML = html;
+    }
+
+    function getCategoryName(cat) {
+      const names = {
+        'soft-fork': 'Soft Forks',
+        'hard-fork': 'Hard Forks',
+        'bip': 'Blockchain Improvement Proposals',
+        'attack': 'Attacks'
+      };
+      return names[cat] || cat;
+    }
+
+    function viewDemo(demoId) {
+      fetch('/lab/demos/' + demoId)
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            var demo = data.demo;
+            renderDemoModal(demo, demoId);
+            $('#demoModal').modal('show');
+          }
+        })
+        .catch(err => alert('Error loading demo: ' + err.message));
+    }
+
+    function renderDemoModal(demo, demoId) {
+      document.getElementById('demoTitle').textContent = demo.name;
+      
+      var content = '<div class="demo-content">';
+      
+      // Overview
+      if (demo.overview) {
+        content += '<div class="section">';
+        content += '<h5>Overview</h5>';
+        content += '<pre>' + demo.overview.trim() + '</pre>';
+        content += '</div>';
+      }
+
+      // Setup
+      if (demo.setup) {
+        content += '<div class="section">';
+        content += '<h5>Setup Instructions</h5>';
+        if (demo.setup.description) {
+          content += '<p><strong>' + demo.setup.description + '</strong></p>';
+        }
+        if (demo.setup.steps) {
+          content += '<ol>';
+          demo.setup.steps.forEach(step => {
+            content += '<li>' + step + '</li>';
+          });
+          content += '</ol>';
+        }
+        content += '</div>';
+      }
+
+      // Code Modification
+      if (demo.codeModification) {
+        content += '<div class="section bg-warning" style="padding: 10px; border-radius: 5px; margin-bottom: 10px;">';
+        content += '<h5>Code to Modify</h5>';
+        if (demo.codeModification.location) {
+          content += '<p><small><strong>Location:</strong> ' + demo.codeModification.location + '</small></p>';
+        }
+        if (demo.codeModification.before) {
+          content += '<p><strong>Before:</strong></p>';
+          content += '<pre style="background: #f5f5f5;"><code>' + demo.codeModification.before + '</code></pre>';
+        }
+        if (demo.codeModification.after) {
+          content += '<p><strong>After:</strong></p>';
+          content += '<pre style="background: #f5f5f5;"><code>' + demo.codeModification.after + '</code></pre>';
+        }
+        if (demo.codeModification.change) {
+          content += '<p>' + demo.codeModification.change + '</p>';
+        }
+        content += '</div>';
+      }
+
+      // Expected Outcome
+      if (demo.expectedOutcome) {
+        content += '<div class="section">';
+        content += '<h5>Expected Outcome</h5>';
+        content += '<pre>' + demo.expectedOutcome.trim() + '</pre>';
+        content += '</div>';
+      }
+
+      // Why It Works/Matters
+      if (demo.whyItWorks) {
+        content += '<div class="section">';
+        content += '<h5>Why This Works</h5>';
+        content += '<pre>' + demo.whyItWorks.trim() + '</pre>';
+        content += '</div>';
+      }
+
+      if (demo.whyItMatters) {
+        content += '<div class="section">';
+        content += '<h5>Why This Matters</h5>';
+        content += '<pre>' + demo.whyItMatters.trim() + '</pre>';
+        content += '</div>';
+      }
+
+      // Real World Example
+      if (demo.realWorldExample) {
+        content += '<div class="section" style="background: #e8f4f8; padding: 10px; border-left: 4px solid #0066cc;">';
+        content += '<h5>Real-World Example</h5>';
+        content += '<p>' + demo.realWorldExample.trim() + '</p>';
+        content += '</div>';
+      }
+
+      // Learning Point
+      if (demo.learningPoint) {
+        content += '<div class="section" style="background: #f0f0f0; padding: 10px; border-radius: 5px;">';
+        content += '<h5>Key Learning Point</h5>';
+        content += '<pre>' + demo.learningPoint.trim() + '</pre>';
+        content += '</div>';
+      }
+
+      content += '</div>';
+      
+      document.getElementById('demoContent').innerHTML = content;
+
+      // Set up start button
+      document.getElementById('startDemoBtn').onclick = function() {
+        startDemo(demoId);
+        $('#demoModal').modal('hide');
+      };
+    }
+
+    function startDemo(demoId) {
+      // Switch to code editor with demo instructions
+      console.log('Starting demo:', demoId);
+      
+      // Get the demo details
+      fetch('/lab/demos/' + demoId)
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            var demo = data.demo;
+            alert(
+              'Demo: ' + demo.name + '\n\n' +
+              'Instructions:\n' +
+              (demo.setup && demo.setup.description ? demo.setup.description + '\n' : '') +
+              '\nNow switch to the "Code Editor" tab to make modifications.\n' +
+              'Follow the code change instructions in the demo details.'
+            );
+            
+            // Could navigate to code editor: window.location = '/lab/code/' + sessionId;
+          }
+        });
+    }
+
+    // Load demos on page load
+    window.addEventListener('load', function() {
+      loadDemos();
+    });
+
+    // Styles for demo cards
+    var style = document.createElement('style');
+    style.textContent = `
+      .demo-content .section {
+        margin-bottom: 20px;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 3px;
+      }
+      
+      .demo-content pre {
+        background-color: #f5f5f5;
+        padding: 10px;
+        border-radius: 3px;
+        max-height: 300px;
+        overflow-y: auto;
+      }
+      
+      .demo-card {
+        transition: all 0.3s ease;
+      }
+      
+      .demo-card:hover {
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      }
+      
+      .demo-card h5 {
+        margin-top: 0;
+        color: #333;
+        transition: color 0.3s ease;
+      }
+      
+      .demo-card:hover h5 {
+        color: #cc0000;
+      }
+    `;
+    document.head.appendChild(style);

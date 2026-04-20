@@ -1,0 +1,167 @@
+extends ../layout
+
+block content
+  .container-fluid
+    .row
+      .col-md-12.mb-3
+        .panel.panel-info
+          .panel-heading
+            h3.panel-title Session Information
+          .panel-body
+            .row
+              .col-md-6
+                p
+                  strong Session Code:
+                  br
+                  code#sessionCode.text-center(style="display: block; font-size: 1.5em; padding: 10px; background: #f5f5f5;") Loading...
+                small Share this code with students to join
+              .col-md-6
+                p
+                  strong Admin Token:
+                  br
+                  code#adminTokenDisplay.text-center(style="display: block; font-size: 0.9em; padding: 10px; background: #f5f5f5; word-break: break-all;") Loading...
+                small Keep this secret - needed to manage settings
+
+    .row
+      .col-md-3
+        .panel.panel-primary
+          .panel-heading
+            h3.panel-title Network Controls
+          .panel-body
+            .form-group
+              label Difficulty (Leading Zeros):
+              input.form-control#difficultyLeading(type="range", min="1", max="6", value="3")
+              small.form-text.text-muted Current: 
+              strong#difficultyLeadingValue 3
+
+            .form-group
+              label Difficulty (Secondary):
+              input.form-control#difficultySecondary(type="range", min="0", max="15", value="15")
+              small.form-text.text-muted Current: 0x
+              strong#difficultySecondaryValue F
+
+            .form-group
+              label Mining Reward (coins):
+              input.form-control#miningReward(type="number", min="1", max="100", value="10")
+
+            .form-group
+              .checkbox
+                label
+                  input(type="checkbox", id="lockParameters")
+                  | Lock parameters (no runtime changes)
+
+            button.btn.btn-primary.btn-block#updateSettingsBtn Update Settings
+            button.btn.btn-danger.btn-block#toggleNetworkBtn.mt-2 Pause Network
+
+        .panel.panel-warning
+          .panel-heading
+            h3.panel-title Attack Simulation
+          .panel-body
+            .form-group
+              label Simulate 51% Attack:
+              select.form-control#attackerSelect
+                option(value="") Select attacker...
+                option(value="none") None
+              input.form-control#attackBlockIndex(type="number", min="0", placeholder="From block #", style="display: none;")
+            button.btn.btn-danger.btn-block#startAttackBtn(disabled) Initiate Attack
+            small.form-text.text-muted Only enabled if attacker has 51% hashrate
+
+      .col-md-9
+        .panel.panel-default
+          .panel-heading
+            h3.panel-title Network Topology & Block Propagation
+          .panel-body
+            svg#networkVisualizationSvg(width="100%", height="500", style="border: 1px solid #ddd; border-radius: 4px; background: #f9f9f9;")
+            .mt-2.text-center
+              small
+                span.legend-item
+                  span(style="background: #4CAF50; display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px;")
+                  | Mining
+                span.legend-item.ml-3
+                  span(style="background: #FFC107; display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px;")
+                  | Block Found
+                span.legend-item.ml-3
+                  span(style="background: #2196F3; display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px;")
+                  | Receiving
+                span.legend-item.ml-3
+                  span(style="background: #f0f0f0; border: 2px solid #999; display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px;")
+                  | Offline
+
+        .panel.panel-default
+          .panel-heading
+            h3.panel-title Network Statistics
+          .panel-body
+            .row.text-center
+              .col-md-3
+                h4#blockHeight 0
+                small Block Height
+              .col-md-3
+                h4#participantCount 0
+                small Participants
+              .col-md-3
+                h4#totalHashrate 0 H/s
+                small Network Hashrate
+              .col-md-3
+                h4#lastBlockTime 0s
+                small Last Block
+
+        .panel.panel-default
+          .panel-heading
+            h3.panel-title Node Names & Info
+          .panel-body
+            table.table.table-striped.table-hover(style="font-size: 12px;")
+              thead
+                tr
+                  th Node ID
+                  th Display Name
+                  th Status
+              tbody#nodeNamesList
+                tr
+                  td(colspan="3").text-center.text-muted Waiting for miners to join...
+
+        .panel.panel-default
+          .panel-heading
+            h3.panel-title.pull-left Participants
+            .clearfix
+          .panel-body
+            table.table.table-striped.table-hover
+              thead
+                tr
+                  th User ID
+                  th Role
+                  th Blocks Mined
+                  th Balance
+                  th Hashrate
+              tbody#participantsList
+                tr
+                  td(colspan="5").text-center No participants yet
+
+        .panel.panel-default
+          .panel-heading
+            h3.panel-title.pull-left Blockchain
+            .clearfix
+          .panel-body(style="max-height: 600px; overflow-y: auto;")
+            div#blockchainView
+              p.text-center.text-muted Loading blockchain...
+
+  .modal.fade#attackWarningModal(tabindex="-1", role="dialog")
+    .modal-dialog
+      .modal-content
+        .modal-header
+          button.close(type="button", data-dismiss="modal")
+            span &times;
+          h4.modal-title WARNING: 51% Attack in Progress
+        .modal-body
+          p.text-danger A participant has achieved 51% of network hashrate and initiated an attack!
+          p This is simulating a real blockchain attack where the attacker can:
+          ul
+            li Create a fork in the chain
+            li Potentially reverse transactions
+            li Double-spend coins
+          p The original chain is shown in red, the attack fork in yellow.
+        .modal-footer
+          button.btn.btn-secondary(type="button", data-dismiss="modal") Close
+
+  script(src="/socket.io/socket.io.js")
+  script(src="/javascripts/lab/network-visualization.js")
+  script(src="/javascripts/lab/admin.js")

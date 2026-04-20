@@ -1,3 +1,6 @@
+// Load environment variables from .env file
+require('dotenv').config();
+
 var express = require('express');
 var i18n = require('i18n');
 var path = require('path');
@@ -7,8 +10,20 @@ var cookieParser = require('cookie-parser');
 var bodyParser = require('body-parser');
 
 var routes = require('./routes/index');
+var labRoutes = require('./routes/lab');
+
+var BlockchainLab = require('./lib/blockchainLab');
 
 var app = express();
+
+// Configure i18n first, before initializing it
+i18n.configure({
+  locales:['en', 'de', 'es', 'fr-CA', 'hi', 'ja', 'ko', 'nl', 'pl', 'pt', 'zh-CN', 'hu', 'id', 'th'],
+  directory: __dirname + '/locales'
+});
+
+// Initialize BlockchainLab singleton
+app.blockchainLab = new BlockchainLab();
 
 // view engine setup
 app.set('views', path.join(__dirname, 'views'));
@@ -23,6 +38,7 @@ app.use(i18n.init);
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.use('/', routes);
+app.use('/lab', labRoutes);
 
 // catch 404 and forward to error handler
 app.use(function(req, res, next) {
@@ -53,11 +69,6 @@ app.use(function(err, req, res, next) {
     message: err.message,
     error: {}
   });
-});
-
-i18n.configure({
-  locales:['en', 'de', 'es', 'fr-CA', 'hi', 'ja', 'ko', 'nl', 'pl', 'pt', 'zh-CN', 'hu', 'id', 'th'],
-  directory: __dirname + '/locales'
 });
 
 module.exports = app;

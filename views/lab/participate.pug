@@ -1,0 +1,273 @@
+extends ../layout
+
+block content
+  .container-fluid
+    .row
+      .col-md-12.mb-3
+        .panel.panel-info
+          .panel-heading
+            h3.panel-title Session Information
+          .panel-body
+            .row
+              .col-md-12
+                p
+                  strong Session Code:
+                  br
+                  code#sessionCode.text-center(style="display: block; font-size: 1.5em; padding: 10px; background: #f5f5f5;") Loading...
+
+    .row
+      .col-md-3
+        .panel.panel-success
+          .panel-heading
+            h3.panel-title Your Stats
+          .panel-body
+            .well
+              p.text-center
+                strong Your Address
+                br
+                code.small#yourAddress(style="word-break: break-all;") Loading...
+            .well
+              p.text-center
+                strong Node Name
+              input.form-control#nodeName(type="text", placeholder="Name your node", style="text-align: center; margin-bottom: 10px;")
+              button.btn.btn-xs.btn-primary.btn-block#setNodeNameBtn Save Node Name
+            .well
+              p.text-center
+                strong Balance
+                br
+                h3#yourBalance 0
+                | coins
+            .well
+              p.text-center
+                strong Blocks Mined
+                br
+                h3#blocksMined 0
+            .well
+              p.text-center
+                strong Your Hashrate
+                br
+                h4#yourHashrate 0 H/s
+
+        .panel.panel-default
+          .panel-heading
+            h3.panel-title Mining Controls
+          .panel-body
+            .form-group
+              label Mine with:
+              input.form-control(type="range", id="cpuUsage", min="10", max="100", value="50", step="10")
+              small.form-text.text-muted
+                span#cpuUsageValue 50
+                | % CPU usage
+            button.btn.btn-success.btn-block.btn-lg#mineBtn Start Mining
+            button.btn.btn-warning.btn-block.btn-lg#stopMineBtn(style="display: none;") Stop Mining
+            .alert.alert-warning.mt-3
+              small Limit CPU usage to prevent system strain. Recommended: 50%
+
+        .panel.panel-default
+          .panel-heading
+            h3.panel-title Send Transaction
+          .panel-body
+            form#transactionForm
+              .form-group
+                label Recipient
+                input.form-control#recipientAddress(type="text", placeholder="Address or name")
+              .form-group
+                label Amount
+                input.form-control#transactionAmount(type="number", min="0.01", step="0.01", placeholder="Amount")
+              button.btn.btn-primary.btn-block(type="submit") Send Transaction
+
+      .col-md-9
+        // Tabs for different sections
+        ul.nav.nav-tabs(role="tablist")
+          li.active
+            a(href="#tabOverview" role="tab" data-toggle="tab")
+              i.glyphicon.glyphicon-user
+              | Personal Chain
+          li
+            a(href="#tabNetwork" role="tab" data-toggle="tab")
+              i.glyphicon.glyphicon-globe
+              | Shared Network
+          li
+            a(href="#tabCode" role="tab" data-toggle="tab")
+              i.glyphicon.glyphicon-edit
+              | Your Validator Code
+          li
+            a(href="#tabDemos" role="tab" data-toggle="tab")
+              i.glyphicon.glyphicon-play
+              | Guided Demos
+
+        .tab-content
+          // PERSONAL CHAIN TAB
+          #tabOverview.tab-pane.active
+            .panel.panel-info
+              .panel-heading
+                h3.panel-title.pull-left Network Overview
+                .clearfix
+              .panel-body
+                .row.text-center
+                  .col-md-3
+                    h4#blockHeight 0
+                    small Block Height
+                  .col-md-3
+                    h4#participantCount 0
+                    small Participants
+                  .col-md-3
+                    h4#totalHashrate 0 H/s
+                    small Network Hashrate
+                  .col-md-3
+                    h4#difficultyLevel N/A
+                    small Current Difficulty
+
+            .panel.panel-default
+              .panel-heading
+                h3.panel-title Mining Activity
+              .panel-body
+                div#miningActivity
+                  p.text-muted No mining activity
+
+            .panel.panel-default
+              .panel-heading
+                h3.panel-title Your Blockchain Replica
+              .panel-body(style="max-height: 600px; overflow-y: auto;")
+                div#blockchainView
+                  p.text-center.text-muted Loading blockchain...
+            
+          // SHARED NETWORK TAB
+          #tabNetwork.tab-pane
+            .panel.panel-default#networkStatsPanel
+              .panel-heading
+                h3.panel-title Pending Transactions
+              .panel-body(style="max-height: 300px; overflow-y: auto;")
+                table.table.table-striped.table-hover
+                  thead
+                    tr
+                      th From
+                      th To
+                      th Amount
+                      th Time
+                  tbody#pendingTransactions
+                    tr
+                      td(colspan="4").text-center No pending transactions
+                      
+            .panel.panel-default
+              .panel-heading
+                h3.panel-title Active Miners & Wallets
+              .panel-body(style="max-height: 200px; overflow-y: auto;")
+                ul#participantList.list-group
+                  li.list-group-item.text-muted Waiting for miners and wallets...
+
+            .panel.panel-primary
+              .panel-heading
+                h3.panel-title Shared Network Blockchain
+              .panel-body(style="max-height: 800px; overflow-y: auto; background-color: #fcfcfc;")
+                div#networkBlockchainView
+                  p.text-center.text-muted Loading network...
+
+          // CODE EDITOR TAB
+          #tabCode.tab-pane
+            .panel.panel-primary
+              .panel-heading
+                h3.panel-title
+                  i.glyphicon.glyphicon-edit
+                  | Validator Code Editor
+              .panel-body
+                .alert.alert-info
+                  p
+                    strong Experiment with blockchain rules!
+                  p Modify the validation rules below to create forks, experiment with attacks, and learn how consensus works.
+                  ul
+                    li View the actual validation code
+                    li Modify rules to create forks
+                    li Experiment with attacks
+                    li Learn how consensus works
+                
+                .form-group
+                  label(for="validatorCodeEditor") blockValidator.js
+                  textarea.form-control#validatorCodeEditor(rows="20", style="font-family: monospace; white-space: pre; background-color: #f8f9fa;") Loading code...
+                
+                button.btn.btn-success#submitValidatorCodeBtn Submit Modified Code
+                button.btn.btn-danger#btnSetupDoubleSpend(style="margin-left: 10px;") Simulate Double Spend
+                button.btn.btn-default#resetValidatorCodeBtn.pull-right Reset to Original
+
+          // DEMOS TAB
+          #tabDemos.tab-pane
+            .panel.panel-warning
+              .panel-heading
+                h3.panel-title
+                  i.glyphicon.glyphicon-play
+                  | Guided Demos
+              .panel-body
+                .alert.alert-info
+                  p
+                    strong Learn blockchain concepts through guided scenarios!
+                  p
+                    | We provide step-by-step tutorials for:
+                  ul
+                    li Soft forks - backward compatible upgrades
+                    li Hard forks - network-splitting changes
+                    li 51% attacks - overriding the chain
+                    li Double-spend attacks
+                    li Improvement proposals (BIPs)
+                
+                a.btn.btn-lg.btn-warning(href="#" onclick="openDemos()")
+                  i.glyphicon.glyphicon-th-list
+                  | View All Guided Demos
+
+  .modal.fade#blockMinedModal(tabindex="-1", role="dialog")
+    .modal-dialog
+      .modal-content
+        .modal-header
+          button.close(type="button", data-dismiss="modal")
+            span &times;
+          h4.modal-title SUCCESS! Block Mined
+        .modal-body
+          p Congratulations! You successfully mined a block!
+          dl.dl-horizontal
+            dt Block #
+            dd#minedBlockIndex
+            dt Hash
+            dd
+              code#minedBlockHash(style="word-break: break-all; font-size: 10px;")
+            dt Nonce
+            dd#minedBlockNonce
+            dt Reward
+            dd#minedReward
+        .modal-footer
+          button.btn.btn-primary(type="button", data-dismiss="modal") OK
+
+  .modal.fade#transactionSentModal(tabindex="-1", role="dialog")
+    .modal-dialog
+      .modal-content
+        .modal-header
+          button.close(type="button", data-dismiss="modal")
+            span &times;
+          h4.modal-title Transaction Sent
+        .modal-body
+          p Your transaction has been added to the pending pool.
+          p It will be included in the next mined block.
+        .modal-footer
+          button.btn.btn-primary(type="button", data-dismiss="modal") OK
+
+  .modal.fade#forkChoiceModal(tabindex="-1", role="dialog", data-backdrop="static", data-keyboard="false")
+    .modal-dialog
+      .modal-content
+        .modal-header
+          h4.modal-title ⚠️ Hard Fork Proposed!
+        .modal-body
+          p The admin has proposed a network hard fork: <strong id="forkProposalName"></strong>
+          p It will activate at Block Height: <strong id="forkProposalHeight"></strong>
+          p If the network disagrees, it will split into two separate blockchains! Which side will you mine on?
+        .modal-footer
+          button.btn.btn-default.pull-left#btnRejectFork(type="button") Reject (Classic Chain)
+          button.btn.btn-warning#btnAcceptFork(type="button") Accept (New Chain)
+
+  script(src="/socket.io/socket.io.js")
+  script(src="/javascripts/lab/participate.js")
+  
+  script.
+    // Get session and user IDs from page URL
+    var sessionId = window.location.pathname.split('/').pop();
+    
+    function openDemos() {
+      window.open('/lab/demos-view/' + sessionId, '_blank');
+    }
