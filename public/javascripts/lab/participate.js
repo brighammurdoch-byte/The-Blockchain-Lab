@@ -1346,7 +1346,6 @@ function updateNetworkBlockchainView(mainChain, orphans) {
         }
       }
       const arrowColor = hasFork ? '#f0ad4e' : '#bbb';
-      if (hasFork) {
       
       const countCurrent = byIndex[i] ? byIndex[i].length : 0;
       const countNext = byIndex[i+1] ? byIndex[i+1].length : 0;
