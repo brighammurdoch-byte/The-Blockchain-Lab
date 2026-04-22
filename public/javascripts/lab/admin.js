@@ -129,19 +129,6 @@ function initSocket() {
   // Network visualization events
   socket.on('peer-assignments-updated', function(data) {
     if (data.peerAssignments && networkViz) {
-      const miners = data.peerAssignments.map(assignment => ({
-        userId: assignment.userId,
-        address: assignment.userId,
-        name: assignment.name,
-        // Preserve existing status, or default to 'mining' for new/reconnected nodes
-        status: (nodeInfo.get(assignment.userId) && nodeInfo.get(assignment.userId).status !== 'offline') 
-                  ? nodeInfo.get(assignment.userId).status 
-                  : 'idle',
-        chainHeight: nodeInfo.get(assignment.userId)?.chainHeight || 0,
-        hashrate: nodeInfo.get(assignment.userId)?.hashrate || 0,
-        forkChoice: assignment.forkChoice,
-        isColluding: assignment.isColluding
-      }));
       const miners = data.peerAssignments.map(assignment => {
         const existing = nodeInfo.get(assignment.userId);
         let currentStatus = (existing && existing.status !== 'offline') ? existing.status : 'idle';
