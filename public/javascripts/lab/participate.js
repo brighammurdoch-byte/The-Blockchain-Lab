@@ -300,6 +300,11 @@ function initSocket() {
       }
     }
 
+    // If our local validator accepted the block, adopt it into our personal chain
+    if (validatorAccepts) {
+      socket.emit('add-to-personal-chain', { sessionId, block, minerId });
+    }
+
     // IMPORTANT: Always tell server to process this block for the shared chain
     // The validator only affects the personal chain, not the shared consensus chain
     // If validator rejects, node won't add to personal chain but server updates shared chain
