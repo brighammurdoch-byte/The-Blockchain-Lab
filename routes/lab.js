@@ -108,7 +108,8 @@ router.get('/session/:sessionId', function(req, res, next) {
       success: true,
       blockchain: app.blockchainLab.sanitizeBlockchain(session.blockchain, session.participants),
       adminSettings: app.blockchainLab.adminSettings,
-      participantCount: session.participants.size
+        participantCount: session.participants.size,
+        sessionStatus: session.status || 'active'
     });
   } catch (error) {
     console.error('Error getting session:', error);
@@ -340,6 +341,10 @@ router.post('/transaction', function(req, res, next) {
       error: 'Session not found' 
     });
   }
+
+    if (session.status === 'paused') {
+      return res.status(400).json({ error: 'Network is paused by Administrator' });
+    }
 
   // Check both users are participants in this session
   if (!session.participants.has(fromUserId)) {

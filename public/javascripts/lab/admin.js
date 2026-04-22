@@ -282,9 +282,11 @@ function setupEventHandlers() {
   
   // Network toggle
   $('#toggleNetworkBtn').click(function() {
-    const isPaused = $(this).data('paused');
-    $(this).text(isPaused ? 'Pause Network' : 'Resume Network');
-    $(this).data('paused', !isPaused);
+    const isPaused = $(this).data('paused') || false;
+    const willPause = !isPaused;
+    $(this).text(willPause ? 'Resume Network' : 'Pause Network');
+    $(this).data('paused', willPause);
+    socket.emit('toggle-network', { sessionId, paused: willPause });
   });
 
   // Copy address button
@@ -434,7 +436,7 @@ function updateBlockchainView(mainChain, orphans) {
   for (let i = 0; i <= maxIndex; i++) {
     if (!byIndex[i]) continue;
     
-    html += `<div style="display: flex; justify-content: center; flex-wrap: wrap; gap: 15px; margin-bottom: 5px;">`;
+    html += `<div style="display: flex; justify-content: center; flex-wrap: wrap; gap: 15px; margin-bottom: 0;">`;
     
     for (const block of byIndex[i]) {
       const isMain = mainHashes.has(block.hash);
@@ -455,8 +457,9 @@ function updateBlockchainView(mainChain, orphans) {
       }
 
       const forkBadge = (block.forkId && block.forkId !== 'classic') ? `<span class="label label-info pull-right" style="margin-right: 5px;">${block.forkId.toUpperCase()}</span>` : '';
+      html += `<div style="display: flex; flex-direction: column; align-items: center; flex: 1 1 300px; max-width: 100%;">`;
       html += `
-      <div class="panel ${panelClass}" style="flex: 1 1 300px; max-width: 100%; margin-bottom: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+      <div class="panel ${panelClass}" style="width: 100%; margin-bottom: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
         <div class="panel-heading" style="padding: 8px 15px;">
           <strong>Block #${block.index}</strong> ${label} ${forkBadge}
           <div class="pull-right text-muted small" style="margin-top: 2px;">${new Date(block.timestamp).toLocaleTimeString()}</div>
@@ -472,47 +475,41 @@ function updateBlockchainView(mainChain, orphans) {
         </div>
       </div>
       `;
+      
+      if (i < maxIndex) {
+        const children = (byIndex[i+1] || []).filter(b => b.previousHash === block.hash);
+        if (children.length > 0) {
+          let hasFork = false;
+          for (const child of children) {
+            if (!mainHashes.has(child.hash)) hasFork = true;
+          }
+          const arrowColor = hasFork || !isMain ? '#f0ad4e' : '#bbb';
+          
+          html += `<div style="text-align: center; margin-top: 5px; margin-bottom: 5px; color: ${arrowColor}; height: 20px;">`;
+          if (children.length === 1) {
+            html += `<i class="glyphicon glyphicon-arrow-down"></i>`;
+          } else if (children.length === 2) {
+            html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-10px) rotate(-20deg);"></i>`;
+            html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(10px) rotate(20deg);"></i>`;
+          } else {
+            const step = 40 / (children.length - 1);
+            for (let c = 0; c < children.length; c++) {
+              const angle = -20 + (c * step);
+              const transX = angle * 0.5;
+              html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(${transX}px) rotate(${angle}deg); margin: 0 2px;"></i>`;
+            }
+          }
+          html += `</div>`;
+        } else {
+          html += `<div style="height: 30px;"></div>`;
+        }
+      } else {
+        html += `<div style="height: 5px;"></div>`;
+      }
+      
+      html += `</div>`;
     }
     html += `</div>`;
-    
-    if (i < maxIndex) {
-      let hasFork = false;
-      if (byIndex[i+1]) {
-        for (const block of byIndex[i+1]) {
-          if (!mainHashes.has(block.hash)) {
-            hasFork = true;
-            break;
-          }
-        }
-      }
-      const arrowColor = hasFork ? '#f0ad4e' : '#bbb';
-      
-      const countCurrent = byIndex[i] ? byIndex[i].length : 0;
-      const countNext = byIndex[i+1] ? byIndex[i+1].length : 0;
-      
-      if (countCurrent === 1 && countNext > 1) {
-        // Outward fork (1 parent to multiple children)
-        html += `<div style="text-align: center; margin-bottom: 5px; color: ${arrowColor};">
-                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-10px) rotate(15deg);"></i>
-                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(10px) rotate(-15deg);"></i>
-                 </div>`;
-      } else if (countCurrent > 1 && countNext === 1) {
-        // Inward merge (multiple blocks reducing to 1 child block)
-        html += `<div style="text-align: center; margin-bottom: 5px; color: ${arrowColor};">
-                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-10px) rotate(-15deg);"></i>
-                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(10px) rotate(15deg);"></i>
-                 </div>`;
-      } else if (countCurrent > 1 && countNext > 1) {
-        // Parallel straight down (both branches continue)
-        html += `<div style="text-align: center; margin-bottom: 5px; color: ${arrowColor};">
-                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-20px);"></i>
-                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(20px);"></i>
-                 </div>`;
-      } else {
-        // Single straight arrow
-        html += `<div style="text-align: center; margin-bottom: 5px; color: ${arrowColor};"><i class="glyphicon glyphicon-arrow-down"></i></div>`;
-      }
-    }
   }
   html += '</div>';
   

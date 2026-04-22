@@ -302,20 +302,16 @@ function initSocket() {
       }
     }
 
-    // If our local validator accepted the block, adopt it into our personal chain
+    // 1. If our local validator accepted the block, add it to our personal chain
     if (validatorAccepts) {
       socket.emit('add-to-personal-chain', { sessionId, block, minerId });
     }
 
-    // IMPORTANT: Always tell server to process this block for the shared chain
-    // The validator only affects the personal chain, not the shared consensus chain
-    // If validator rejects, node won't add to personal chain but server updates shared chain
+    // 2. Always tell server to add to the shared blockchain (validator doesn't affect this)
     socket.emit('process-peer-block', { 
       sessionId, 
       block, 
-      minerId,
-      validatorAccepts: validatorAccepts, // Let server know if this node accepted it
-      validatorReason: validatorReason
+      minerId
     });
     
     // GOSSIP FORWARD: Send to our peers!
@@ -378,18 +374,6 @@ function initSocket() {
     if (window.lastMiningIntent) {
       setTimeout(() => startMining(), 500);
     }
-  });
-
-  // Block was added to the shared network chain but rejected by this node's validator
-  socket.on('block-rejected-by-validator', function(data) {
-    const { blockHash, blockIndex } = data;
-    debugLog(`Block #${blockIndex} added to network chain but not to your personal chain (validator rejected)`);
-    
-    // Reload to update both views - personal chain won't have it, but shared chain will
-    loadBlockchainState();
-    
-    // Show info notification - not an error, just informational
-    showToastNotification(`ℹ️ Block #${blockIndex} is on the network but not in your chain (validator rejected)`, 'info');
   });
 
   // Update UI when a node joins or leaves
@@ -480,6 +464,20 @@ function initSocket() {
     $('#forkProposalName').text(name);
     $('#forkProposalHeight').text(height);
     $('#forkChoiceModal').modal('show');
+  });
+
+  socket.on('network-toggled', function(data) {
+    const { paused } = data;
+    if (paused) {
+      showToastNotification('⚠️ Network paused by Administrator', 'warning');
+      if (isMining) stopMining();
+      $('#mineBtn').prop('disabled', true);
+      $('#transactionForm button[type="submit"]').prop('disabled', true);
+    } else {
+      showToastNotification('✅ Network resumed by Administrator', 'success');
+      $('#mineBtn').prop('disabled', false);
+      $('#transactionForm button[type="submit"]').prop('disabled', false);
+    }
   });
 
   // ============ LEGACY HANDLERS (for backward compatibility) ============
@@ -1140,6 +1138,17 @@ function loadBlockchainState() {
             setupWebRTC();
           }
           
+          if (networkData.sessionStatus === 'paused') {
+            $('#mineBtn').prop('disabled', true);
+            $('#transactionForm button[type="submit"]').prop('disabled', true);
+            if (isMining) stopMining();
+            window.networkPaused = true;
+          } else if (window.networkPaused) {
+            $('#mineBtn').prop('disabled', false);
+            $('#transactionForm button[type="submit"]').prop('disabled', false);
+            window.networkPaused = false;
+          }
+
           // Fetch forks for the shared network view
           $.get('/lab/forks/' + sessionId + cacheBuster, function(forkData) {
             const orphans = (forkData.success && forkData.forks) ? forkData.forks.orphans : [];
@@ -1294,7 +1303,7 @@ function updateNetworkBlockchainView(mainChain, orphans) {
   for (let i = 0; i <= maxIndex; i++) {
     if (!byIndex[i]) continue;
     
-    html += `<div style="display: flex; justify-content: center; flex-wrap: wrap; gap: 15px; margin-bottom: 5px;">`;
+    html += `<div style="display: flex; justify-content: center; flex-wrap: wrap; gap: 15px; margin-bottom: 0;">`;
     
     for (const block of byIndex[i]) {
       const isMain = mainHashes.has(block.hash);
@@ -1315,8 +1324,9 @@ function updateNetworkBlockchainView(mainChain, orphans) {
       }
 
       const forkBadge = (block.forkId && block.forkId !== 'classic') ? `<span class="label label-info pull-right" style="margin-right: 5px;">${block.forkId.toUpperCase()}</span>` : '';
+      html += `<div style="display: flex; flex-direction: column; align-items: center; flex: 1 1 300px; max-width: 100%;">`;
       html += `
-      <div class="panel ${panelClass}" style="flex: 1 1 300px; max-width: 100%; margin-bottom: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+      <div class="panel ${panelClass}" style="width: 100%; margin-bottom: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
         <div class="panel-heading" style="padding: 8px 15px;">
           <strong>Block #${block.index}</strong> ${label} ${forkBadge}
           <div class="pull-right text-muted small" style="margin-top: 2px;">${new Date(block.timestamp).toLocaleTimeString()}</div>
@@ -1332,47 +1342,41 @@ function updateNetworkBlockchainView(mainChain, orphans) {
         </div>
       </div>
       `;
+      
+      if (i < maxIndex) {
+        const children = (byIndex[i+1] || []).filter(b => b.previousHash === block.hash);
+        if (children.length > 0) {
+          let hasFork = false;
+          for (const child of children) {
+            if (!mainHashes.has(child.hash)) hasFork = true;
+          }
+          const arrowColor = hasFork || !isMain ? '#f0ad4e' : '#bbb';
+          
+          html += `<div style="text-align: center; margin-top: 5px; margin-bottom: 5px; color: ${arrowColor}; height: 20px;">`;
+          if (children.length === 1) {
+            html += `<i class="glyphicon glyphicon-arrow-down"></i>`;
+          } else if (children.length === 2) {
+            html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-10px) rotate(-20deg);"></i>`;
+            html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(10px) rotate(20deg);"></i>`;
+          } else {
+            const step = 40 / (children.length - 1);
+            for (let c = 0; c < children.length; c++) {
+              const angle = -20 + (c * step);
+              const transX = angle * 0.5;
+              html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(${transX}px) rotate(${angle}deg); margin: 0 2px;"></i>`;
+            }
+          }
+          html += `</div>`;
+        } else {
+          html += `<div style="height: 30px;"></div>`;
+        }
+      } else {
+        html += `<div style="height: 5px;"></div>`;
+      }
+      
+      html += `</div>`;
     }
     html += `</div>`;
-    
-    if (i < maxIndex) {
-      let hasFork = false;
-      if (byIndex[i+1]) {
-        for (const block of byIndex[i+1]) {
-          if (!mainHashes.has(block.hash)) {
-            hasFork = true;
-            break;
-          }
-        }
-      }
-      const arrowColor = hasFork ? '#f0ad4e' : '#bbb';
-      
-      const countCurrent = byIndex[i] ? byIndex[i].length : 0;
-      const countNext = byIndex[i+1] ? byIndex[i+1].length : 0;
-      
-      if (countCurrent === 1 && countNext > 1) {
-        // Outward fork (1 parent to multiple children)
-        html += `<div style="text-align: center; margin-bottom: 5px; color: ${arrowColor};">
-                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-10px) rotate(15deg);"></i>
-                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(10px) rotate(-15deg);"></i>
-                 </div>`;
-      } else if (countCurrent > 1 && countNext === 1) {
-        // Inward merge (multiple blocks reducing to 1 child block)
-        html += `<div style="text-align: center; margin-bottom: 5px; color: ${arrowColor};">
-                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-10px) rotate(-15deg);"></i>
-                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(10px) rotate(15deg);"></i>
-                 </div>`;
-      } else if (countCurrent > 1 && countNext > 1) {
-        // Parallel straight down (both branches continue)
-        html += `<div style="text-align: center; margin-bottom: 5px; color: ${arrowColor};">
-                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-20px);"></i>
-                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(20px);"></i>
-                 </div>`;
-      } else {
-        // Single straight arrow
-        html += `<div style="text-align: center; margin-bottom: 5px; color: ${arrowColor};"><i class="glyphicon glyphicon-arrow-down"></i></div>`;
-      }
-    }
   }
   html += '</div>';
   
