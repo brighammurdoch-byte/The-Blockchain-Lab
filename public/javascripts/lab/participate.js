@@ -438,6 +438,10 @@ function initSocket() {
       // Store codeDiff for viewing
       window.lastAttackDiff = codeDiff;
       
+      // AUTO-SWITCH TO VALIDATOR TAB AND DISPLAY DIFF
+      switchToValidatorCodeTab();
+      parseDiffAndDisplay(codeDiff, originalValidatorCode, modifiedCode);
+      
     } else if (role === 'honest') {
       // This user is honest, others are attacking
       showToastNotification(`Watch out! Others are attempting ${simulationType.replace('-', ' ')} at block ${applyAtBlock}!`, 'info');
@@ -454,9 +458,66 @@ function initSocket() {
   // Helper function to view attack code diff
   window.viewAttackDiff = function() {
     if (window.lastAttackDiff) {
-      alert('Code Changes:\n\n' + window.lastAttackDiff);
+      switchToValidatorCodeTab();
+      parseDiffAndDisplay(window.lastAttackDiff, originalValidatorCode, pendingDemoCode);
     }
   };
+}
+
+// Parse unified diff format and display with colors
+function parseDiffAndDisplay(diffText, oldCode, newCode) {
+  if (!diffText) return;
+  
+  const lines = diffText.split('\n');
+  let html = '<div style="border: 1px solid #dee2e6; border-radius: 4px; overflow: hidden;">';
+  
+  let contextLines = 0;
+  
+  for (let line of lines) {
+    if (line.startsWith('---') || line.startsWith('+++')) {
+      html += `<div class="diff-header">${escapeHtml(line)}</div>`;
+    } else if (line.startsWith('@@')) {
+      html += `<div class="diff-header">${escapeHtml(line)}</div>`;
+      contextLines = 0;
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      html += `<div class="diff-line removed">- ${escapeHtml(line.substring(1))}</div>`;
+    } else if (line.startsWith('+') && !line.startsWith('+++')) {
+      html += `<div class="diff-line added">+ ${escapeHtml(line.substring(1))}</div>`;
+    } else if (line.startsWith(' ')) {
+      // Context lines - show first few to understand context
+      if (contextLines < 2) {
+        html += `<div class="diff-line context">  ${escapeHtml(line.substring(1))}</div>`;
+        contextLines++;
+      }
+    } else if (line.trim() !== '') {
+      // Other content - treat as context
+      html += `<div class="diff-line context">  ${escapeHtml(line)}</div>`;
+    }
+  }
+  
+  html += '</div>';
+  
+  $('#diffContent').html(html);
+  $('#codeDiffViewer').show();
+}
+
+// Simple HTML escape function
+function escapeHtml(text) {
+  const map = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;'
+  };
+  return text.replace(/[&<>"']/g, m => map[m]);
+}
+
+// Switch to validator code tab
+function switchToValidatorCodeTab() {
+  $('a[href="#tabCode"]').tab('show');
+  // Scroll to top of page so user sees the tab
+  window.scrollTo(0, 0);
   
   socket.on('hard-fork-proposed', function(data) {
     const { height, name } = data;
@@ -1356,13 +1417,13 @@ function updateNetworkBlockchainView(mainChain, orphans) {
           if (children.length === 1) {
             html += `<i class="glyphicon glyphicon-arrow-down"></i>`;
           } else if (children.length === 2) {
-            html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-10px) rotate(-20deg);"></i>`;
-            html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(10px) rotate(20deg);"></i>`;
+            html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-15px) rotate(30deg);"></i>`;
+            html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(15px) rotate(-30deg);"></i>`;
           } else {
-            const step = 40 / (children.length - 1);
+            const step = 60 / (children.length - 1);
             for (let c = 0; c < children.length; c++) {
-              const angle = -20 + (c * step);
-              const transX = angle * 0.5;
+              const angle = 30 - (c * step);
+              const transX = -angle * 0.5;
               html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(${transX}px) rotate(${angle}deg); margin: 0 2px;"></i>`;
             }
           }

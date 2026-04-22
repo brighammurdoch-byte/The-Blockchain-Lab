@@ -489,13 +489,13 @@ function updateBlockchainView(mainChain, orphans) {
           if (children.length === 1) {
             html += `<i class="glyphicon glyphicon-arrow-down"></i>`;
           } else if (children.length === 2) {
-            html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-10px) rotate(-20deg);"></i>`;
-            html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(10px) rotate(20deg);"></i>`;
+            html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-15px) rotate(30deg);"></i>`;
+            html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(15px) rotate(-30deg);"></i>`;
           } else {
-            const step = 40 / (children.length - 1);
+            const step = 60 / (children.length - 1);
             for (let c = 0; c < children.length; c++) {
-              const angle = -20 + (c * step);
-              const transX = angle * 0.5;
+              const angle = 30 - (c * step);
+              const transX = -angle * 0.5;
               html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(${transX}px) rotate(${angle}deg); margin: 0 2px;"></i>`;
             }
           }
@@ -545,6 +545,7 @@ function updateParticipantsList(blockchain) {
   participants.forEach(p => {
     const roleClass = p.role === 'wallet' ? 'label-info' : 'label-success';
     const roleText = p.role === 'wallet' ? 'Wallet' : 'Miner';
+    const attackerLabel = p.isAttacker ? ' <span class="label label-danger" style="margin-left: 4px;">Attacker</span>' : '';
     const nameHtml = p.name ? `<strong style="display:block; margin-bottom:2px;">${p.name}</strong>` : '';
     html += `
       <tr>
@@ -554,6 +555,7 @@ function updateParticipantsList(blockchain) {
           <button class="btn btn-xs btn-default pull-right copy-btn" data-clipboard-text="${p.address}" title="Copy Address"><i class="glyphicon glyphicon-copy"></i></button>
         </td>
         <td><span class="label ${roleClass}">${roleText}</span></td>
+        <td><span class="label ${roleClass}">${roleText}</span>${attackerLabel}</td>
         <td><strong>${p.minedBlocks}</strong></td>
         <td>${p.balance} coins</td>
         <td><span class="text-success">Live</span></td>

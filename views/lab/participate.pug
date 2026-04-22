@@ -181,6 +181,16 @@ block content
                     li Experiment with attacks
                     li Learn how consensus works
                 
+                // CODE DIFF VIEWER (shown when demo is active)
+                #codeDiffViewer(style="display: none; margin-bottom: 20px;")
+                  .panel.panel-warning
+                    .panel-heading
+                      h3.panel-title
+                        i.glyphicon.glyphicon-search
+                        | Code Changes (Demo Active)
+                    .panel-body
+                      div#diffContent(style="font-family: monospace; font-size: 12px; line-height: 1.5; background: #f5f5f5; padding: 15px; border-radius: 4px; max-height: 400px; overflow-y: auto;")
+                
                 .form-group
                   label(for="validatorCodeEditor") blockValidator.js
                   textarea.form-control#validatorCodeEditor(rows="20", style="font-family: monospace; white-space: pre; background-color: #f8f9fa;") Loading code...

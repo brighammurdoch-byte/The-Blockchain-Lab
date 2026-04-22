@@ -107,7 +107,7 @@ router.get('/session/:sessionId', function(req, res, next) {
     res.json({
       success: true,
       blockchain: app.blockchainLab.sanitizeBlockchain(session.blockchain, session.participants),
-      adminSettings: app.blockchainLab.adminSettings,
+      adminSettings: session.adminSettings,
         participantCount: session.participants.size,
         sessionStatus: session.status || 'active'
     });
@@ -390,7 +390,7 @@ router.post('/updateSettings', function(req, res, next) {
     const result = app.blockchainLab.updateAdminSettings(adminToken, newSettings);
     
     if (result.success && app.io) {
-      app.io.emit('settingsUpdated', result.settings);
+      app.io.to(`session-${result.sessionId}`).emit('settingsUpdated', result.settings);
     }
 
     res.json(result);
@@ -453,48 +453,6 @@ router.post('/validator-code', function(req, res, next) {
 });
 
 /**
- * GET /lab/demos
- * Admin-triggered simulations now use Socket.io events, not HTTP
- */
-router.get('/demos', function(req, res, next) {
-  try {
-    res.json({
-      success: true,
-      message: 'Admin simulations are now triggered via WebSocket events',
-      demos: [
-        { id: '51-percent-attack', name: '51% Attack', type: 'admin-triggered' },
-        { id: 'double-spend', name: 'Double Spend', type: 'manual-local' },
-        { id: 'hard-fork', name: 'Hard Fork Voting', type: 'both' }
-      ],
-      note: 'See /lab/validator-code for manual attack simulations (local editor)'
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-/**
- * GET /lab/demos/:demoName
- * Get detailed guide for a specific demo
- */
-router.get('/demos/:demoName', function(req, res, next) {
-  try {
-    const demo = demoSystem.getDemo(req.params.demoName);
-    
-    if (!demo) {
-      return res.status(404).json({ success: false, error: 'Demo not found' });
-    }
-
-    res.json({
-      success: true,
-      demo: demo
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-/**
  * GET /lab/admin/:sessionId
  * Admin dashboard for a session
  */
@@ -528,15 +486,6 @@ router.get('/participate/:sessionId', function(req, res, next) {
 router.get('/code/:sessionId', function(req, res, next) {
   const sessionId = req.params.sessionId;
   res.render('lab/code-editor', { sessionId, title: 'Blockchain Lab - Code Editor' });
-});
-
-/**
- * GET /lab/demos/:sessionId
- * Guided demo view
- */
-router.get('/demos-view/:sessionId', function(req, res, next) {
-  const sessionId = req.params.sessionId;
-  res.render('lab/demos', { sessionId, title: 'Blockchain Lab - Guided Demos' });
 });
 
 module.exports = router;
