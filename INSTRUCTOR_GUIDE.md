@@ -261,7 +261,7 @@ Your class is engaging with Blockchain Lab if:
 ## Support
 
 **Something not working?**
-- Check [BLOCKCHAIN_LAB_README.md](BLOCKCHAIN_LAB_README.md) for technical details
+- Check README.md for technical details
 - Review [DEPLOYMENT.md](DEPLOYMENT.md) for deployment issues
 - Visit GitHub issues to search for your problem
 

@@ -276,7 +276,7 @@ Current setup supports ~100 concurrent participants comfortably
 - Search platform documentation
 
 **Lab Features Questions?**
-- See [BLOCKCHAIN_LAB_README.md](BLOCKCHAIN_LAB_README.md)
+- See README.md
 - Check GitHub issues
 
 **Test Deployment Locally First**
@@ -289,4 +289,3 @@ npm start
 ---
 
 **You're now ready to teach blockchain to your students!** 🚀
-
