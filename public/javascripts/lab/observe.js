@@ -79,6 +79,13 @@ $(document).ready(function() {
   
   // Auto-refresh blockchain state
   setInterval(loadBlockchainState, 2000);
+  
+  // Mobile optimization: Refresh immediately when tab becomes visible again
+  document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) {
+      loadBlockchainState();
+    }
+  });
 });
 
 function setupEventHandlers() {
@@ -258,7 +265,7 @@ function updateBlockchainView(mainChain, orphans) {
 
   let html = '<div style="display: flex; flex-direction: column; width: 100%;">';
 
-  for (let i = maxIndex; i >= 0; i--) {
+  for (let i = 0; i <= maxIndex; i++) {
     if (!byIndex[i]) continue;
     
     html += `<div style="display: flex; justify-content: center; flex-wrap: wrap; gap: 15px; margin-bottom: 5px;">`;
@@ -283,7 +290,7 @@ function updateBlockchainView(mainChain, orphans) {
 
       const forkBadge = (block.forkId && block.forkId !== 'classic') ? `<span class="label label-info pull-right" style="margin-right: 5px;">${block.forkId.toUpperCase()}</span>` : '';
       html += `
-      <div class="panel ${panelClass}" style="flex: 0 1 340px; margin-bottom: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+      <div class="panel ${panelClass}" style="flex: 1 1 300px; max-width: 100%; margin-bottom: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
         <div class="panel-heading" style="padding: 8px 15px;">
           <strong>Block #${block.index}</strong> ${label} ${forkBadge}
           <div class="pull-right text-muted small" style="margin-top: 2px;">${new Date(block.timestamp).toLocaleTimeString()}</div>
@@ -302,10 +309,10 @@ function updateBlockchainView(mainChain, orphans) {
     }
     html += `</div>`;
     
-    if (i > 0) {
+    if (i < maxIndex) {
       let hasFork = false;
-      if (byIndex[i]) {
-        for (const block of byIndex[i]) {
+      if (byIndex[i+1]) {
+        for (const block of byIndex[i+1]) {
           if (!mainHashes.has(block.hash)) {
             hasFork = true;
             break;
@@ -325,17 +332,7 @@ function updateBlockchainView(mainChain, orphans) {
   }
   html += '</div>';
   
-  const oldScrollTop = $(window).scrollTop();
-  const oldDocHeight = $(document).height();
-  
   $('#blockchainView').html(html);
-  
-  if (oldScrollTop > 50) {
-    const heightDiff = $(document).height() - oldDocHeight;
-    if (heightDiff !== 0) {
-      $(window).scrollTop(oldScrollTop + heightDiff);
-    }
-  }
 }
 
 function toggleTransactions(blockIndex) {

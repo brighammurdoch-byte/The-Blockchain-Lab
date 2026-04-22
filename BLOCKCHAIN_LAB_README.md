@@ -321,7 +321,7 @@ blockchain-demo/
 ## Credits
 
 **Original Blockchain Demo** by Anders Brownworth  
-- Source: [andersbro wnworth.com/blockchain](http://andersbrownworth.com/blockchain/)
+- Source: [andersbrownworth.com/blockchain](http://andersbrownworth.com/blockchain/)
 - GitHub: [anders94/blockchain-demo](https://github.com/anders94/blockchain-demo)
 - License: MIT
 

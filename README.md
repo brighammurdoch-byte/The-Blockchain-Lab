@@ -151,6 +151,13 @@ That one block would take this software approximately 8,454,989,768,407,765 year
 The 2nd part of the 101 session:
 * https://github.com/anders94/public-private-key-demo
 
+## Credits
+
+The original Blockchain Demo framework was created by **Anders Brownworth**.
+- Original Web Demo: [andersbrownworth.com/blockchain](http://andersbrownworth.com/blockchain/)
+- Original GitHub: [anders94/blockchain-demo](https://github.com/anders94/blockchain-demo)
+- License: MIT
+
 ## Send Thanks
 
 ![](public/images/qr.png)

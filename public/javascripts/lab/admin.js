@@ -80,6 +80,13 @@ $(document).ready(function() {
   
   // Auto-refresh blockchain state
   setInterval(loadBlockchainState, 2000);
+  
+  // Mobile optimization: Refresh immediately when tab becomes visible again
+  document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) {
+      loadBlockchainState();
+    }
+  });
 });
 
 function initSocket() {
@@ -129,12 +136,28 @@ function initSocket() {
         // Preserve existing status, or default to 'mining' for new/reconnected nodes
         status: (nodeInfo.get(assignment.userId) && nodeInfo.get(assignment.userId).status !== 'offline') 
                   ? nodeInfo.get(assignment.userId).status 
-                  : 'mining',
+                  : 'idle',
         chainHeight: nodeInfo.get(assignment.userId)?.chainHeight || 0,
         hashrate: nodeInfo.get(assignment.userId)?.hashrate || 0,
         forkChoice: assignment.forkChoice,
         isColluding: assignment.isColluding
       }));
+      const miners = data.peerAssignments.map(assignment => {
+        const existing = nodeInfo.get(assignment.userId);
+        let currentStatus = (existing && existing.status !== 'offline') ? existing.status : 'idle';
+        if (assignment.hashrate > 0) currentStatus = 'mining';
+        
+        return {
+          userId: assignment.userId,
+          address: assignment.userId,
+          name: assignment.name,
+          status: currentStatus,
+          chainHeight: existing?.chainHeight || 0,
+          hashrate: assignment.hashrate || existing?.hashrate || 0,
+          forkChoice: assignment.forkChoice,
+          isColluding: assignment.isColluding
+        };
+      });
       
       // Update node info map
       miners.forEach(miner => {
@@ -194,7 +217,7 @@ function initSocket() {
       if (nodeInfo.has(data.userId)) {
         nodeInfo.get(data.userId).name = data.name;
       } else {
-        nodeInfo.set(data.userId, { name: data.name, status: 'mining' });
+        nodeInfo.set(data.userId, { name: data.name, status: 'idle' });
       }
       
       updateNodeNamesList();
@@ -206,6 +229,24 @@ function initSocket() {
     // Try to initialize network on first state
     if (networkViz && !networkViz.hasInitialized) {
       loadBlockchainState(); // Will load participants and call initializeNetwork
+    }
+  });
+
+  socket.on('hashrate-updated', function(data) {
+    if (networkViz && data.userId) {
+      const status = data.hashrate > 0 ? 'mining' : 'idle';
+      networkViz.setNodeStatus(data.userId, status);
+      if (nodeInfo.has(data.userId)) {
+        nodeInfo.get(data.userId).status = status;
+        nodeInfo.get(data.userId).hashrate = data.hashrate;
+      }
+    }
+  });
+
+  socket.on('miner-status-update', function(data) {
+    if (networkViz && data.minerId) {
+      networkViz.setNodeStatus(data.minerId, 'mining');
+      if (nodeInfo.has(data.minerId)) nodeInfo.get(data.minerId).status = 'mining';
     }
   });
 }
@@ -403,7 +444,7 @@ function updateBlockchainView(mainChain, orphans) {
 
   let html = '<div style="display: flex; flex-direction: column; width: 100%;">';
 
-  for (let i = maxIndex; i >= 0; i--) {
+  for (let i = 0; i <= maxIndex; i++) {
     if (!byIndex[i]) continue;
     
     html += `<div style="display: flex; justify-content: center; flex-wrap: wrap; gap: 15px; margin-bottom: 5px;">`;
@@ -428,7 +469,7 @@ function updateBlockchainView(mainChain, orphans) {
 
       const forkBadge = (block.forkId && block.forkId !== 'classic') ? `<span class="label label-info pull-right" style="margin-right: 5px;">${block.forkId.toUpperCase()}</span>` : '';
       html += `
-      <div class="panel ${panelClass}" style="flex: 0 1 340px; margin-bottom: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+      <div class="panel ${panelClass}" style="flex: 1 1 300px; max-width: 100%; margin-bottom: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
         <div class="panel-heading" style="padding: 8px 15px;">
           <strong>Block #${block.index}</strong> ${label} ${forkBadge}
           <div class="pull-right text-muted small" style="margin-top: 2px;">${new Date(block.timestamp).toLocaleTimeString()}</div>
@@ -447,10 +488,10 @@ function updateBlockchainView(mainChain, orphans) {
     }
     html += `</div>`;
     
-    if (i > 0) {
+    if (i < maxIndex) {
       let hasFork = false;
-      if (byIndex[i]) {
-        for (const block of byIndex[i]) {
+      if (byIndex[i+1]) {
+        for (const block of byIndex[i+1]) {
           if (!mainHashes.has(block.hash)) {
             hasFork = true;
             break;

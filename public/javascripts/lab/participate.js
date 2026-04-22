@@ -182,6 +182,13 @@ $(document).ready(function() {
       </div>
     </div>
   `);
+
+  // Mobile optimization: Refresh immediately when tab becomes visible again
+  document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) {
+      loadBlockchainState();
+    }
+  });
 });
 
 function initSocket() {
@@ -234,42 +241,56 @@ function initSocket() {
     seenBlocks.add(block.hash);
     debugLog(`Received gossip block from ${minerId}: ${block.hash.substring(0, 16)}... Evaluating.`);
 
+    // Track validator acceptance (broken validator = rejects everything)
+    let validatorAccepts = true;
+    let validatorReason = null;
+
     // Run custom validator if available
     if (window.customValidator) {
       if (window.customValidator._broken) {
-        showToastNotification(`❌ Your broken validator rejected block #${block.index}`, 'error');
-        return; // Node isolates itself if validator is broken
-      }
-      try {
-        // Validate the hash matches the data
-        const hashCheck = window.customValidator.validateBlockHash(block);
-        if (!hashCheck) {
-          showToastNotification(`❌ Validator rejected block hash!`, 'error');
-          return;
-        }
-        // Validate difficulty
-        const diffCheck = window.customValidator.validateDifficulty(block.hash, block.difficulty);
-        if (diffCheck && diffCheck.valid === false) {
-          showToastNotification(`❌ Validator rejected block: ${diffCheck.reason}`, 'error');
-          return;
-        }
-        // Validate all transactions inside the block
-        if (block.transactions) {
-          for (const tx of block.transactions) {
-            const txCheck = window.customValidator.validateTransaction(tx, block.transactions);
-            if (txCheck && txCheck.valid === false) {
-              showToastNotification(`❌ Validator rejected transaction: ${txCheck.reason}`, 'error');
-              return;
+        validatorAccepts = false;
+        validatorReason = '❌ Broken validator';
+        showToastNotification(`${validatorReason} rejected block #${block.index}`, 'error');
+      } else {
+        try {
+          // Validate the hash matches the data
+          const hashCheck = window.customValidator.validateBlockHash(block);
+          if (!hashCheck) {
+            validatorAccepts = false;
+            validatorReason = 'Invalid block hash';
+            showToastNotification(`❌ Validator rejected block hash!`, 'error');
+          }
+          // Validate difficulty
+          else {
+            const diffCheck = window.customValidator.validateDifficulty(block.hash, block.difficulty);
+            if (diffCheck && diffCheck.valid === false) {
+              validatorAccepts = false;
+              validatorReason = diffCheck.reason || 'Difficulty validation failed';
+              showToastNotification(`❌ Validator rejected block: ${validatorReason}`, 'error');
             }
           }
+          // Validate all transactions inside the block
+          if (validatorAccepts && block.transactions) {
+            for (const tx of block.transactions) {
+              const txCheck = window.customValidator.validateTransaction(tx, block.transactions);
+              if (txCheck && txCheck.valid === false) {
+                validatorAccepts = false;
+                validatorReason = txCheck.reason || 'Transaction validation failed';
+                showToastNotification(`❌ Validator rejected transaction: ${validatorReason}`, 'error');
+                break;
+              }
+            }
+          }
+        } catch (e) {
+          validatorAccepts = false;
+          validatorReason = 'Validator crashed during validation';
+          showToastNotification(`❌ ${validatorReason}!`, 'error');
         }
-      } catch (e) {
-        showToastNotification(`❌ Validator crashed during peer validation!`, 'error');
-        return;
       }
     }
 
     // If we are on the collusion team and a fellow attacker found a block extending our secret chain
+    // (Process this regardless of validator acceptance - collusion happens at network level)
     if (isColluding && block.previousHash === collusionTipHash) {
       collusionTipHash = block.hash;
       collusionHeight = block.index + 1;
@@ -279,8 +300,16 @@ function initSocket() {
       }
     }
 
-    // Tell server to process this block for our local chain
-    socket.emit('process-peer-block', { sessionId, block, minerId });
+    // IMPORTANT: Always tell server to process this block for the shared chain
+    // The validator only affects the personal chain, not the shared consensus chain
+    // If validator rejects, node won't add to personal chain but server updates shared chain
+    socket.emit('process-peer-block', { 
+      sessionId, 
+      block, 
+      minerId,
+      validatorAccepts: validatorAccepts, // Let server know if this node accepted it
+      validatorReason: validatorReason
+    });
     
     // GOSSIP FORWARD: Send to our peers!
     if (lastKnownAdminSettings?.networkMode === 'real-p2p') {
@@ -342,6 +371,18 @@ function initSocket() {
     if (window.lastMiningIntent) {
       setTimeout(() => startMining(), 500);
     }
+  });
+
+  // Block was added to the shared network chain but rejected by this node's validator
+  socket.on('block-rejected-by-validator', function(data) {
+    const { blockHash, blockIndex } = data;
+    debugLog(`Block #${blockIndex} added to network chain but not to your personal chain (validator rejected)`);
+    
+    // Reload to update both views - personal chain won't have it, but shared chain will
+    loadBlockchainState();
+    
+    // Show info notification - not an error, just informational
+    showToastNotification(`ℹ️ Block #${blockIndex} is on the network but not in your chain (validator rejected)`, 'info');
   });
 
   // Update UI when a node joins or leaves
@@ -596,16 +637,15 @@ function setupEventHandlers() {
       showToastNotification('Custom validator rules applied to your node!', 'success');
     }
     
-    submitValidatorCode(modifiedCode);
   });
   
   $('#resetValidatorCodeBtn').click(function() {
     if (confirm('Are you sure you want to reset to the original validation code?')) {
       $('#validatorCodeEditor').val(originalValidatorCode);
       applyCustomValidator(originalValidatorCode);
-      submitValidatorCode(originalValidatorCode);
       $('#executeDoubleSpendBtn').hide();
       $('#submitValidatorCodeBtn').show();
+      showToastNotification('Validator reset to original code!', 'success');
     }
   });
   
@@ -783,6 +823,7 @@ function mineBlock(block, adminSettings) {
   const startTime = Date.now();
   let nonce = 0;
   let totalIterations = 0;
+  let lastHashrateEmit = Date.now();
   
   // Report to network which block we're mining on
   if (socket) {
@@ -913,14 +954,16 @@ function mineBlock(block, adminSettings) {
     }
     
     // Update hashrate display
-    const elapsed = (Date.now() - startTime) / 1000;
-    const hashrate = Math.floor(totalIterations / elapsed);
+    const elapsed = Math.max(0.1, (Date.now() - startTime) / 1000);
+    const hashrate = Math.max(1, Math.floor(totalIterations / elapsed));
     $('#nonceCount').text(nonce.toLocaleString());
     $('#currentHashrate').text(hashrate.toLocaleString());
     $('#yourHashrate').text(hashrate.toLocaleString() + ' H/s');
     
-    // Update mining stats via socket
-    if (socket && nonce % 10000 === 0) {
+    // Update mining stats via socket reliably every 2 seconds
+    const now = Date.now();
+    if (socket && (now - lastHashrateEmit > 2000)) {
+      lastHashrateEmit = now;
       socket.emit('hashrate-update', {
         sessionId: sessionId,
         hashrate: hashrate
@@ -1062,29 +1105,6 @@ function loadValidatorCode() {
   });
 }
 
-function submitValidatorCode(code) {
-  $.ajax({
-    type: 'POST',
-    url: '/lab/validator-code',
-    contentType: 'application/json',
-    data: JSON.stringify({
-      sessionId: sessionId,
-      userId: userId,
-      modifiedCode: code
-    }),
-    success: function(data) {
-      if (data.success) {
-        showToastNotification(data.message, 'success');
-      } else {
-        showToastNotification('Error: ' + data.error, 'error');
-      }
-    },
-    error: function() {
-      showToastNotification('Failed to submit modified code', 'error');
-    }
-  });
-}
-
 function loadBlockchainState() {
   const cacheBuster = '?t=' + Date.now();
   // Check personal chain first
@@ -1179,7 +1199,7 @@ function updateParticipantBlockchainView(chainData) {
   
   let html = '<h4>Your Blockchain Copy (Height: ' + blocks.length + ')</h4>';
   
-  for (let i = blocks.length - 1; i >= 0; i--) {
+  for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i];
     const highlight = block.miner === userId ? 'panel-success' : 'panel-default';
     
@@ -1256,7 +1276,7 @@ function updateNetworkBlockchainView(mainChain, orphans) {
 
   let html = '<div style="display: flex; flex-direction: column; width: 100%;">';
 
-  for (let i = maxIndex; i >= 0; i--) {
+  for (let i = 0; i <= maxIndex; i++) {
     if (!byIndex[i]) continue;
     
     html += `<div style="display: flex; justify-content: center; flex-wrap: wrap; gap: 15px; margin-bottom: 5px;">`;
@@ -1281,7 +1301,7 @@ function updateNetworkBlockchainView(mainChain, orphans) {
 
       const forkBadge = (block.forkId && block.forkId !== 'classic') ? `<span class="label label-info pull-right" style="margin-right: 5px;">${block.forkId.toUpperCase()}</span>` : '';
       html += `
-      <div class="panel ${panelClass}" style="flex: 0 1 340px; margin-bottom: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+      <div class="panel ${panelClass}" style="flex: 1 1 300px; max-width: 100%; margin-bottom: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
         <div class="panel-heading" style="padding: 8px 15px;">
           <strong>Block #${block.index}</strong> ${label} ${forkBadge}
           <div class="pull-right text-muted small" style="margin-top: 2px;">${new Date(block.timestamp).toLocaleTimeString()}</div>
@@ -1300,10 +1320,10 @@ function updateNetworkBlockchainView(mainChain, orphans) {
     }
     html += `</div>`;
     
-    if (i > 0) {
+    if (i < maxIndex) {
       let hasFork = false;
-      if (byIndex[i]) {
-        for (const block of byIndex[i]) {
+      if (byIndex[i+1]) {
+        for (const block of byIndex[i+1]) {
           if (!mainHashes.has(block.hash)) {
             hasFork = true;
             break;
@@ -1323,17 +1343,7 @@ function updateNetworkBlockchainView(mainChain, orphans) {
   }
   html += '</div>';
   
-  const oldScrollTop = $(window).scrollTop();
-  const oldDocHeight = $(document).height();
-  
   $('#networkBlockchainView').html(html);
-  
-  if (oldScrollTop > 50) {
-    const heightDiff = $(document).height() - oldDocHeight;
-    if (heightDiff !== 0) {
-      $(window).scrollTop(oldScrollTop + heightDiff);
-    }
-  }
 }
 
 function toggleTransactions(blockIndex) {
