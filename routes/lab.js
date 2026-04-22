@@ -11,6 +11,27 @@ var { v4: uuidv4 } = require('uuid');
 let activeSessions = new Map();
 
 /**
+ * True if `candidate` is not a participant id but matches someone's display name (case-insensitive).
+ * Used so we never imply name-based transfers are supported.
+ */
+function looksLikeDisplayNameOnly(session, blockchain, candidate) {
+  if (!candidate || session.participants.has(candidate)) return false;
+  const cand = String(candidate).trim();
+  const lower = cand.toLowerCase();
+  for (const uid of session.participants.keys()) {
+    const bp = blockchain.participants.get(uid);
+    let n = '';
+    if (session.nodeNames && session.nodeNames.has(uid)) {
+      n = String(session.nodeNames.get(uid) || '').trim();
+    }
+    if (!n && bp && bp.name) n = String(bp.name).trim();
+    if (!n) continue;
+    if (n === cand || n.toLowerCase() === lower) return true;
+  }
+  return false;
+}
+
+/**
  * GET /lab
  * Render the landing page for the blockchain lab
  */
@@ -319,6 +340,9 @@ router.post('/transaction', function(req, res, next) {
     return res.status(400).json({ success: false, error: 'Missing required fields' });
   }
 
+  const fromTrim = String(fromUserId).trim();
+  const toTrim = String(toUserId).trim();
+
   // === VALIDATION ===
   // Check amount is valid
   if (amount === undefined || amount === null || amount <= 0) {
@@ -328,7 +352,7 @@ router.post('/transaction', function(req, res, next) {
   }
 
   // Check not self-transfer
-  if (fromUserId === toUserId) {
+  if (fromTrim === toTrim) {
     return res.status(400).json({ 
       error: 'Cannot send coins to yourself' 
     });
@@ -346,22 +370,30 @@ router.post('/transaction', function(req, res, next) {
       return res.status(400).json({ error: 'Network is paused by Administrator' });
     }
 
-  // Check both users are participants in this session
-  if (!session.participants.has(fromUserId)) {
+  const blockchain = app.blockchainLab.blockchains.get(sessionId);
+
+  // Check both users are participants in this session (addresses / user IDs only)
+  if (!session.participants.has(fromTrim)) {
     return res.status(400).json({ 
-      error: `Sender (${fromUserId}) not in this session` 
+      error: `Sender (${fromTrim}) not in this session` 
     });
   }
 
-  if (!session.participants.has(toUserId)) {
+  if (!session.participants.has(toTrim)) {
+    // Reject display-name lookups: only participant addresses are valid recipients
+    if (blockchain && looksLikeDisplayNameOnly(session, blockchain, toTrim)) {
+      return res.status(400).json({
+        error: 'Recipients must be participant addresses (user IDs), not display names.'
+      });
+    }
     return res.status(400).json({ 
-      error: `Recipient (${toUserId}) not in this session` 
+      error: `Recipient (${toTrim}) not in this session` 
     });
   }
   // === END VALIDATION ===
 
   try {
-    const result = app.blockchainLab.addTransaction(sessionId, fromUserId, toUserId, amount);
+    const result = app.blockchainLab.addTransaction(sessionId, fromTrim, toTrim, amount);
     
     if (result.success && app.io) {
       app.io.to(sessionId).emit('transactionAdded', result.transaction);

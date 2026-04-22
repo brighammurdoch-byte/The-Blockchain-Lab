@@ -81,3 +81,19 @@ input {
   border-left: 3px solid #6c757d;
   text-align: center;
 }
+
+/* Lab chain: full addresses + names + copy */
+.chain-address-full {
+  font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
+}
+.panel-body dl dd .chain-id-row {
+  max-width: 100%;
+}
+table.table-condensed td .chain-id-row {
+  max-width: 220px;
+}
+@media (min-width: 1200px) {
+  table.table-condensed td .chain-id-row {
+    max-width: none;
+  }
+}

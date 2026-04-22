@@ -69,8 +69,8 @@ block content
           .panel-body
             form#transactionForm
               .form-group
-                label Recipient
-                input.form-control#recipientAddress(type="text", placeholder="Address or name")
+                label(for="recipientAddress") Recipient address
+                input.form-control#recipientAddress(type="text", placeholder="Participant address (user ID)", autocomplete="off", title="Enter the other participant's address exactly as shown in the list")
               .form-group
                 label Amount
                 input.form-control#transactionAmount(type="number", min="0.01", step="0.01", placeholder="Amount")
@@ -272,6 +272,7 @@ block content
           button.btn.btn-warning#btnAcceptFork(type="button") Accept (New Chain)
 
   script(src="/socket.io/socket.io.js")
+  script(src="/javascripts/lab/chainDisplay.js")
   script(src="/javascripts/lab/participate.js")
   
   script.

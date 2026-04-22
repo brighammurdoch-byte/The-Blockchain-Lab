@@ -411,6 +411,7 @@ function initSocket() {
     } else if (honest.includes(userId)) {
       isColluding = false;
       collusionTipHash = null;
+      collusionHeight = 0;
       showToastNotification('🛡️ You are on the HONEST TEAM! Defend the main chain!', 'success');
       $('#miningActivity').prepend('<div class="alert alert-success" id="collusionBanner"><strong>🛡️ HONEST TEAM ACTIVE</strong><br>Defend the network from attackers!</div>');
     }
@@ -452,6 +453,65 @@ function initSocket() {
           Monitor for chain divergence at block #${applyAtBlock}
         </div>`
       );
+    }
+  });
+
+  socket.on('hard-fork-proposed', function(data) {
+    const { height, name } = data;
+    pendingForkHeight = height;
+    $('#forkProposalName').text(name);
+    $('#forkProposalHeight').text(height);
+    $('#forkChoiceModal').modal('show');
+  });
+
+  socket.on('network-toggled', function(data) {
+    const { paused } = data;
+    if (paused) {
+      showToastNotification('⚠️ Network paused by Administrator', 'warning');
+      if (isMining) stopMining();
+      $('#mineBtn').prop('disabled', true);
+      $('#transactionForm button[type="submit"]').prop('disabled', true);
+    } else {
+      showToastNotification('✅ Network resumed by Administrator', 'success');
+      $('#mineBtn').prop('disabled', false);
+      $('#transactionForm button[type="submit"]').prop('disabled', false);
+    }
+  });
+
+  // ============ LEGACY HANDLERS (for backward compatibility) ============
+
+  socket.on('blockMined', function(block) {
+    debugLog('New block mined by someone:', block);
+    loadBlockchainState();
+
+    if (isMining) {
+      stopMining();
+    }
+  });
+
+  socket.on('transactionAdded', function(transaction) {
+    debugLog('New transaction:', transaction);
+  });
+
+  socket.on('settingsUpdated', function(settings) {
+    debugLog('Settings updated:', settings);
+
+    const oldMode = lastKnownAdminSettings?.networkMode;
+    lastKnownAdminSettings = settings;
+
+    if (settings.networkMode === 'real-p2p' && oldMode !== 'real-p2p') {
+      setupWebRTC();
+    } else if (settings.networkMode !== 'real-p2p' && oldMode === 'real-p2p') {
+      teardownWebRTC();
+    }
+  });
+
+  socket.on('error', function(error) {
+    console.error('Socket error:', error);
+    showToastNotification(`Connection error: ${error}`, 'error');
+
+    if (error === 'Session not found or expired') {
+      if (isMining) stopMining();
     }
   });
   
@@ -516,68 +576,7 @@ function escapeHtml(text) {
 // Switch to validator code tab
 function switchToValidatorCodeTab() {
   $('a[href="#tabCode"]').tab('show');
-  // Scroll to top of page so user sees the tab
   window.scrollTo(0, 0);
-  
-  socket.on('hard-fork-proposed', function(data) {
-    const { height, name } = data;
-    pendingForkHeight = height;
-    $('#forkProposalName').text(name);
-    $('#forkProposalHeight').text(height);
-    $('#forkChoiceModal').modal('show');
-  });
-
-  socket.on('network-toggled', function(data) {
-    const { paused } = data;
-    if (paused) {
-      showToastNotification('⚠️ Network paused by Administrator', 'warning');
-      if (isMining) stopMining();
-      $('#mineBtn').prop('disabled', true);
-      $('#transactionForm button[type="submit"]').prop('disabled', true);
-    } else {
-      showToastNotification('✅ Network resumed by Administrator', 'success');
-      $('#mineBtn').prop('disabled', false);
-      $('#transactionForm button[type="submit"]').prop('disabled', false);
-    }
-  });
-
-  // ============ LEGACY HANDLERS (for backward compatibility) ============
-  
-  socket.on('blockMined', function(block) {
-    debugLog('New block mined by someone:', block);
-    loadBlockchainState();
-    
-    // Stop mining if a new block was added
-    if (isMining) {
-      stopMining();
-    }
-  });
-  
-  socket.on('transactionAdded', function(transaction) {
-    debugLog('New transaction:', transaction);
-  });
-  
-  socket.on('settingsUpdated', function(settings) {
-    debugLog('Settings updated:', settings);
-    
-    const oldMode = lastKnownAdminSettings?.networkMode;
-    lastKnownAdminSettings = settings;
-    
-    if (settings.networkMode === 'real-p2p' && oldMode !== 'real-p2p') {
-      setupWebRTC();
-    } else if (settings.networkMode !== 'real-p2p' && oldMode === 'real-p2p') {
-      teardownWebRTC();
-    }
-  });
-  
-  socket.on('error', function(error) {
-    console.error('Socket error:', error);
-    showToastNotification(`Connection error: ${error}`, 'error');
-    
-    if (error === 'Session not found or expired') {
-      if (isMining) stopMining();
-    }
-  });
 }
 
 // ============ WEBRTC ENGINE ============
@@ -679,11 +678,11 @@ function setupEventHandlers() {
   $('#transactionForm').submit(function(e) {
     e.preventDefault();
     
-    const recipientAddress = $('#recipientAddress').val();
+    const recipientAddress = $('#recipientAddress').val().trim();
     const amount = parseFloat($('#transactionAmount').val());
     
     if (!recipientAddress || !amount || amount <= 0) {
-      showToastNotification('Please enter valid recipient and amount', 'error');
+      showToastNotification('Please enter a valid recipient address and amount', 'error');
       return;
     }
     
@@ -1176,7 +1175,7 @@ function loadBlockchainState() {
   // Check personal chain first
   $.get('/lab/my-chain/' + sessionId + '/' + userId + cacheBuster, function(myChainData) {
     if (myChainData.success) {
-      updateParticipantBlockchainView(myChainData);
+      updateParticipantBlockchainView(myChainData, null);
       
       // Then fetch and render shared network data
       $.get('/lab/session/' + sessionId + cacheBuster, function(networkData) {
@@ -1186,6 +1185,7 @@ function loadBlockchainState() {
           updateDifficultyInfo(networkData.adminSettings);
           updateParticipantList(networkData.blockchain);
           updatePendingTransactions(networkData.blockchain);
+          updateParticipantBlockchainView(myChainData, networkData.blockchain.participants);
           
           const participant = networkData.blockchain.participants.find(p => p.address === userId);
           if (participant) {
@@ -1213,9 +1213,9 @@ function loadBlockchainState() {
           // Fetch forks for the shared network view
           $.get('/lab/forks/' + sessionId + cacheBuster, function(forkData) {
             const orphans = (forkData.success && forkData.forks) ? forkData.forks.orphans : [];
-            updateNetworkBlockchainView(networkData.blockchain.chain, orphans);
+            updateNetworkBlockchainView(networkData.blockchain.chain, orphans, networkData.blockchain.participants);
           }).fail(function() {
-            updateNetworkBlockchainView(networkData.blockchain.chain, []);
+            updateNetworkBlockchainView(networkData.blockchain.chain, [], networkData.blockchain.participants);
           });
           
           // Sync comparison logic
@@ -1275,8 +1275,11 @@ function loadBlockchainState() {
   });
 }
 
-function updateParticipantBlockchainView(chainData) {
+function updateParticipantBlockchainView(chainData, participants) {
   const blocks = chainData.chain || [];
+  const CD = window.ChainDisplay;
+  const nameLookup = CD ? CD.buildParticipantNameLookup(participants || []) : {};
+  const fmtAddr = (addr) => (CD ? CD.formatChainParticipantHtml(addr, nameLookup) : `<code>${addr || ''}</code>`);
   
   if (blocks.length > 0) {
     localChainTipHash = blocks[blocks.length - 1].hash;
@@ -1287,6 +1290,7 @@ function updateParticipantBlockchainView(chainData) {
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i];
     const highlight = block.miner === userId ? 'panel-success' : 'panel-default';
+    const minerId = block.miner != null ? block.miner : '';
     
     let txHtml = `${block.transactions ? block.transactions.length : 0}`;
     if (block.transactions && block.transactions.length > 0) {
@@ -1299,8 +1303,8 @@ function updateParticipantBlockchainView(chainData) {
       for (const tx of block.transactions) {
         const timeStr = tx.timestamp ? new Date(tx.timestamp).toLocaleTimeString() : '-';
         txHtml += `<tr>`;
-        txHtml += `<td><code style="font-size: 9px;">${(tx.from || 'unknown').substring(0, 8)}...</code></td>`;
-        txHtml += `<td><code style="font-size: 9px;">${(tx.to || 'unknown').substring(0, 8)}...</code></td>`;
+        txHtml += `<td>${fmtAddr(tx.from)}</td>`;
+        txHtml += `<td>${fmtAddr(tx.to)}</td>`;
         txHtml += `<td>${tx.amount} coins</td>`;
         txHtml += `<td>${timeStr}</td>`;
         txHtml += `</tr>`;
@@ -1323,7 +1327,7 @@ function updateParticipantBlockchainView(chainData) {
             <dt>Previous Hash</dt>
             <dd><code style="font-size: 10px; word-break: break-all;">${block.previousHash}</code></dd>
             <dt>Miner</dt>
-            <dd><code style="font-size: 11px;">${block.miner.substring(0, 12)}...</code></dd>
+            <dd>${fmtAddr(minerId)}</dd>
             <dt>Nonce</dt>
             <dd>${block.nonce}</dd>
             <dt>Transactions</dt>
@@ -1337,7 +1341,7 @@ function updateParticipantBlockchainView(chainData) {
   $('#blockchainView').html(html || '<p class="text-muted">No blocks yet</p>');
 }
 
-function updateNetworkBlockchainView(mainChain, orphans) {
+function updateNetworkBlockchainView(mainChain, orphans, participants) {
   const allBlocks = [...mainChain];
   const mainHashes = new Set(mainChain.map(b => b.hash));
   if (orphans && orphans.length > 0) {
@@ -1348,6 +1352,10 @@ function updateNetworkBlockchainView(mainChain, orphans) {
     $('#networkBlockchainView').html('<p class="text-muted">No blocks yet</p>');
     return;
   }
+
+  const CD = window.ChainDisplay;
+  const nameLookup = CD ? CD.buildParticipantNameLookup(participants || []) : {};
+  const fmtAddr = (addr) => (CD ? CD.formatChainParticipantHtml(addr, nameLookup) : `<code>${addr || ''}</code>`);
 
   const byIndex = {};
   let maxIndex = 0;
@@ -1379,12 +1387,13 @@ function updateNetworkBlockchainView(mainChain, orphans) {
         txHtml += `<div id="txDetails_${txId}" style="display:${displayStyle}; margin-top: 10px; max-height: 150px; overflow-y: auto;">`;
         txHtml += `<table class="table table-condensed"><thead><tr><th>From</th><th>To</th><th>Amt</th></tr></thead><tbody>`;
         for (const tx of block.transactions) {
-          txHtml += `<tr><td><code style="font-size: 9px;">${(tx.from||'').substring(0,8)}...</code></td><td><code style="font-size: 9px;">${(tx.to||'').substring(0,8)}...</code></td><td>${tx.amount}</td></tr>`;
+          txHtml += `<tr><td>${fmtAddr(tx.from)}</td><td>${fmtAddr(tx.to)}</td><td>${tx.amount}</td></tr>`;
         }
         txHtml += `</tbody></table></div>`;
       }
 
       const forkBadge = (block.forkId && block.forkId !== 'classic') ? `<span class="label label-info pull-right" style="margin-right: 5px;">${block.forkId.toUpperCase()}</span>` : '';
+      const minerId = block.miner != null ? block.miner : '';
       html += `<div style="display: flex; flex-direction: column; align-items: center; flex: 1 1 300px; max-width: 100%;">`;
       html += `
       <div class="panel ${panelClass}" style="width: 100%; margin-bottom: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
@@ -1396,7 +1405,7 @@ function updateNetworkBlockchainView(mainChain, orphans) {
           <dl class="dl-horizontal" style="margin-bottom: 0;">
             <dt style="width: 80px;">Hash</dt><dd style="margin-left: 90px;"><code style="font-size: 10px; word-break: break-all;">${block.hash.substring(0, 16)}...</code></dd>
             <dt style="width: 80px;">Prev Hash</dt><dd style="margin-left: 90px;"><code style="font-size: 10px; word-break: break-all;">${block.previousHash.substring(0, 16)}...</code></dd>
-            <dt style="width: 80px;">Miner</dt><dd style="margin-left: 90px;"><code style="font-size: 11px;">${block.miner.substring(0, 12)}...</code></dd>
+            <dt style="width: 80px;">Miner</dt><dd style="margin-left: 90px;">${fmtAddr(minerId)}</dd>
             <dt style="width: 80px;">Nonce</dt><dd style="margin-left: 90px;">${block.nonce}</dd>
             <dt style="width: 80px;">Txs</dt><dd style="margin-left: 90px;">${txHtml}</dd>
           </dl>
@@ -1551,13 +1560,16 @@ function updateParticipantList(blockchain) {
 
 function updatePendingTransactions(blockchain) {
   const transactions = blockchain.pendingTransactions || [];
+  const CD = window.ChainDisplay;
+  const nameLookup = CD ? CD.buildParticipantNameLookup(blockchain.participants || []) : {};
+  const fmtAddr = (addr) => (CD ? CD.formatChainParticipantHtml(addr, nameLookup) : `<code>${addr || ''}</code>`);
   let html = '';
   
   transactions.forEach(tx => {
     html += `
       <tr>
-        <td><code style="font-size: 10px;">${tx.from.substring(0, 10)}...</code></td>
-        <td><code style="font-size: 10px;">${tx.to.substring(0, 10)}...</code></td>
+        <td>${fmtAddr(tx.from)}</td>
+        <td>${fmtAddr(tx.to)}</td>
         <td>${tx.amount}</td>
         <td>${new Date(tx.timestamp).toLocaleTimeString()}</td>
       </tr>

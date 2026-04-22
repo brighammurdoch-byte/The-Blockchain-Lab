@@ -1,9 +1,9 @@
 ----
-# Blockchain Lab - Educational Blockchain Network
+# The Blockchain Lab - Educational Blockchain Network
 
 ## Overview
 
-**Blockchain Lab** is an interactive educational platform that demonstrates how blockchain networks function at scale. It allows educators to create isolated classroom blockchain networks where students can participate as observers or miners, learning real-world blockchain concepts.
+**The Blockchain Lab** is an interactive educational platform that demonstrates how blockchain networks function at scale. It allows educators to create isolated classroom blockchain networks where students can participate as observers or miners, learning real-world blockchain concepts.
 
 ## Features
 

@@ -97,7 +97,7 @@ function setupEventHandlers() {
     const amount = parseFloat($('#transactionAmount').val());
     
     if (!toUserId || !amount || amount <= 0) {
-      showToastNotification('Please fill in all fields with valid values', 'error');
+      showToastNotification('Please enter a valid recipient address and amount', 'error');
       return;
     }
     
@@ -142,6 +142,31 @@ function setupEventHandlers() {
     }).catch(err => {
       console.error('Could not copy text: ', err);
     });
+  });
+
+  $('#setNodeNameBtn').on('click', function() {
+    const nodeName = $('#nodeName').val().trim();
+    if (nodeName.length > 50) {
+      showToastNotification('Display name must be 50 characters or less', 'error');
+      return;
+    }
+    if (!socket || !socket.connected) {
+      showToastNotification('Not connected yet — try again in a moment', 'error');
+      return;
+    }
+    socket.emit('node-name-changed', {
+      sessionId: sessionId,
+      userId: userId,
+      name: nodeName
+    });
+    showToastNotification(nodeName ? 'Display name saved!' : 'Display name cleared', 'success');
+  });
+
+  $('#nodeName').on('keypress', function(e) {
+    if (e.which === 13) {
+      e.preventDefault();
+      $('#setNodeNameBtn').trigger('click');
+    }
   });
 }
 
@@ -228,17 +253,22 @@ function loadBlockchainState() {
         if (observer && observer.balance !== undefined) {
           $('#yourBalance').text(observer.balance);
         }
+        const $nodeName = $('#nodeName');
+        if ($nodeName.length && !$nodeName.is(':focus')) {
+          const nm = observer && observer.name ? observer.name : '';
+          $nodeName.val(nm);
+        }
       }
       
       const orphans = (forksData.success && forksData.forks) ? forksData.forks.orphans : [];
-      updateBlockchainView(data.blockchain.chain, orphans);
+      updateBlockchainView(data.blockchain.chain, orphans, data.blockchain.participants);
     }
   }).fail(function(error) {
     console.error('Error loading blockchain state:', error);
   });
 }
 
-function updateBlockchainView(mainChain, orphans) {
+function updateBlockchainView(mainChain, orphans, participants) {
   const allBlocks = [...mainChain];
   const mainHashes = new Set(mainChain.map(b => b.hash));
   if (orphans && orphans.length > 0) {
@@ -249,6 +279,10 @@ function updateBlockchainView(mainChain, orphans) {
     $('#blockchainView').html('<p class="text-muted">No blocks yet</p>');
     return;
   }
+
+  const CD = window.ChainDisplay;
+  const nameLookup = CD ? CD.buildParticipantNameLookup(participants || []) : {};
+  const fmtAddr = (addr) => (CD ? CD.formatChainParticipantHtml(addr, nameLookup) : `<code>${addr || ''}</code>`);
 
   const byIndex = {};
   let maxIndex = 0;
@@ -283,12 +317,13 @@ function updateBlockchainView(mainChain, orphans) {
         txHtml += `<div id="txDetails_${txId}" style="display:${displayStyle}; margin-top: 10px; max-height: 150px; overflow-y: auto;">`;
         txHtml += `<table class="table table-condensed"><thead><tr><th>From</th><th>To</th><th>Amt</th></tr></thead><tbody>`;
         for (const tx of block.transactions) {
-          txHtml += `<tr><td><code style="font-size: 9px;">${(tx.from||'').substring(0,8)}...</code></td><td><code style="font-size: 9px;">${(tx.to||'').substring(0,8)}...</code></td><td>${tx.amount}</td></tr>`;
+          txHtml += `<tr><td>${fmtAddr(tx.from)}</td><td>${fmtAddr(tx.to)}</td><td>${tx.amount}</td></tr>`;
         }
         txHtml += `</tbody></table></div>`;
       }
 
       const forkBadge = (block.forkId && block.forkId !== 'classic') ? `<span class="label label-info pull-right" style="margin-right: 5px;">${block.forkId.toUpperCase()}</span>` : '';
+      const minerId = block.miner != null ? block.miner : '';
       html += `<div style="display: flex; flex-direction: column; align-items: center; flex: 1 1 300px; max-width: 100%;">`;
       html += `
       <div class="panel ${panelClass}" style="width: 100%; margin-bottom: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
@@ -300,7 +335,7 @@ function updateBlockchainView(mainChain, orphans) {
           <dl class="dl-horizontal" style="margin-bottom: 0;">
             <dt style="width: 80px;">Hash</dt><dd style="margin-left: 90px;"><code style="font-size: 10px; word-break: break-all;">${block.hash.substring(0, 16)}...</code></dd>
             <dt style="width: 80px;">Prev Hash</dt><dd style="margin-left: 90px;"><code style="font-size: 10px; word-break: break-all;">${block.previousHash.substring(0, 16)}...</code></dd>
-            <dt style="width: 80px;">Miner</dt><dd style="margin-left: 90px;"><code style="font-size: 11px;">${block.miner.substring(0, 12)}...</code></dd>
+            <dt style="width: 80px;">Miner</dt><dd style="margin-left: 90px;">${fmtAddr(minerId)}</dd>
             <dt style="width: 80px;">Nonce</dt><dd style="margin-left: 90px;">${block.nonce}</dd>
             <dt style="width: 80px;">Txs</dt><dd style="margin-left: 90px;">${txHtml}</dd>
           </dl>
@@ -395,13 +430,16 @@ function updateParticipantList(blockchain) {
 
 function updatePendingTransactions(blockchain) {
   const transactions = blockchain.pendingTransactions || [];
+  const CD = window.ChainDisplay;
+  const nameLookup = CD ? CD.buildParticipantNameLookup(blockchain.participants || []) : {};
+  const fmtAddr = (addr) => (CD ? CD.formatChainParticipantHtml(addr, nameLookup) : `<code>${addr || ''}</code>`);
   let html = '';
   
   transactions.forEach(tx => {
     html += `
       <tr>
-        <td><code style="font-size: 10px;">${tx.from.substring(0, 10)}...</code></td>
-        <td><code style="font-size: 10px;">${tx.to.substring(0, 10)}...</code></td>
+        <td>${fmtAddr(tx.from)}</td>
+        <td>${fmtAddr(tx.to)}</td>
         <td>${tx.amount}</td>
         <td>${new Date(tx.timestamp).toLocaleTimeString()}</td>
       </tr>

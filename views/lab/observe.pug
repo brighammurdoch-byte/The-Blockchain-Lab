@@ -28,6 +28,11 @@ block content
                 code.small#yourAddress(style="word-break: break-all;") Loading...
             .well
               p.text-center
+                strong Wallet display name
+              input.form-control#nodeName(type="text", placeholder="Optional name shown to others", maxlength="50", style="text-align: center; margin-bottom: 10px;")
+              button.btn.btn-xs.btn-primary.btn-block#setNodeNameBtn(type="button") Save name
+            .well
+              p.text-center
                 strong Balance
                 br
                 h3#yourBalance 0
@@ -71,8 +76,8 @@ block content
           .panel-body
             form#transactionForm
               .form-group
-                label Recipient
-                input.form-control#recipientAddress(type="text", placeholder="Address or name")
+                label(for="recipientAddress") Recipient address
+                input.form-control#recipientAddress(type="text", placeholder="Participant address (user ID)", autocomplete="off", title="Enter the other participant's address exactly as shown in the list")
               .form-group
                 label Amount
                 input.form-control#transactionAmount(type="number", min="0.01", step="0.01", placeholder="Amount")
@@ -116,4 +121,5 @@ block content
                   td(colspan="4").text-center No pending transactions
 
   script(src="/socket.io/socket.io.js")
+  script(src="/javascripts/lab/chainDisplay.js")
   script(src="/javascripts/lab/observe.js")
