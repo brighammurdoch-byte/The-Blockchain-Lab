@@ -24,6 +24,8 @@ let rtcPeerConnections = {}; // WebRTC connections
 let rtcDataChannels = {}; // WebRTC data channels
 let pendingDemoCode = null; // Store admin-triggered demo code
 let demoCodeApplyAtBlock = null; // Block height when demo code should apply
+let isSyncingChain = false; // Prevent multiple concurrent sync requests
+let lastFailedSyncHeight = 0; // Prevent infinite sync loops on incompatible hard forks
 const DEBUG_MODE = localStorage.getItem('blockchainLabDebug') === 'true'; // Enable via console: localStorage.setItem('blockchainLabDebug', 'true')
 
 // Controlled logging that respects DEBUG_MODE
@@ -1161,8 +1163,16 @@ function loadBlockchainState() {
               });
             }
             syncBtn.html('<i class="glyphicon glyphicon-refresh"></i> Sync Chain (+' + diff + ' blocks)').show();
+
+            // Auto-sync to longest chain to ensure network convergence
+            if (!isColluding && !isSyncingChain && networkChainLength > lastFailedSyncHeight) {
+              isSyncingChain = true;
+              debugLog(`Auto-syncing to network chain (+${diff} blocks)...`);
+              syncMinerToLongerChain(networkData.blockchain.chain);
+            }
           } else {
             $('#syncToLongerChainBtn').hide();
+            isSyncingChain = false;
           }
 
           // Fork control logic
@@ -1337,11 +1347,30 @@ function updateNetworkBlockchainView(mainChain, orphans) {
       }
       const arrowColor = hasFork ? '#f0ad4e' : '#bbb';
       if (hasFork) {
+      
+      const countCurrent = byIndex[i] ? byIndex[i].length : 0;
+      const countNext = byIndex[i+1] ? byIndex[i+1].length : 0;
+      
+      if (countCurrent === 1 && countNext > 1) {
+        // Outward fork (1 parent to multiple children)
         html += `<div style="text-align: center; margin-bottom: 5px; color: ${arrowColor};">
                    <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-10px) rotate(15deg);"></i>
                    <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(10px) rotate(-15deg);"></i>
                  </div>`;
+      } else if (countCurrent > 1 && countNext === 1) {
+        // Inward merge (multiple blocks reducing to 1 child block)
+        html += `<div style="text-align: center; margin-bottom: 5px; color: ${arrowColor};">
+                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-10px) rotate(-15deg);"></i>
+                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(10px) rotate(15deg);"></i>
+                 </div>`;
+      } else if (countCurrent > 1 && countNext > 1) {
+        // Parallel straight down (both branches continue)
+        html += `<div style="text-align: center; margin-bottom: 5px; color: ${arrowColor};">
+                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-20px);"></i>
+                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(20px);"></i>
+                 </div>`;
       } else {
+        // Single straight arrow
         html += `<div style="text-align: center; margin-bottom: 5px; color: ${arrowColor};"><i class="glyphicon glyphicon-arrow-down"></i></div>`;
       }
     }
@@ -1364,8 +1393,11 @@ function toggleTransactions(blockIndex) {
 function syncMinerToLongerChain(newChain) {
   if (!newChain || newChain.length === 0) {
     console.warn('No valid chain to sync to');
+    isSyncingChain = false;
     return;
   }
+  
+  isSyncingChain = true;
   
   $.ajax({
     url: '/lab/sync-chain',
@@ -1380,15 +1412,29 @@ function syncMinerToLongerChain(newChain) {
       if (response.success) {
         console.log(`✅ Successfully synced to longer chain (height: ${response.newHeight})`);
         showToastNotification(`✅ Chain updated! Now mining on chain with ${response.newHeight} blocks.`, 'success');
+        
+        const wasMining = isMining;
+        if (wasMining) stopMining();
+        
+        lastFailedSyncHeight = 0;
+        isSyncingChain = false;
         loadBlockchainState();
+        
+        if (wasMining) {
+          setTimeout(() => startMining(), 500); // Resume mining on the new tip!
+        }
       } else {
         console.warn('Sync failed:', response.error);
         showToastNotification('Could not sync to new chain. Continue with current chain.', 'error');
+        lastFailedSyncHeight = newChain.length;
+        isSyncingChain = false;
       }
     },
     error: function(err) {
       console.error('Sync error:', err);
       showToastNotification('Error syncing to longer chain. Continue with current chain.', 'error');
+      lastFailedSyncHeight = newChain.length;
+      isSyncingChain = false;
     }
   });
 }
@@ -1422,10 +1468,13 @@ function updateParticipantList(blockchain) {
   
   participants.forEach(p => {
     const roleLabel = p.role === 'wallet' ? '<span class="label label-info">Wallet</span>' : '<span class="label label-success">Miner</span>';
+    const nameHtml = p.name ? `<strong style="display: block; margin-top: 4px;">${p.name}</strong>` : '';
     html += `<li class="list-group-item">
-      ${roleLabel} <strong style="word-break: break-all;">${p.address}</strong>
-      <button class="btn btn-xs btn-default pull-right copy-btn" data-clipboard-text="${p.address}" title="Copy Address"><i class="glyphicon glyphicon-copy"></i></button>
-      <br><span class="text-muted small" style="margin-top: 4px; display: inline-block;">${p.minedBlocks || 0} blocks, ${p.balance || 0} coins</span>
+      ${roleLabel}
+      <button class="btn btn-xs btn-default pull-right copy-btn" data-clipboard-text="${p.address}" title="Copy Address" style="margin-top: -2px;"><i class="glyphicon glyphicon-copy"></i></button>
+      ${nameHtml}
+      <div style="margin-top: 4px;"><code style="font-size: 10px; word-break: break-all;">${p.address}</code></div>
+      <span class="text-muted small" style="margin-top: 4px; display: inline-block;">${p.minedBlocks || 0} blocks, ${p.balance || 0} coins</span>
     </li>`;
   });
   

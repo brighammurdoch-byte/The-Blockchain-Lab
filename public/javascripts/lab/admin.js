@@ -486,12 +486,30 @@ function updateBlockchainView(mainChain, orphans) {
         }
       }
       const arrowColor = hasFork ? '#f0ad4e' : '#bbb';
-      if (hasFork) {
+      
+      const countCurrent = byIndex[i] ? byIndex[i].length : 0;
+      const countNext = byIndex[i+1] ? byIndex[i+1].length : 0;
+      
+      if (countCurrent === 1 && countNext > 1) {
+        // Outward fork (1 parent to multiple children)
         html += `<div style="text-align: center; margin-bottom: 5px; color: ${arrowColor};">
                    <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-10px) rotate(15deg);"></i>
                    <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(10px) rotate(-15deg);"></i>
                  </div>`;
+      } else if (countCurrent > 1 && countNext === 1) {
+        // Inward merge (multiple blocks reducing to 1 child block)
+        html += `<div style="text-align: center; margin-bottom: 5px; color: ${arrowColor};">
+                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-10px) rotate(-15deg);"></i>
+                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(10px) rotate(15deg);"></i>
+                 </div>`;
+      } else if (countCurrent > 1 && countNext > 1) {
+        // Parallel straight down (both branches continue)
+        html += `<div style="text-align: center; margin-bottom: 5px; color: ${arrowColor};">
+                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-20px);"></i>
+                   <i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(20px);"></i>
+                 </div>`;
       } else {
+        // Single straight arrow
         html += `<div style="text-align: center; margin-bottom: 5px; color: ${arrowColor};"><i class="glyphicon glyphicon-arrow-down"></i></div>`;
       }
     }
@@ -530,9 +548,11 @@ function updateParticipantsList(blockchain) {
   participants.forEach(p => {
     const roleClass = p.role === 'wallet' ? 'label-info' : 'label-success';
     const roleText = p.role === 'wallet' ? 'Wallet' : 'Miner';
+    const nameHtml = p.name ? `<strong style="display:block; margin-bottom:2px;">${p.name}</strong>` : '';
     html += `
       <tr>
         <td>
+          ${nameHtml}
           <code style="font-size: 11px; word-break: break-all;">${p.address}</code>
           <button class="btn btn-xs btn-default pull-right copy-btn" data-clipboard-text="${p.address}" title="Copy Address"><i class="glyphicon glyphicon-copy"></i></button>
         </td>
