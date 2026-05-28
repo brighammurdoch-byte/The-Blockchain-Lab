@@ -1,0 +1,19 @@
+# Railway configuration for Blockchain Lab
+# https://railway.app
+# This is optional - Railway auto-detects Node.js + package.json + Procfile/Dockerfile
+
+[build]
+builder = "NIXPACKS"  # or "DOCKERFILE" if using the included Dockerfile
+
+[deploy]
+startCommand = "npm start"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+# For free tier notes:
+# Railway free plan provides limited credits monthly.
+# For true zero-cost 24/7, prefer self-hosting with Cloudflare Tunnel or Oracle Always Free.
+
+[[services]]
+name = "blockchain-lab"
+# Railway will expose PORT automatically

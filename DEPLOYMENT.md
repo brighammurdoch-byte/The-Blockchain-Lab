@@ -1,18 +1,19 @@
 # Blockchain Lab - Deployment Guide
 
-This guide covers deploying Blockchain Lab to various cloud platforms so your students can access it via a public URL.
+> **For true 24/7 independent operation at zero cost, see [SELF_HOSTING_24_7.md](SELF_HOSTING_24_7.md)** instead of the PaaS options below. The self-host + Cloudflare Tunnel method is the only approach that gives you a real always-on service without usage limits, sleep timers, or eventual bills.
 
-## Quick Choice Guide
+This guide covers quick temporary deploys to cloud platforms (good for short-term classroom testing).
+
+## Quick Choice Guide (Temporary / Easy Deploys)
 
 | Platform | Ease | Cost | Speed | Best For |
 |----------|------|------|-------|----------|
-| **Railway** | ⭐⭐⭐⭐⭐ | Free | 2 min | Beginners, quick start |
-| **Render** | ⭐⭐⭐⭐ | Free | 3 min | Good free tier |
-| **Vercel** | ⭐⭐⭐⭐ | Free | 2 min | Simple setup |
-| **DigitalOcean App Platform** | ⭐⭐⭐ | $$$$ | 5 min | More control |
-| **Heroku** | ⭐⭐⭐⭐ | $$$ | 3 min | Simple, paid |
+| **Railway** | ⭐⭐⭐⭐⭐ | Free credits | 2 min | Beginners, quick start |
+| **Render** | ⭐⭐⭐⭐ | Free (sleeps) | 3 min | Good free tier |
+| **Vercel** | ⭐⭐⭐⭐ | Free | 2 min | Simple setup (WebSocket limitations) |
+| **DigitalOcean App Platform** | ⭐⭐⭐ | Paid | 5 min | More control |
 
-**Recommendation: Railway** - Easiest, instant deploy, good free tier
+**Note**: All free PaaS tiers have limitations (sleep after ~15 min inactivity on Render/Railway hobby, monthly credits, or cold starts). For a site that must be reliably up 24/7 without you paying or babysitting, use the self-hosting guide linked above.
 
 ---
 

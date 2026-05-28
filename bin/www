@@ -102,4 +102,43 @@ function onListening() {
     ? 'pipe ' + addr
     : 'port ' + addr.port;
   debug('Listening on ' + bind);
+  console.log('Blockchain Lab server listening on ' + bind);
 }
+
+/**
+ * Graceful shutdown handlers for production (PM2, Docker, etc.)
+ */
+function gracefulShutdown(signal) {
+  console.log(`${signal} received. Starting graceful shutdown...`);
+  server.close(() => {
+    console.log('HTTP server closed.');
+    // Give sockets a moment to finish
+    setTimeout(() => {
+      console.log('Process exiting cleanly.');
+      process.exit(0);
+    }, 500);
+  });
+  
+  // Force exit after 10s if stuck
+  setTimeout(() => {
+    console.error('Graceful shutdown timed out, forcing exit.');
+    process.exit(1);
+  }, 10000);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Handle uncaught errors in production to prevent silent crashes
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  gracefulShutdown('uncaughtException');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // In production, consider shutting down or at least logging prominently
+  if (process.env.NODE_ENV === 'production') {
+    gracefulShutdown('unhandledRejection');
+  }
+});

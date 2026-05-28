@@ -11,7 +11,14 @@
     "bitcoin"
   ],
   "scripts": {
-    "start": "node ./bin/www"
+    "start": "node ./bin/www",
+    "start:prod": "NODE_ENV=production node ./bin/www",
+    "pm2:start": "pm2 start ecosystem.config.js --env production",
+    "pm2:stop": "pm2 stop blockchain-lab",
+    "pm2:restart": "pm2 restart blockchain-lab",
+    "pm2:logs": "pm2 logs blockchain-lab",
+    "docker:build": "docker build -t blockchain-lab .",
+    "docker:run": "docker run -p 3000:3000 --env-file .env blockchain-lab"
   },
   "repository": {
     "type": "git",

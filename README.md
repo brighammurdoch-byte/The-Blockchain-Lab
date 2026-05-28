@@ -181,51 +181,35 @@ Students will understand:
 - Vulnerability of blockchains to 51% attacks
 - Why decentralization matters
 
-##Deployment
+## Deployment & 24/7 Hosting
 
-### Deploying to Cloud (Recommended)
+### Zero-Cost 24/7 Hosting (Recommended for Independent Operation)
 
-The application is stateless and perfectly suited for cloud deployment.
+**For truly free, always-on hosting with no recurring bills or sleeping services, use the dedicated guide:**
 
-#### Option 1: Railway (Easiest)
-1. Create an account at railway.app
-2. Connect your GitHub repository
-3. Railway automatically detects Node.js and deploys
-4. You get a public URL instantly
+➡️ **[SELF_HOSTING_24_7.md](SELF_HOSTING_24_7.md)**
 
-#### Option 2: Render
-1. Create account at render.com
-2. Create new Web Service
-3. Connect GitHub repository
-4. Set `npm start` as start command
-5. Deploy
+This covers the best option:
+- **Self-host on your own Windows/Linux machine + Cloudflare Tunnel** (completely free, no credit card, full Socket.io support, works from dorms/NAT).
+- Alternative: Oracle Cloud Always Free VM (powerful cloud hardware).
 
-#### Option 3: Heroku
-```bash
-# Install Heroku CLI
-# Then:
-heroku login
-heroku create blockchain-lab
-git push heroku main
-heroku open
-```
+This is the only way to get genuine 24/7 independent operation without usage limits or hidden costs.
 
-#### Option 4: DigitalOcean App Platform
-1. Connect GitHub repository
-2. Set Node environment
-3. Deploy when you push to main
+### Quick Cloud PaaS (Easier but Not Always-On Free)
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for Railway, Render, etc. These are convenient for temporary/classroom use but their free tiers sleep after inactivity or have monthly credits.
+
+**Note**: The app uses in-memory storage. Sessions and join codes are lost on every server restart. This is intentional and fine for per-class use (instructor creates a fresh session). For persistence across restarts you would need to add a database layer.
 
 ### Environment Variables
-```
-PORT=3000 (default)
-NODE_ENV=production
-```
+See the `.env` file (copy `.env.example`) for all tunables:
+- `NODE_ENV=production`
+- Difficulty, rewards, session TTL, etc.
 
 ### Performance Notes
-- Server is stateless (can be scaled horizontally)
-- In-memory storage means sessions reset on restart
-- For persistence, add a database (MongoDB, PostgreSQL)
-- Current implementation supports 100+ concurrent connections per instance
+- Server is stateless (single instance recommended due to Socket.io + shared in-memory state)
+- Current implementation comfortably supports 50-100 concurrent participants
+- CPU usage during mining is controllable per participant (10-100%)
 
 ## Testing the Lab
 
