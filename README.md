@@ -333,6 +333,12 @@ When using this in your class, please credit:
 - Anders Brownworth for the original blockchain demo
 - The open-source community for Socket.io, Express, and related libraries
 
+## Getting Help / Contributing
+
+- Open a Discussion if you want to help with deployment, hosting, or P2P setup
+- Open an Issue for bugs or feature ideas
+- Feel free to fork and experiment!
+
 ---
 
 **Ready to start teaching blockchain?**
