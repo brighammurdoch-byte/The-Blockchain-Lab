@@ -82,7 +82,16 @@ $(document).ready(function() {
   initClientSideNetworking(networkMode, joinCode || sessionId);
 
   // Initialize Network Visualization
-  networkViz = new NetworkVisualization('#networkVisualizationSvg');
+  try {
+    if (typeof NetworkVisualization === 'function' && typeof d3 !== 'undefined') {
+      networkViz = new NetworkVisualization('#networkVisualizationSvg');
+      window.networkViz = networkViz;
+    } else {
+      console.warn('[Viz] D3 or NetworkVisualization missing — topology disabled');
+    }
+  } catch (e) {
+    console.warn('[Viz] Failed to init topology:', e && e.message);
+  }
 
   // Render from local relayed state
   if (typeof renderClientRelayChain === 'function') {
@@ -137,42 +146,56 @@ function renderJoinShareCard(roomCode) {
   const canvas = document.getElementById('joinQrCanvas');
   if (!canvas) return;
 
+  function getQrApi() {
+    var api = window.QRCode || window.qrcode;
+    if (typeof api === 'function' && api.toCanvas) return api;
+    if (api && typeof api.toCanvas === 'function') return api;
+    if (api && api.default && typeof api.default.toCanvas === 'function') return api.default;
+    return null;
+  }
+
+  function drawFallbackText(msg) {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#5c7380';
+    ctx.font = '12px sans-serif';
+    ctx.fillText(msg || 'Use the share link', 28, 90);
+  }
+
   function drawQr() {
-    if (typeof QRCode === 'undefined' || typeof QRCode.toCanvas !== 'function') {
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = '#666';
-        ctx.font = '12px sans-serif';
-        ctx.fillText('QR unavailable', 40, 90);
-        ctx.fillText('(check network/CDN)', 30, 110);
-      }
+    var api = getQrApi();
+    if (!api) {
+      drawFallbackText('QR unavailable');
+      console.warn('[Admin] QRCode library missing');
       return;
     }
-    QRCode.toCanvas(canvas, url, {
+    api.toCanvas(canvas, url, {
       width: 180,
       margin: 2,
-      color: { dark: '#111111', light: '#ffffff' }
+      color: { dark: '#0f1c24', light: '#ffffff' }
     }, function (err) {
       if (err) {
         console.warn('[Admin] QR render failed', err);
+        drawFallbackText('QR failed — use link');
         showToastNotification('Could not draw QR code — use the share link instead', 'error');
       }
     });
   }
 
-  if (typeof QRCode !== 'undefined') {
+  if (getQrApi()) {
     drawQr();
   } else {
-    // CDN may still be loading
-    let tries = 0;
-    const timer = setInterval(function () {
+    var tries = 0;
+    var timer = setInterval(function () {
       tries += 1;
-      if (typeof QRCode !== 'undefined' || tries > 40) {
+      if (getQrApi() || tries > 50) {
         clearInterval(timer);
         drawQr();
       }
-    }, 100);
+    }, 50);
   }
 }
 
@@ -286,6 +309,10 @@ function initClientSideNetworking(mode, roomCode) {
 
   // Listen for high-level events (coordinator handles most now)
   net.on('peer-joined', (msg) => {
+    if (msg.from && String(msg.from).indexOf('probe-') === 0) {
+      // Landing-page session probe — answer state but don't clutter UI
+      return;
+    }
     console.log('[ClientNet] Peer joined relay:', msg.from, msg.role);
     showToastNotification(`Miner joined: ${msg.from}`, 'info');
 
@@ -348,7 +375,17 @@ function initClientSideNetworking(mode, roomCode) {
     if (!block || !relayState) return;
     const result = relayState.tryAddBlock(block, minerId);
     if (result && result.accepted) {
-      net.send('block-accepted', { block, minerId });
+      net.send('block-accepted', {
+        block,
+        minerId,
+        isFork: !!result.isFork,
+        reorg: !!result.reorg,
+        tipChanged: !!result.tipChanged,
+        newHeight: result.newHeight,
+        chain: result.chain || relayState.chain.slice(),
+        participants: Array.from(relayState.participants.values()),
+        networkStats: { ...relayState.networkStats }
+      });
       if (typeof renderClientRelayChain === 'function') renderClientRelayChain();
     }
   });
@@ -829,32 +866,47 @@ function renderClientRelayChain() {
   // Update participants table from relay state
   renderClientParticipants();
 
-  // Feed live data to network visualization (only if D3 viz loaded and has the method)
-  if (window.networkViz && typeof window.networkViz.updateTopology === 'function') {
+  // Feed live data to network visualization
+  const viz = window.networkViz || networkViz;
+  if (viz && typeof viz.updateTopology === 'function') {
     try {
-      const participantsArr = Array.from(relayState.participants.values());
-      const vizMiners = participantsArr.map(p => ({
-        userId: p.userId || p.id,
-        name: p.displayName || p.name || (p.userId || '').substring(0, 8),
-        status: p.status || 'mining',
-        chainHeight: p.blocksMined || 0,
-        hashrate: p.hashrate || 0,
-        address: p.userId
-      }));
+      const participantsArr = Array.from(relayState.participants.values())
+        .filter(function (p) {
+          const id = p.userId || p.id || '';
+          return id && String(id).indexOf('probe-') !== 0;
+        });
+      const vizMiners = participantsArr.map(function (p) {
+        return {
+          userId: p.userId || p.id,
+          name: p.displayName || p.name || String(p.userId || '').substring(0, 8),
+          status: p.status || (p.role === 'admin' ? 'idle' : 'mining'),
+          chainHeight: p.blocksMined || 0,
+          hashrate: p.hashrate || 0,
+          address: p.userId,
+          role: p.role || 'miner'
+        };
+      });
       const peerAssignments = new Map();
-      const center = vizMiners.find(m => /admin/i.test(m.userId || '')) || vizMiners[0];
+      // Admin-hosted: star topology around the instructor hub
+      const center = vizMiners.find(function (m) {
+        return m.role === 'admin' || /admin/i.test(m.userId || '') || /admin/i.test(m.name || '');
+      }) || vizMiners[0];
       if (center && vizMiners.length > 1) {
-        vizMiners.forEach(m => {
+        vizMiners.forEach(function (m) {
           if (m.userId !== center.userId) {
             peerAssignments.set(m.userId, [center.userId]);
           }
         });
       }
-      window.networkViz.updateTopology(vizMiners, peerAssignments);
-      // also mark latest miner as 'found' briefly for visual if we have tip
-      const tip = chain[chain.length-1];
-      if (tip && tip.miner && typeof window.networkViz.blockFound === 'function') {
-        window.networkViz.blockFound(tip.miner);
+      viz.updateTopology(vizMiners, peerAssignments);
+
+      const tip = chain[chain.length - 1];
+      if (tip && tip.miner && tip.miner !== 'genesis' && typeof viz.blockFound === 'function') {
+        // Only pulse when the tip miner changes (avoid constant yellow flash)
+        if (viz._lastTipMiner !== tip.miner) {
+          viz._lastTipMiner = tip.miner;
+          viz.blockFound(tip.miner);
+        }
       }
     } catch (e) {
       console.warn('[Viz] updateTopology non-fatal:', e && e.message);

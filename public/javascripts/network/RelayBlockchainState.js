@@ -118,71 +118,141 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     }
   }
 
+  /**
+   * Walk parent links back to genesis. Returns null if the path is incomplete.
+   */
+  _pathToGenesis(tipHash) {
+    if (!tipHash || !this.allBlocks.has(tipHash)) return null;
+    const genesisHash = this.chain[0] && this.chain[0].hash;
+    const path = [];
+    const seen = new Set();
+    let cur = this.allBlocks.get(tipHash);
+
+    while (cur) {
+      if (seen.has(cur.hash)) return null;
+      seen.add(cur.hash);
+      path.unshift(cur);
+
+      const isGenesis =
+        cur.index === 0 ||
+        cur.previousHash === '0' ||
+        cur.miner === 'genesis' ||
+        (genesisHash && cur.hash === genesisHash);
+      if (isGenesis) {
+        if (genesisHash && cur.hash !== genesisHash) return null;
+        return path;
+      }
+
+      cur = this.allBlocks.get(cur.previousHash);
+      if (!cur) return null;
+    }
+    return null;
+  }
+
+  /**
+   * Longest-chain fork choice. Equal height → keep the current tip (first-seen wins).
+   */
+  _selectBestChain() {
+    let best = this.chain && this.chain.length ? this.chain.slice() : [];
+
+    this.allBlocks.forEach((_block, hash) => {
+      const path = this._pathToGenesis(hash);
+      if (!path || path.length === 0) return;
+      if (path.length > best.length) {
+        best = path;
+      }
+      // Equal length: keep existing tip (stable / first-seen)
+    });
+
+    return best;
+  }
+
+  _recomputeMiningRewards() {
+    const reward = this.settings.miningRewardCoins || 10;
+    this.participants.forEach((p) => {
+      p.blocksMined = 0;
+      p.balance = 0;
+    });
+
+    this.chain.forEach((block) => {
+      if (!block || !block.miner || block.miner === 'genesis') return;
+      const minerId = block.miner;
+      if (!this.participants.has(minerId)) {
+        this.addOrUpdateParticipant(minerId, 'miner');
+      }
+      const miner = this.participants.get(minerId);
+      miner.blocksMined = (miner.blocksMined || 0) + 1;
+      miner.balance = (miner.balance || 0) + reward;
+    });
+  }
+
   // Main entry point: a miner submitted a block via the relay
-  // Returns { accepted: boolean, reason?: string, newHeight?: number }
+  // Returns { accepted, reason?, newHeight?, isFork?, reorg?, tipChanged?, chain? }
   tryAddBlock(block, fromUserId) {
     if (!block || !block.hash || !block.previousHash) {
       return { accepted: false, reason: 'Malformed block' };
     }
 
-    // Basic PoW check using current settings
-    const leading = this.settings.difficultyLeading || 3;
-    const requiredPrefix = '0'.repeat(leading);
+    if (this.allBlocks.has(block.hash)) {
+      return {
+        accepted: false,
+        reason: 'Duplicate block',
+        chain: this.chain.slice(),
+        newHeight: Math.max(0, this.chain.length - 1)
+      };
+    }
 
-    if (!block.hash.startsWith(requiredPrefix)) {
+    // Basic PoW check using current settings
+    const leading = (this.settings.difficultyLeading != null) ? this.settings.difficultyLeading : 3;
+    const requiredPrefix = leading > 0 ? '0'.repeat(leading) : '';
+
+    if (requiredPrefix && !block.hash.startsWith(requiredPrefix)) {
       return { accepted: false, reason: `Block does not meet difficulty (needs ${leading} leading zeros)` };
     }
 
-    // Check it extends current tip or is a reasonable fork
-    const currentTip = this.chain[this.chain.length - 1];
-    const isExtension = block.previousHash === currentTip.hash;
+    this.ensureGenesis();
 
-    if (!isExtension) {
-      // Simple fork handling: allow if previousHash exists in our known blocks
-      if (!this.allBlocks.has(block.previousHash)) {
-        // Could be a deep fork or attack simulation - still accept for education
-        console.warn('[RelayState] Block extends unknown parent - treating as fork');
+    const oldTip = this.chain[this.chain.length - 1] || null;
+
+    if (!this.allBlocks.has(block.previousHash) && block.previousHash !== '0') {
+      console.warn('[RelayState] Block parent not yet known — storing as orphan until parent arrives');
+    }
+
+    this.allBlocks.set(block.hash, Object.assign({}, block, {
+      miner: block.miner || fromUserId || block.miner
+    }));
+
+    if (fromUserId && !this.participants.has(fromUserId)) {
+      this.addOrUpdateParticipant(fromUserId, 'miner');
+    }
+
+    const bestChain = this._selectBestChain();
+    const newTip = bestChain[bestChain.length - 1] || null;
+    const tipChanged = !!(newTip && (!oldTip || oldTip.hash !== newTip.hash));
+    const isDirectExtension = !!(oldTip && newTip && newTip.previousHash === oldTip.hash);
+    const didReorg = tipChanged && !isDirectExtension;
+    const onBest = bestChain.some((b) => b.hash === block.hash);
+
+    this.chain = bestChain;
+    this.networkStats.blockHeight = Math.max(0, this.chain.length - 1);
+    if (newTip && (isDirectExtension || (onBest && block.hash === newTip.hash))) {
+      this.networkStats.lastBlockTime = newTip.timestamp || Date.now();
+      if (isDirectExtension) {
+        this._recordBlockInterval(newTip);
       }
     }
 
-    // Store the block
-    this.allBlocks.set(block.hash, block);
+    this._recomputeMiningRewards();
 
-    // Append to main chain (for simplicity in v1; real fork choice can be added later)
-    if (isExtension || this.chain.length === 0) {
-      this.chain.push(block);
-      this.networkStats.blockHeight = this.chain.length - 1;
-      this.networkStats.lastBlockTime = block.timestamp || Date.now();
-      this._recordBlockInterval(block);
-
-      // Reward the miner (educational)
-      const miner = this.participants.get(fromUserId);
-      if (miner) {
-        miner.blocksMined = (miner.blocksMined || 0) + 1;
-        miner.balance = (miner.balance || 0) + (this.settings.miningRewardCoins || 10);
-      } else if (fromUserId) {
-        // Auto-register unknown miner so UI updates even if peer-joined was missed
-        this.addOrUpdateParticipant(fromUserId, 'miner', {
-          blocksMined: 1,
-          balance: this.settings.miningRewardCoins || 10
-        });
-      }
-
-      return {
-        accepted: true,
-        newHeight: this.chain.length - 1,
-        isFork: false
-      };
-    } else {
-      // Accepted as competing block (orphan/fork) for demo purposes
-      return {
-        accepted: true,
-        newHeight: this.chain.length - 1,
-        isFork: true
-      };
-    }
+    return {
+      accepted: true,
+      newHeight: Math.max(0, this.chain.length - 1),
+      isFork: !onBest,
+      reorg: didReorg,
+      tipChanged: tipChanged,
+      chain: this.chain.slice()
+    };
   }
-
   tryAddTransaction(tx) {
     if (!tx) return { accepted: false, reason: 'Empty transaction' };
     this.pendingTransactions.push(tx);
@@ -206,6 +276,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     return {
       roomCode: this.roomCode,
       chain: this.chain,
+      allBlocks: Array.from(this.allBlocks.values()),
       participants: Array.from(this.participants.values()),
       settings: { ...this.settings },
       networkStats: { ...this.networkStats },
@@ -230,9 +301,21 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     if (persisted.networkStats) this.networkStats = { ...this.networkStats, ...persisted.networkStats };
     if (persisted.pendingTransactions) this.pendingTransactions = persisted.pendingTransactions;
 
-    // Rebuild allBlocks index
+    // Rebuild allBlocks: prefer persisted orphans + chain
     this.allBlocks = new Map();
-    this.chain.forEach(b => this.allBlocks.set(b.hash, b));
+    if (Array.isArray(persisted.allBlocks)) {
+      persisted.allBlocks.forEach((b) => {
+        if (b && b.hash) this.allBlocks.set(b.hash, b);
+      });
+    }
+    this.chain.forEach((b) => {
+      if (b && b.hash) this.allBlocks.set(b.hash, b);
+    });
+
+    // Re-run fork choice in case orphans are longer
+    this.chain = this._selectBestChain();
+    this.networkStats.blockHeight = Math.max(0, this.chain.length - 1);
+    this._recomputeMiningRewards();
 
     return true;
   }

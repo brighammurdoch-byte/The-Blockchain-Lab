@@ -162,8 +162,18 @@ class NetworkVisualization {
   updateTopology(miners, peerAssignments) {
     // Recalculate dimensions in case window resized or SVG was hidden on load
     const svgNode = this.svg.node();
-    this.width = svgNode.clientWidth || svgNode.getBoundingClientRect().width || 800;
-    this.height = svgNode.clientHeight || svgNode.getBoundingClientRect().height || 600;
+    let w = svgNode.clientWidth || svgNode.getBoundingClientRect().width || 0;
+    let h = svgNode.clientHeight || svgNode.getBoundingClientRect().height || 0;
+    // SVG with width="100%" can report 0 before layout — use parent / attributes
+    if (!w || w < 40) {
+      const parent = svgNode.parentElement;
+      w = (parent && parent.clientWidth) || parseFloat(svgNode.getAttribute('width')) || 800;
+    }
+    if (!h || h < 40) {
+      h = parseFloat(svgNode.getAttribute('height')) || 500;
+    }
+    this.width = w;
+    this.height = h;
     this.simulation.force('center', d3.forceCenter(this.width / 2, this.height / 2));
     
     const existingNodes = new Map(this.nodes.map(n => [n.id, n]));

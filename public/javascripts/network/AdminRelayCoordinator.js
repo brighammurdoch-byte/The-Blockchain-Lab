@@ -74,14 +74,18 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
 
   _handlePeerJoined(msg) {
     const role = msg.role || (msg.payload && msg.payload.role) || 'miner';
-    this.participants.set(msg.from, {
-      userId: msg.from,
-      role: role,
-      joinedAt: msg.timestamp
-    });
+    const isProbe = msg.from && String(msg.from).indexOf('probe-') === 0;
 
-    if (this.lab && typeof this.lab.addOrUpdateParticipant === 'function') {
-      this.lab.addOrUpdateParticipant(msg.from, role);
+    if (!isProbe) {
+      this.participants.set(msg.from, {
+        userId: msg.from,
+        role: role,
+        joinedAt: msg.timestamp
+      });
+
+      if (this.lab && typeof this.lab.addOrUpdateParticipant === 'function') {
+        this.lab.addOrUpdateParticipant(msg.from, role);
+      }
     }
 
     // Prefer the new RelayBlockchainState API
@@ -107,12 +111,33 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
     }
 
     if (result.accepted) {
+      const chain = result.chain ||
+        (this.lab && Array.isArray(this.lab.chain) ? this.lab.chain.slice() : null);
+      const participants = (this.lab && this.lab.participants instanceof Map)
+        ? Array.from(this.lab.participants.values())
+        : (this.lab && typeof this.lab.getSanitizedStateForNewPeer === 'function'
+          ? (this.lab.getSanitizedStateForNewPeer().participants || [])
+          : []);
+
       this.net.send('block-accepted', {
         block,
-        minerId: from
+        minerId: from,
+        isFork: !!result.isFork,
+        reorg: !!result.reorg,
+        tipChanged: !!result.tipChanged,
+        newHeight: result.newHeight,
+        chain: chain,
+        participants: participants,
+        networkStats: this.lab && this.lab.networkStats ? { ...this.lab.networkStats } : undefined
       });
     } else {
-      this.net.send('block-rejected', { reason: result.reason || 'Rejected by hub' }, from);
+      // Still send canonical tip so the miner can remine on the real chain
+      const chain = this.lab && Array.isArray(this.lab.chain) ? this.lab.chain.slice() : null;
+      this.net.send('block-rejected', {
+        reason: result.reason || 'Rejected by hub',
+        blockHash: block && block.hash,
+        chain: chain
+      }, from);
     }
   }
 

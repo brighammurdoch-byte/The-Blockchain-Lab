@@ -2,6 +2,7 @@
  * Blockchain Lab Landing Page
  *
  * Creates/joins client-side sessions. Default mode is Admin-hosted WebRTC relay.
+ * Join requires a live instructor hub for the entered code.
  */
 
 $(document).ready(function () {
@@ -11,6 +12,21 @@ $(document).ready(function () {
     } else {
       window.location.href = '/lab/' + page + '/' + code;
     }
+  }
+
+  function showJoinError(message) {
+    var $err = $('#joinError');
+    if (!$err.length) {
+      $('#joinForm').prepend(
+        '<div id="joinError" class="alert alert-danger" style="display:none; margin-bottom:12px;"></div>'
+      );
+      $err = $('#joinError');
+    }
+    $err.text(message).show();
+  }
+
+  function hideJoinError() {
+    $('#joinError').hide().text('');
   }
 
   $('#createSessionBtn').click(function () {
@@ -26,7 +42,6 @@ $(document).ready(function () {
       if (net.userId) {
         localStorage.setItem('adminUserId_' + roomCode, net.userId);
       }
-      // Keep transport alive briefly then navigate — admin page re-inits as hub
       try { net.disconnect(); } catch (e) {}
       go('admin', roomCode);
     }).catch(function (err) {
@@ -38,20 +53,39 @@ $(document).ready(function () {
 
   $('#joinForm').submit(function (e) {
     e.preventDefault();
+    hideJoinError();
 
     const joinCode = $('#joinCode').val().trim().toUpperCase();
     const rawRole = $('#roleSelect').val();
+    const $btn = $('#joinForm button[type="submit"]');
+    const originalText = $btn.text();
 
     let role = rawRole;
     if (rawRole === 'observer') role = 'wallet';
     if (rawRole === 'participant') role = 'miner';
 
-    const targetSession = joinCode;
-    localStorage.setItem('joinCode_' + targetSession, joinCode);
-    localStorage.setItem('userId_' + targetSession, 'user-' + Date.now().toString(36));
-    localStorage.setItem('networkingMode_' + targetSession, 'admin-relay');
+    if (!joinCode) {
+      showJoinError('Enter the session code from your instructor.');
+      return;
+    }
 
-    go(role === 'wallet' ? 'observe' : 'participate', targetSession);
+    if (!window.LabSessionProbe || typeof LabSessionProbe.probeActiveSession !== 'function') {
+      showJoinError('Join checker not loaded. Refresh the page and try again.');
+      return;
+    }
+
+    $btn.prop('disabled', true).text('Checking session…');
+
+    LabSessionProbe.probeActiveSession(joinCode).then(function (code) {
+      localStorage.setItem('joinCode_' + code, code);
+      localStorage.setItem('userId_' + code, 'user-' + Date.now().toString(36));
+      localStorage.setItem('networkingMode_' + code, 'admin-relay');
+      go(role === 'wallet' ? 'observe' : 'participate', code);
+    }).catch(function (err) {
+      console.warn('[Join] probe failed', err);
+      showJoinError(err && err.message ? err.message : 'Invalid or inactive session code.');
+      $btn.prop('disabled', false).text(originalText);
+    });
   });
 
   $('#roleSelect').change(function () {
@@ -79,12 +113,20 @@ $(document).ready(function () {
     }
     if (!code) return;
     $('#joinCode').val(code);
-    var $studentPanel = $('#joinForm').closest('.panel');
+    var $studentPanel = $('#joinForm').closest('.lab-action--student');
     if ($studentPanel.length) {
-      $studentPanel.addClass('panel-success');
-      $studentPanel.find('.panel-heading .panel-title').text('Student — session ' + code);
+      $studentPanel.find('h2').text('Student — ' + code);
     }
     $('html, body').animate({ scrollTop: $('#joinForm').offset().top - 80 }, 300);
     $('#roleSelect').focus();
+  })();
+
+  // Show error passed back from participate/observe gate
+  (function showRedirectedJoinError() {
+    try {
+      var params = new URLSearchParams(window.location.search || '');
+      var msg = params.get('joinError');
+      if (msg) showJoinError(msg);
+    } catch (e) {}
   })();
 });

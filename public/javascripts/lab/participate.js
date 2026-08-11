@@ -44,6 +44,77 @@ function debugWarn(...args) {
   }
 }
 
+/** Restart the mining loop on the current hub tip without flipping isMining off. */
+function remineOnCanonicalTip() {
+  if (!isMining || isColluding) return;
+  if (miningWorker) {
+    try { miningWorker.postMessage({ command: 'stop' }); } catch (e) {}
+    try { miningWorker.terminate(); } catch (e) {}
+    miningWorker = null;
+  }
+  fetchDataAndMine();
+}
+
+/**
+ * Replace local chain with the hub's canonical chain and remine if the tip moved
+ * away from what we were hashing.
+ * @returns {boolean} whether the tip hash changed
+ */
+function applyCanonicalChain(chain, opts) {
+  opts = opts || {};
+  if (!chain || !Array.isArray(chain) || chain.length === 0) return false;
+
+  const oldTip = window.lastRelayedChain && window.lastRelayedChain.length
+    ? window.lastRelayedChain[window.lastRelayedChain.length - 1]
+    : null;
+  const newTip = chain[chain.length - 1];
+  const tipChanged = !oldTip || !newTip || oldTip.hash !== newTip.hash;
+
+  window.lastRelayedChain = chain.slice();
+  chain.forEach(function (b) {
+    if (b && b.hash) seenBlocks.add(b.hash);
+  });
+
+  try {
+    const parts = opts.participants || [];
+    updateParticipantBlockchainView({ chain: window.lastRelayedChain }, parts);
+    updateNetworkBlockchainView(window.lastRelayedChain, [], parts);
+    if (opts.networkStats || parts.length) {
+      updateNetworkStats({
+        networkStats: opts.networkStats || {},
+        participants: parts
+      });
+    }
+    if (parts.length) updateParticipantList({ participants: parts });
+    const me = parts.find(function (p) {
+      return p.address === userId || p.userId === userId;
+    });
+    if (me) {
+      if (me.balance !== undefined) $('#yourBalance').text(me.balance);
+      if (me.blocksMined !== undefined) $('#blocksMined').text(me.blocksMined);
+      else if (me.minedBlocks !== undefined) $('#blocksMined').text(me.minedBlocks);
+    }
+  } catch (e) {
+    console.error('Error applying canonical chain UI', e);
+  }
+
+  if (newTip) {
+    $('#blockchainView').html(
+      '<div class="alert alert-success">Chain tip #' + newTip.index +
+      ' (' + String(newTip.hash).substring(0, 16) + '…) miner=' +
+      (newTip.miner || '?') + '</div>'
+    );
+    $('#blockHeight').text(newTip.index);
+  }
+
+  // Always remine after a hub sync while mining — cancels private optimistic forks
+  if (opts.remine !== false && isMining) {
+    remineOnCanonicalTip();
+  }
+
+  return tipChanged;
+}
+
 // Canonicalize object for consistent hashing (sorted keys)
 function canonicalizeObject(obj) {
   if (Array.isArray(obj)) {
@@ -172,16 +243,24 @@ $(document).ready(function() {
   $('#blockchainView').prepend('<div class="alert alert-info small" id="networkModeNote" style="margin-bottom:8px">Connecting to instructor hub…</div>');
   $('#blockchainView').prepend('<div class="alert alert-warning small" id="connectionStatusNote" style="margin-bottom:8px; display:none;"></div>');
 
-  // If admin state never arrives (WebRTC blocked), seed matching genesis so mining can still start locally
+  // Block invalid / inactive session codes (direct URL protection)
+  if (window.LabSessionProbe && typeof LabSessionProbe.requireActiveSession === 'function') {
+    LabSessionProbe.requireActiveSession(earlyJoinCode).catch(function () {
+      /* redirect handled by probe */
+    });
+  }
+
+  // If hub is slow but session was verified on landing, seed local genesis so mining can continue
   setTimeout(function () {
-    if (!window.lastRelayedChain || window.lastRelayedChain.length === 0) {
-      seedLocalGenesisChain();
-      $('#connectionStatusNote').show().html(
-        'No response from instructor yet. Mining uses a local genesis tip — keep the <strong>admin tab open</strong> on the same lab URL. ' +
-        'On phones, use the QR/share link from the admin page (GitHub Pages), not localhost.'
-      );
-      showToastNotification('Waiting for instructor hub — seeded local genesis so you can mine', 'warning');
-    }
+    if (window.lastRelayedChain && window.lastRelayedChain.length > 0) return;
+    var verified = window.LabSessionProbe && LabSessionProbe.wasRecentlyVerified(earlyJoinCode);
+    if (!verified) return;
+    seedLocalGenesisChain();
+    $('#connectionStatusNote').show().html(
+      'No response from instructor yet. Mining uses a local genesis tip — keep the <strong>admin tab open</strong> on the same lab URL. ' +
+      'On phones, use the QR/share link from the admin page (GitHub Pages), not localhost.'
+    );
+    showToastNotification('Waiting for instructor hub — seeded local genesis so you can mine', 'warning');
   }, 2500);
 
   loadValidatorCode();
@@ -335,18 +414,21 @@ function initClientSideNetworkingForParticipant(mode) {
   net.on('block-gossip', (msg) => {
     const block = (msg.payload && msg.payload.block) || msg.block;
     const minerId = (msg.payload && msg.payload.minerId) || msg.from;
-    if (!block || seenBlocks.has(block.hash)) return;
-    seenBlocks.add(block.hash);
+    const chain = (msg.payload && msg.payload.chain) || msg.chain;
+    if (chain && Array.isArray(chain) && chain.length > 0) {
+      applyCanonicalChain(chain, { remine: true });
+      return;
+    }
+    if (!block) return;
+    if (block.hash) seenBlocks.add(block.hash);
     try { handleGossipBlock(block, minerId || 'peer'); } catch (e) {}
     if (!window.lastRelayedChain) window.lastRelayedChain = [];
-    // Simple longest-chain: append if extends tip
     const tip = window.lastRelayedChain[window.lastRelayedChain.length - 1];
     if (!tip || block.previousHash === tip.hash) {
       window.lastRelayedChain.push(block);
-    } else if (typeof block.index === 'number' && tip && block.index > tip.index) {
-      // Prefer longer reported height for classroom demo
-      window.lastRelayedChain.push(block);
+      remineOnCanonicalTip();
     }
+    // Non-extending gossip without a full chain: ignore (wait for hub)
   });
 
   net.on('hard-fork-proposed', (msg) => {
@@ -373,47 +455,69 @@ function initClientSideNetworkingForParticipant(mode) {
   });
 
   net.on('block-accepted', (msg) => {
-    const { block, minerId } = msg.payload || msg;
-    debugLog('Block accepted via relay from', minerId);
+    const payload = msg.payload || msg;
+    const block = payload.block;
+    const minerId = payload.minerId;
+    debugLog('Block accepted via relay from', minerId, {
+      isFork: payload.isFork,
+      reorg: payload.reorg,
+      tipChanged: payload.tipChanged
+    });
     $('#connectionStatusNote').hide();
 
-    if (block && !seenBlocks.has(block.hash)) {
-      seenBlocks.add(block.hash);
-      try {
-        handleGossipBlock(block, minerId || 'relay-admin');
-      } catch (e) {}
+    if (payload.chain && Array.isArray(payload.chain) && payload.chain.length > 0) {
+      applyCanonicalChain(payload.chain, {
+        participants: payload.participants || [],
+        networkStats: payload.networkStats,
+        remine: true
+      });
+      if (payload.reorg) {
+        showToastNotification('Chain reorg — following longest chain', 'warning');
+      } else if (payload.isFork) {
+        showToastNotification('Your block was an orphan — mining on the winning tip', 'info');
+      }
+      return;
+    }
 
-      // Update local relayed chain reference
+    // Legacy single-block payload
+    if (block) {
+      if (block.hash) seenBlocks.add(block.hash);
+      try { handleGossipBlock(block, minerId || 'relay-admin'); } catch (e) {}
       if (!window.lastRelayedChain) window.lastRelayedChain = [];
       const tip = window.lastRelayedChain[window.lastRelayedChain.length - 1];
-      if (!tip || tip.hash !== block.hash) {
-        if (!tip || block.previousHash === tip.hash) {
-          window.lastRelayedChain.push(block);
-        } else {
-          // Prefer longer tip from hub when possible
-          window.lastRelayedChain.push(block);
-        }
+      if (!tip || tip.hash === block.hash) {
+        /* already at tip */
+      } else if (block.previousHash === tip.hash) {
+        window.lastRelayedChain.push(block);
+        remineOnCanonicalTip();
+      } else {
+        // Stale/orphan without chain snapshot — ask hub for canonical state
+        net.send('request-state', { from: userId });
       }
-
-      // Update view
-      $('#blockchainView').html(`<div class="alert alert-success">New block #${block.index} accepted from relay. Hash: ${block.hash.substring(0,16)}...</div>`);
-
-      // Refresh views with current relayed chain
       try {
-        const chainArr = window.lastRelayedChain || [block];
-        const parts = []; // limited info, but chain update
-        updateParticipantBlockchainView({ chain: chainArr }, parts);
-        updateNetworkBlockchainView(chainArr, [], parts);
-      } catch (e) {
-        console.error('Error refreshing UI on block accepted', e);
-      }
-
-      // No need for full loadBlockchainState in pure relay
+        updateParticipantBlockchainView({ chain: window.lastRelayedChain }, []);
+        updateNetworkBlockchainView(window.lastRelayedChain, [], []);
+      } catch (e) {}
     }
+  });
+
+  net.on('block-rejected', (msg) => {
+    const payload = msg.payload || msg;
+    debugWarn('Block rejected by hub', payload && payload.reason);
+    if (payload && payload.chain && payload.chain.length) {
+      applyCanonicalChain(payload.chain, { remine: true });
+    } else {
+      remineOnCanonicalTip();
+      net.send('request-state', { from: userId });
+    }
+    showToastNotification(payload && payload.reason
+      ? ('Block rejected: ' + payload.reason)
+      : 'Block rejected — remine on hub tip', 'warning');
   });
 
   net.on('initial-state', (msg) => {
     const state = msg.payload || msg;
+    if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
     debugLog('Received initial state from admin relay', state);
     $('#connectionStatusNote').hide();
     $('#networkModeNote').text(
@@ -438,47 +542,22 @@ function initClientSideNetworkingForParticipant(mode) {
 
     // If we received a real chain from the admin hub, feed it into local logic
     if (state.chain && Array.isArray(state.chain) && state.chain.length > 0) {
-      window.lastRelayedChain = state.chain;
+      applyCanonicalChain(state.chain, {
+        participants: state.participants || [],
+        networkStats: state.networkStats,
+        remine: true
+      });
       debugLog('Relayed chain length:', state.chain.length);
 
-      // Fast-forward local view by processing blocks (deduped by handleGossipBlock)
-      state.chain.forEach(block => {
-        if (block && !seenBlocks.has(block.hash)) {
-          seenBlocks.add(block.hash);
-          try {
-            handleGossipBlock(block, 'admin-hub');
-          } catch (e) { /* ignore */ }
-        }
-      });
-
-      // Show progress in client-relay
-      const tip = state.chain[state.chain.length-1];
-      $('#blockchainView').html(`<div class="alert alert-success">Chain synced from admin relay hub. Tip block #${tip.index} (${tip.hash.substring(0,16)}...)</div>`);
-
-      // Populate all UI from relayed state
       try {
-        const chainArr = state.chain || [];
-        const parts = state.participants || [];
         const pend = state.pendingTransactions || [];
-        const nstats = state.networkStats || {};
-
-        updateParticipantBlockchainView({ chain: chainArr }, parts);
-        updateNetworkBlockchainView(chainArr, [], parts);
-        updateParticipantList({ participants: parts });
+        const parts = state.participants || [];
         updatePendingTransactions({ pendingTransactions: pend, participants: parts });
-        updateNetworkStats({ networkStats: nstats, participants: parts });
         if (state.adminSettings) {
           updateDifficultyInfo(state.adminSettings);
         }
-
-        // Update personal stats from participants list in state
         const me = parts.find(p => p.address === userId || p.userId === userId);
-        if (me) {
-          if (me.balance !== undefined) $('#yourBalance').text(me.balance);
-          if (me.minedBlocks !== undefined) $('#blocksMined').text(me.minedBlocks);
-          if (me.hashrate !== undefined && !isMining) $('#yourHashrate').text((me.hashrate || 0) + ' H/s');
-          if (me.name) $('#nodeName').val(me.name);
-        }
+        if (me && me.name) $('#nodeName').val(me.name);
       } catch (e) {
         console.error('Error updating participant UI from initial relayed state', e);
       }
@@ -488,7 +567,12 @@ function initClientSideNetworkingForParticipant(mode) {
   });
 
   net.on('admin-presence', (msg) => {
+    if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
     debugLog('Admin is present via relay:', msg.adminUserId);
+  });
+
+  net.on('peer-hello', (msg) => {
+    if (msg && msg.isAdmin && window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
   });
 
   // Now join (after listeners attached)

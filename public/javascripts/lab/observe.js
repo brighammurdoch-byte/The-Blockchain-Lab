@@ -78,6 +78,14 @@ $(document).ready(function() {
 
   // Always client-relay
   networkMode = localStorage.getItem('networkingMode_' + joinCode) || 'admin-relay';
+
+  // Block invalid / inactive session codes (direct URL protection)
+  if (window.LabSessionProbe && typeof LabSessionProbe.requireActiveSession === 'function') {
+    LabSessionProbe.requireActiveSession(joinCode).catch(function () {
+      /* redirect handled by probe */
+    });
+  }
+
   initClientSideNetworkingForObserver(networkMode);
   
   // Load initial state via client-relay (handled in init)
@@ -174,11 +182,29 @@ function initClientSideNetworkingForObserver(mode) {
 
   net.on('block-accepted', (msg) => {
     const state = msg.payload || msg;
-    if (state.block && !state.chain) {
-      // Single block acceptance — append visually if we have a tip
+    if (state.chain && Array.isArray(state.chain) && state.chain.length > 0) {
+      window._observerChain = state.chain.slice();
+      populateObserverUIFromState({
+        chain: window._observerChain,
+        participants: state.participants || [],
+        networkStats: state.networkStats
+      });
+      return;
+    }
+    if (state.block) {
       if (!window._observerChain) window._observerChain = [];
-      window._observerChain.push(state.block);
-      populateObserverUIFromState({ chain: window._observerChain, participants: state.participants || [] });
+      const tip = window._observerChain[window._observerChain.length - 1];
+      if (!tip || state.block.previousHash === tip.hash) {
+        window._observerChain.push(state.block);
+      } else if (tip.hash !== state.block.hash) {
+        // Orphan without full chain — request sync
+        net.send('request-state', { from: userId });
+        return;
+      }
+      populateObserverUIFromState({
+        chain: window._observerChain,
+        participants: state.participants || []
+      });
     } else {
       populateObserverUIFromState(state);
     }
@@ -194,9 +220,18 @@ function initClientSideNetworkingForObserver(mode) {
 
   net.on('initial-state', (msg) => {
     const state = msg.payload || msg;
+    if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
     if (state.chain) window._observerChain = state.chain.slice();
     debugLog('Received initial state from admin relay for observer', state);
     populateObserverUIFromState(state);
+  });
+
+  net.on('admin-presence', function () {
+    if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
+  });
+
+  net.on('peer-hello', function (msg) {
+    if (msg && msg.isAdmin && window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
   });
 
   const joinCode = localStorage.getItem('joinCode_' + sessionId) || sessionId;
