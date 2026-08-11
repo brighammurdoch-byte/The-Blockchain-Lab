@@ -45,6 +45,20 @@ function debugWarn(...args) {
   }
 }
 
+function applyMyBalanceFromParticipants(participants) {
+  if (!participants || !participants.length || !userId) return;
+  const me = participants.find(function (p) {
+    return p && (p.userId === userId || p.address === userId || p.id === userId);
+  });
+  if (me && me.balance !== undefined && me.balance !== null) {
+    $('#yourBalance').text(me.balance);
+  }
+  if (me) {
+    if (me.blocksMined !== undefined) $('#blocksMined').text(me.blocksMined);
+    else if (me.minedBlocks !== undefined) $('#blocksMined').text(me.minedBlocks);
+  }
+}
+
 /** Restart the mining loop on the current hub tip without flipping isMining off. */
 function remineOnCanonicalTip() {
   if (!isMining || isColluding) return;
@@ -103,6 +117,7 @@ function applyCanonicalChain(chain, opts) {
       if (me.blocksMined !== undefined) $('#blocksMined').text(me.blocksMined);
       else if (me.minedBlocks !== undefined) $('#blocksMined').text(me.minedBlocks);
     }
+    applyMyBalanceFromParticipants(parts);
   } catch (e) {
     console.error('Error applying canonical chain UI', e);
   }
@@ -525,6 +540,7 @@ function initClientSideNetworkingForParticipant(mode) {
       }
       if (payload.participants && payload.participants.length) {
         try { updateParticipantList({ participants: payload.participants }); } catch (e) {}
+        try { applyMyBalanceFromParticipants(payload.participants); } catch (e) {}
       }
       if (payload.networkStats) {
         try {
@@ -579,6 +595,19 @@ function initClientSideNetworkingForParticipant(mode) {
     if (isMining && !isColluding) {
       remineOnCanonicalTip();
     }
+  });
+
+  net.on('participants-roster', (msg) => {
+    const payload = msg.payload || msg;
+    const parts = payload.participants || [];
+    if (!parts.length) return;
+    try { updateParticipantList({ participants: parts }); } catch (e) {}
+    try { applyMyBalanceFromParticipants(parts); } catch (e) {}
+  });
+
+  net.on('participant-updated', (msg) => {
+    // Soft refresh — ask hub for full roster with balances
+    if (net) net.send('request-state', { from: userId });
   });
 
   net.on('initial-state', (msg) => {
@@ -694,17 +723,15 @@ function parseDiffAndDisplay(diffText, oldCode, newCode) {
   $('#codeDiffViewer').show();
 }
 
-// Simple HTML escape function
 function escapeHtml(text) {
-  const map = {
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#039;'
-  };
-  return text.replace(/[&<>"']/g, m => map[m]);
+  return String(text == null ? '' : text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
+
 
 // Switch to validator code tab
 function switchToValidatorCodeTab() {
@@ -922,6 +949,15 @@ executeDoubleSpendAttack(target1, target2, amount);
     }).catch(err => {
       console.error('Could not copy text: ', err);
     });
+  });
+
+  // Fill recipient from participant directory
+  $(document).on('click', '.use-recipient-btn', function () {
+    const addr = $(this).data('address') || $(this).attr('data-address');
+    if (!addr) return;
+    $('#recipientAddress').val(addr);
+    $('#transactionAmount').focus();
+    showToastNotification('Recipient set — enter an amount and send', 'info');
   });
   
   // Hard fork voting handlers
@@ -1545,35 +1581,65 @@ function toggleTransactions(blockIndex) {
 
 
 function updateParticipantList(blockchain) {
-  const participants = blockchain.participants || [];
+  const participants = (blockchain.participants || []).filter(function (p) {
+    const id = p.userId || p.address || p.id || '';
+    return id && String(id).indexOf('probe-') !== 0;
+  }).slice().sort(function (a, b) {
+    const roleRank = function (p) {
+      const r = String(p.role || 'miner').toLowerCase();
+      if (r === 'wallet' || r === 'observer') return 0;
+      if (r === 'miner') return 1;
+      if (r === 'admin' || r === 'hub') return 3;
+      return 2;
+    };
+    const aSelf = (a.userId || a.address) === userId ? 1 : 0;
+    const bSelf = (b.userId || b.address) === userId ? 1 : 0;
+    if (aSelf !== bSelf) return aSelf - bSelf;
+    return roleRank(a) - roleRank(b);
+  });
   let html = '';
-  
+
   participants.forEach(p => {
     const addr = p.userId || p.address || p.id || '';
     const mined = p.blocksMined != null ? p.blocksMined : (p.minedBlocks || 0);
     const bal = p.balance != null ? p.balance : 0;
-    const roleLabel = (p.role === 'wallet' || p.role === 'observer')
+    const role = String(p.role || 'miner').toLowerCase();
+    const roleLabel = (role === 'wallet' || role === 'observer')
       ? '<span class="label label-info">Wallet</span>'
-      : (p.role === 'admin'
+      : (role === 'admin' || role === 'hub'
         ? '<span class="label label-warning">Admin</span>'
         : '<span class="label label-success">Miner</span>');
-    const nameHtml = (p.displayName || p.name)
-      ? `<strong style="display: block; margin-top: 4px;">${p.displayName || p.name}</strong>`
+    const displayName = (p.displayName || p.name || '').trim();
+    const nameHtml = displayName
+      ? `<strong style="display: block; margin-top: 4px;">${escapeHtml(displayName)}</strong>`
       : '';
-    html += `<li class="list-group-item">
-      ${roleLabel}
-      <button class="btn btn-xs btn-default pull-right copy-btn" data-clipboard-text="${addr}" title="Copy Address" style="margin-top: -2px;"><i class="glyphicon glyphicon-copy"></i></button>
+    const isSelf = addr && userId && addr === userId;
+    const selfBadge = isSelf ? ' <span class="label label-default">You</span>' : '';
+    const sendBtn = (!isSelf && addr)
+      ? `<button type="button" class="btn btn-xs btn-primary use-recipient-btn" data-address="${escapeHtml(addr)}" title="Fill send form with this address" style="margin-left: 4px;">Send to</button>`
+      : '';
+    const copyBtn = addr
+      ? `<button type="button" class="btn btn-xs btn-default copy-btn" data-clipboard-text="${escapeHtml(addr)}" title="Copy address">Copy</button>`
+      : '';
+
+    html += `<li class="list-group-item" style="padding: 8px 10px;">
+      <div>${roleLabel}${selfBadge}
+        <span class="pull-right">${copyBtn}${sendBtn}</span>
+      </div>
       ${nameHtml}
-      <div style="margin-top: 4px;"><code style="font-size: 10px; word-break: break-all;">${addr}</code></div>
-      <span class="text-muted small" style="margin-top: 4px; display: inline-block;">${mined} blocks, ${bal} coins</span>
+      <div style="margin-top: 4px; clear: both;">
+        <code class="participant-address" style="font-size: 10px; word-break: break-all; display: block;">${escapeHtml(addr)}</code>
+      </div>
+      <span class="text-muted small" style="margin-top: 4px; display: inline-block;">${mined} blocks · ${bal} coins</span>
     </li>`;
   });
-  
+
   if (participants.length === 0) {
     html = '<li class="list-group-item text-muted"><em>Waiting for miners and wallets...</em></li>';
   }
-  
+
   $('#participantList').html(html);
+  $('#participantDirectory').html(html);
 }
 
 function updatePendingTransactions(blockchain) {

@@ -167,22 +167,49 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     return best;
   }
 
+  /**
+   * Recompute balances from the canonical chain:
+   * mining rewards + all included transfers.
+   */
   _recomputeMiningRewards() {
-    const reward = this.settings.miningRewardCoins || 10;
+    const reward = Number(this.settings.miningRewardCoins) || 10;
     this.participants.forEach((p) => {
       p.blocksMined = 0;
       p.balance = 0;
     });
 
     this.chain.forEach((block) => {
-      if (!block || !block.miner || block.miner === 'genesis') return;
-      const minerId = block.miner;
-      if (!this.participants.has(minerId)) {
-        this.addOrUpdateParticipant(minerId, 'miner');
+      if (!block) return;
+
+      if (block.miner && block.miner !== 'genesis') {
+        const minerId = block.miner;
+        if (!this.participants.has(minerId)) {
+          this.addOrUpdateParticipant(minerId, 'miner');
+        }
+        const miner = this.participants.get(minerId);
+        miner.blocksMined = (miner.blocksMined || 0) + 1;
+        miner.balance = (miner.balance || 0) + reward;
       }
-      const miner = this.participants.get(minerId);
-      miner.blocksMined = (miner.blocksMined || 0) + 1;
-      miner.balance = (miner.balance || 0) + reward;
+
+      const txs = Array.isArray(block.transactions) ? block.transactions : [];
+      txs.forEach((tx) => {
+        if (!tx) return;
+        const from = tx.from;
+        const to = tx.to;
+        const amount = Number(tx.amount);
+        if (!from || !to || !(amount > 0)) return;
+
+        if (!this.participants.has(from)) {
+          this.addOrUpdateParticipant(from, 'wallet');
+        }
+        if (!this.participants.has(to)) {
+          this.addOrUpdateParticipant(to, 'wallet');
+        }
+        const sender = this.participants.get(from);
+        const recipient = this.participants.get(to);
+        sender.balance = (sender.balance || 0) - amount;
+        recipient.balance = (recipient.balance || 0) + amount;
+      });
     });
   }
 

@@ -95,6 +95,14 @@ block content
                 input.form-control#transactionAmount(type="number", min="0.01", step="0.01", placeholder="Amount")
               button.btn.btn-primary.btn-block(type="submit") Send Transaction
 
+        .panel.panel-info
+          .panel-heading
+            h3.panel-title Active Participants
+          .panel-body(style="max-height: 320px; overflow-y: auto; padding: 8px;")
+            p.small.text-muted(style="margin: 0 0 8px;") Click <strong>Send to</strong> to fill the recipient address.
+            ul#participantDirectory.list-group(style="margin-bottom: 0;")
+              li.list-group-item.text-muted Waiting for miners and wallets...
+
       .col-md-9
         // Tabs for different sections
         ul.nav.nav-tabs(role="tablist")
@@ -298,11 +306,11 @@ block content
   script(src="/javascripts/network/P2PAdminRelayTransport.js?v=mobjoin1")
   script(src="/javascripts/network/AdminRelayCoordinator.js?v=mqttslim1")
   script(src="/javascripts/network/Persistence.js?v=fixrelay")
-  script(src="/javascripts/network/RelayBlockchainState.js?v=txfix1")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=bal1")
   script(src="/javascripts/network/NetworkManager.js?v=mqtt1")
   script(src="/javascripts/lab/sessionProbe.js?v=probe22")
   script(src="/javascripts/lab/chainDisplay.js?v=name1")
-  script(src="/javascripts/lab/participate.js?v=txinc1")
+  script(src="/javascripts/lab/participate.js?v=bal1")
   
   script.
     // Do not redeclare sessionId — participate.js already owns that binding.

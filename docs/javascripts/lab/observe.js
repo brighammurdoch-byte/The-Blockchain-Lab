@@ -133,6 +133,14 @@ function setupEventHandlers() {
     });
   });
 
+  $(document).on('click', '.use-recipient-btn', function () {
+    const addr = $(this).data('address') || $(this).attr('data-address');
+    if (!addr) return;
+    $('#recipientAddress').val(addr);
+    $('#transactionAmount').focus();
+    showToastNotification('Recipient set — enter an amount and send', 'info');
+  });
+
   $('#setNodeNameBtn').on('click', function() {
     const nodeName = $('#nodeName').val().trim();
     if (nodeName.length > 50) {
@@ -252,6 +260,17 @@ function initClientSideNetworkingForObserver(mode) {
     }
   });
 
+  net.on('participants-roster', function (msg) {
+    const payload = msg.payload || msg;
+    const parts = payload.participants || [];
+    if (!parts.length) return;
+    populateObserverUIFromState({
+      chain: window._observerChain || [],
+      participants: parts,
+      pendingTransactions: window._observerPending || []
+    });
+  });
+
   const joinCode = localStorage.getItem('joinCode_' + sessionId) || sessionId;
   net.joinRoom(joinCode, userId, 'wallet').then(() => {
     console.log('[ObserveNet] Joined relay room as observer');
@@ -296,18 +315,14 @@ function populateObserverUIFromState(state) {
       updateBlockchainView(chain, orphans, participants);
     }
 
-    if (state.chain && state.chain.length > 0) {
-      const tip = state.chain[state.chain.length-1];
-      // optional: update your balance if observer has one, but for wallet it might
-      if (userId) {
-        const me = participants.find(p => p.address === userId || p.userId === userId);
-        if (me && me.balance !== undefined) {
-          $('#yourBalance').text(me.balance);
-        }
-        const $nodeName = $('#nodeName');
-        if ($nodeName.length && !$nodeName.is(':focus') && me && (me.name || me.displayName)) {
-          $nodeName.val(me.displayName || me.name);
-        }
+    if (userId && participants.length) {
+      const me = participants.find(p => p.address === userId || p.userId === userId);
+      if (me && me.balance !== undefined && me.balance !== null) {
+        $('#yourBalance').text(me.balance);
+      }
+      const $nodeName = $('#nodeName');
+      if ($nodeName.length && !$nodeName.is(':focus') && me && (me.name || me.displayName)) {
+        $nodeName.val(me.displayName || me.name);
       }
     }
   } catch (e) {
@@ -457,34 +472,51 @@ function updateNetworkStats(blockchain) {
 }
 
 function updateParticipantList(blockchain) {
-  const participants = blockchain.participants || [];
+  const participants = (blockchain.participants || []).filter(function (p) {
+    const id = p.userId || p.address || p.id || '';
+    return id && String(id).indexOf('probe-') !== 0;
+  });
   let html = '';
-  
+
   participants.forEach(p => {
     const addr = p.userId || p.address || p.id || '';
     const mined = p.blocksMined != null ? p.blocksMined : (p.minedBlocks || 0);
     const bal = p.balance != null ? p.balance : 0;
-    const roleLabel = (p.role === 'wallet' || p.role === 'observer')
+    const role = String(p.role || 'miner').toLowerCase();
+    const roleLabel = (role === 'wallet' || role === 'observer')
       ? '<span class="label label-info">Wallet</span>'
-      : (p.role === 'admin'
+      : (role === 'admin' || role === 'hub'
         ? '<span class="label label-warning">Admin</span>'
         : '<span class="label label-success">Miner</span>');
-    const nameHtml = (p.displayName || p.name)
-      ? `<strong style="display: block; margin-top: 4px;">${p.displayName || p.name}</strong>`
+    const displayName = (p.displayName || p.name || '').trim();
+    const nameHtml = displayName
+      ? `<strong style="display: block; margin-top: 4px;">${String(displayName).replace(/</g, '&lt;')}</strong>`
       : '';
-    html += `<li style="margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 8px;">
-      ${roleLabel} 
-      <button class="btn btn-xs btn-default pull-right copy-btn" data-clipboard-text="${addr}" title="Copy Address"><i class="glyphicon glyphicon-copy"></i></button>
+    const isSelf = addr && userId && addr === userId;
+    const selfBadge = isSelf ? ' <span class="label label-default">You</span>' : '';
+    const sendBtn = (!isSelf && addr)
+      ? `<button type="button" class="btn btn-xs btn-primary use-recipient-btn" data-address="${addr}" title="Fill send form">Send to</button>`
+      : '';
+    const copyBtn = addr
+      ? `<button type="button" class="btn btn-xs btn-default copy-btn" data-clipboard-text="${addr}" title="Copy address">Copy</button>`
+      : '';
+
+    html += `<li class="list-group-item" style="padding: 8px 10px;">
+      <div>${roleLabel}${selfBadge}
+        <span class="pull-right">${copyBtn}${sendBtn ? ' ' + sendBtn : ''}</span>
+      </div>
       ${nameHtml}
-      <div style="margin-top: 4px;"><code style="font-size: 10px; word-break: break-all;">${addr}</code></div>
-      <br><span class="text-muted small" style="margin-top: 4px; display: inline-block;">${mined} blocks, ${bal} coins</span>
+      <div style="margin-top: 4px; clear: both;">
+        <code style="font-size: 10px; word-break: break-all; display: block;">${addr}</code>
+      </div>
+      <span class="text-muted small">${mined} blocks · ${bal} coins</span>
     </li>`;
   });
-  
+
   if (participants.length === 0) {
-    html = '<li><em class="text-muted">Waiting for miners and wallets...</em></li>';
+    html = '<li class="list-group-item text-muted"><em>Waiting for miners and wallets...</em></li>';
   }
-  
+
   $('#participantList').html(html);
 }
 

@@ -352,7 +352,14 @@ function initClientSideNetworking(mode, roomCode) {
     if (typeof renderClientRelayChain === 'function') {
       renderClientRelayChain(); // refreshes chain + viz + stats too
     }
-    // The coordinator already sent them the current state
+    // Push roster so existing miners/wallets can see the new address immediately
+    if (relayState && net) {
+      try {
+        net.send('participants-roster', {
+          participants: Array.from(relayState.participants.values())
+        });
+      } catch (e) {}
+    }
   });
 
   net.on('admin-settings-updated', (msg) => {
@@ -493,6 +500,9 @@ function initClientSideNetworking(mode, roomCode) {
           userId: uid,
           name: name,
           role: role
+        });
+        net.send('participants-roster', {
+          participants: Array.from(relayState.participants.values())
         });
       } catch (e) {}
     }

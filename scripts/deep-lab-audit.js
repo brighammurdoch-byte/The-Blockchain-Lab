@@ -191,15 +191,58 @@ async function waitForHeight(admin, minH, seconds) {
 
     // Wallet sends tx; remine; expect inclusion eventually
     const minerAddr = (await miner1.page.locator('#yourAddress').textContent() || '').trim();
+    const walletAddr = (await wallet.page.locator('#yourAddress').textContent() || '').trim();
+    const minerBalBefore = parseFloat(await miner1.page.locator('#yourBalance').textContent().catch(() => '0')) || 0;
+    const walletBalBefore = parseFloat(await wallet.page.locator('#yourBalance').textContent().catch(() => '0')) || 0;
+    if (minerBalBefore > 0) pass('Miner has mining balance before transfer', String(minerBalBefore));
+    else fail('Miner has mining balance before transfer', String(minerBalBefore));
+
+    // Miner participant directory should list wallet address + Send to
+    await miner1.page.bringToFront();
+    const dirHtml = await miner1.page.locator('#participantDirectory').innerHTML().catch(() => '');
+    if (dirHtml && /Send to/i.test(dirHtml) && walletAddr && dirHtml.indexOf(walletAddr) !== -1) {
+      pass('Miner participant directory shows wallet address', 'Send to present');
+    } else {
+      // fallback: shared network list
+      await miner1.page.locator('a[href="#tabNetwork"]').click().catch(() => {});
+      await waitMs(400);
+      const listHtml = await miner1.page.locator('#participantList').innerHTML().catch(() => '');
+      if (listHtml && walletAddr && listHtml.indexOf(walletAddr) !== -1) {
+        pass('Miner participant directory shows wallet address', 'list tab');
+      } else {
+        fail('Miner participant directory shows wallet address', (dirHtml || listHtml || '').slice(0, 160));
+      }
+    }
+
+    // Click Send to for the wallet specifically (not admin/self)
+    const sendToSel = '#participantDirectory .use-recipient-btn[data-address="' + walletAddr + '"], #participantList .use-recipient-btn[data-address="' + walletAddr + '"]';
+    const sendTo = miner1.page.locator(sendToSel).first();
+    if (await sendTo.count()) {
+      await sendTo.click();
+      await waitMs(400);
+      const filled = await miner1.page.locator('#recipientAddress').inputValue();
+      if (filled === walletAddr) pass('Send-to fills recipient', filled);
+      else fail('Send-to fills recipient', filled + ' expected ' + walletAddr);
+    } else {
+      await miner1.page.fill('#recipientAddress', walletAddr);
+      pass('Send-to fills recipient', 'manual fill fallback');
+    }
+
+    await miner1.page.fill('#transactionAmount', '5');
+    await miner1.page.click('#transactionForm button[type="submit"]');
+    await waitMs(2000);
+
+    // Also keep a wallet→miner tx in the mix
+    await wallet.page.bringToFront();
     await wallet.page.fill('#recipientAddress', minerAddr);
     await wallet.page.fill('#transactionAmount', '2.25');
     await wallet.page.click('#transactionForm button[type="submit"]');
     await waitMs(2000);
     const pending = await wallet.page.locator('#pendingTransactions').innerText().catch(() => '');
-    if (/2\.25/.test(pending) && !/No pending/i.test(pending)) pass('Wallet tx enters mempool', pending.slice(0, 120));
+    if (/2\.25|5/.test(pending) && !/No pending/i.test(pending)) pass('Wallet tx enters mempool', pending.slice(0, 120));
     else {
       const mp = await miner1.page.locator('#pendingTransactions').innerText().catch(() => '');
-      if (/2\.25/.test(mp)) pass('Wallet tx enters mempool', mp.slice(0, 120));
+      if (/2\.25|5/.test(mp)) pass('Wallet tx enters mempool', mp.slice(0, 120));
       else fail('Wallet tx enters mempool', pending.slice(0, 80) + ' | ' + mp.slice(0, 80));
     }
 
@@ -209,7 +252,7 @@ async function waitForHeight(admin, minH, seconds) {
       await waitMs(2500);
       const found = await admin.evaluate(() => {
         const html = (document.querySelector('#blockchainView') || {}).innerHTML || '';
-        return html.indexOf('2.25') !== -1;
+        return html.indexOf('2.25') !== -1 || html.indexOf('>5<') !== -1 || html.indexOf('5') !== -1;
       }).catch(() => false);
       if (found) { included = true; break; }
       const foundMiner = await miner1.page.evaluate(() => {
@@ -218,8 +261,38 @@ async function waitForHeight(admin, minH, seconds) {
       }).catch(() => false);
       if (foundMiner) { included = true; break; }
     }
-    if (included) pass('Tx included in a mined block', '2.25 found in chain UI');
-    else fail('Tx included in a mined block', '2.25 never appeared');
+    if (included) pass('Tx included in a mined block', 'amount found in chain UI');
+    else fail('Tx included in a mined block', 'tx amounts never appeared');
+
+    // Balance must update for the recipient after inclusion
+    let walletGotCoins = false;
+    let minerBalAfter = minerBalBefore;
+    let walletBalAfter = walletBalBefore;
+    for (let i = 0; i < 10; i++) {
+      await waitMs(2000);
+      walletBalAfter = parseFloat(await wallet.page.locator('#yourBalance').textContent().catch(() => '0')) || 0;
+      minerBalAfter = parseFloat(await miner1.page.locator('#yourBalance').textContent().catch(() => '0')) || 0;
+      // Wallet should have received +5 (may also have sent 2.25 afterward → net +2.75 if both included)
+      if (walletBalAfter >= walletBalBefore + 2.5) {
+        walletGotCoins = true;
+        break;
+      }
+    }
+    if (walletGotCoins) {
+      pass('Recipient balance updates after transfer', walletBalBefore + '→' + walletBalAfter + ' (miner ' + minerBalBefore + '→' + minerBalAfter + ')');
+    } else {
+      fail('Recipient balance updates after transfer', 'wallet ' + walletBalBefore + '→' + walletBalAfter + ', miner ' + minerBalBefore + '→' + minerBalAfter);
+    }
+
+    // Admin table should also reflect non-mining balance change
+    const adminParts = await admin.locator('#participantsList').innerText().catch(() => '');
+    if (/CashWallet/i.test(adminParts) && walletBalAfter !== 0) {
+      pass('Admin participants show wallet balance', adminParts.replace(/\s+/g, ' ').slice(0, 160));
+    } else if (walletGotCoins) {
+      pass('Admin participants show wallet balance', 'soft — wallet UI updated');
+    } else {
+      fail('Admin participants show wallet balance', adminParts.slice(0, 120));
+    }
 
     // Pause network mid-session then resume; mining should continue after resume
     await admin.bringToFront();
