@@ -3,7 +3,7 @@
  * Cross-device (phone QR) requires WebRTC via public trackers — allow a long wait.
  */
 (function (global) {
-  var JOIN_PROBE_MS = 15000;
+  var JOIN_PROBE_MS = 22000;
   var VERIFIED_PREFIX = 'sessionVerified_';
 
   function markVerified(code) {

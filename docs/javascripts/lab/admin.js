@@ -361,12 +361,14 @@ function initClientSideNetworking(mode, roomCode) {
 
   // Re-render our own view when we (or the coordinator) accept a new block
   net.on('block-accepted', (msg) => {
-    if (typeof renderClientRelayChain === 'function') {
-      setTimeout(() => renderClientRelayChain(), 20);
+    if (typeof scheduleRenderClientRelayChain === 'function') {
+      scheduleRenderClientRelayChain();
+    } else if (typeof renderClientRelayChain === 'function') {
+      renderClientRelayChain();
     }
-    // Strong persistence on every accepted block
-    if (relayState && net && net.roomCode) {
-      Persistence.saveAdminState(net.roomCode, relayState.getFullState());
+    // Debounced persistence — full chain writes every block freeze the admin UI
+    if (relayState && net && net.roomCode && typeof schedulePersistAdminState === 'function') {
+      schedulePersistAdminState();
     }
   });
 
@@ -374,7 +376,8 @@ function initClientSideNetworking(mode, roomCode) {
     const payload = msg.payload || msg;
     // Ensure hub state is current (coordinator already added); refresh projector lists
     if (typeof renderClientParticipants === 'function') renderClientParticipants();
-    if (typeof renderClientRelayChain === 'function') renderClientRelayChain();
+    if (typeof scheduleRenderClientRelayChain === 'function') scheduleRenderClientRelayChain();
+    else if (typeof renderClientRelayChain === 'function') renderClientRelayChain();
     const n = (payload && payload.pendingTransactions && payload.pendingTransactions.length) ||
       (relayState && relayState.pendingTransactions && relayState.pendingTransactions.length) || 0;
     showToastNotification('Transaction in mempool (' + n + ' pending)', 'info');
@@ -863,6 +866,43 @@ function playBlockMinedAnimation() {
 }
 
 // === Render the blockchain from relayState (canonical + competing miner forks) ===
+// Debounce full DOM rebuilds — fast mining otherwise makes admin controls unclickable.
+var _relayRenderTimer = null;
+var _persistAdminTimer = null;
+
+function schedulePersistAdminState() {
+  if (_persistAdminTimer) return;
+  _persistAdminTimer = setTimeout(function () {
+    _persistAdminTimer = null;
+    if (relayState && net && net.roomCode && typeof Persistence !== 'undefined') {
+      try { Persistence.saveAdminState(net.roomCode, relayState.getFullState()); } catch (e) {}
+    }
+  }, 2000);
+}
+
+function scheduleRenderClientRelayChain() {
+  // Keep height/stats snappy even while the heavy chain HTML is throttled
+  if (relayState) {
+    try {
+      const chainLen = (relayState.chain && relayState.chain.length) ? relayState.chain.length : 0;
+      $('#blockHeight').text(relayState.networkStats.blockHeight || Math.max(0, chainLen - 1));
+      $('#participantCount').text(relayState.participants ? relayState.participants.size : 0);
+      if (relayState.networkStats && relayState.networkStats.totalHashrate != null) {
+        $('#totalHashrate').text((relayState.networkStats.totalHashrate || 0).toFixed(0) + ' H/s');
+      }
+      if (relayState.networkStats && relayState.networkStats.lastBlockTime) {
+        const secondsAgo = Math.floor((Date.now() - relayState.networkStats.lastBlockTime) / 1000);
+        $('#lastBlockTime').text(secondsAgo + 's');
+      }
+    } catch (e) {}
+  }
+  if (_relayRenderTimer) return;
+  _relayRenderTimer = setTimeout(function () {
+    _relayRenderTimer = null;
+    renderClientRelayChain();
+  }, 400);
+}
+
 function renderClientRelayChain() {
   if (!relayState || !relayState.chain || relayState.chain.length === 0) {
     $('#blockchainView').html('<p class="text-muted">Waiting for first blocks...</p>');

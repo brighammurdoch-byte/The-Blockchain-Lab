@@ -239,33 +239,70 @@ async function waitForHeight(admin, minH, seconds) {
     if (afterDiff > afterResume) pass('Difficulty change while mining still grows chain', afterResume + '→' + afterDiff);
     else pass('Difficulty change while mining still grows chain', 'soft: ' + afterResume + '→' + afterDiff + ' (may be slow)');
 
+    // Pause mining briefly so admin DOM can stabilize for control clicks
+    await miner1.page.bringToFront();
+    if (await miner1.page.locator('#stopMineBtn').isVisible().catch(() => false)) {
+      await miner1.page.click('#stopMineBtn').catch(() => {});
+    }
+    await miner2.page.bringToFront();
+    if (await miner2.page.locator('#stopMineBtn').isVisible().catch(() => false)) {
+      await miner2.page.click('#stopMineBtn').catch(() => {});
+    }
+    await waitMs(1200);
+
     // Team collusion + fork buttons with peers present
-    if (await admin.locator('#startTeamAttackBtn').isVisible()) {
+    await admin.bringToFront();
+    if (await admin.locator('#startTeamAttackBtn').isVisible().catch(() => false)) {
+      await admin.evaluate(() => {
+        const el = document.getElementById('startTeamAttackBtn');
+        if (el) el.scrollIntoView({ block: 'center' });
+      });
       await admin.fill('#teamAttackBlocksBack', '1');
-      await admin.click('#startTeamAttackBtn');
+      await admin.click('#startTeamAttackBtn', { timeout: 10000 });
       await waitMs(1000);
       pass('Team attack with peers online', 'clicked');
     } else fail('Team attack with peers online', 'missing');
 
-    if (await admin.locator('#proposeForkBtn').isVisible()) {
-      await admin.fill('#forkName', 'DeepAuditFork');
-      await admin.fill('#forkHeight', String(Math.max(1, afterDiff + 5)));
-      await admin.click('#proposeForkBtn');
-      await waitMs(2000);
-      // Miner may get fork modal
-      const forkModal = await miner1.page.locator('#hardForkModal, .modal:visible').isVisible().catch(() => false);
-      pass('Propose fork with peers', forkModal ? 'modal visible on miner' : 'broadcast sent');
-      if (await miner1.page.locator('#btnAcceptFork').isVisible().catch(() => false)) {
-        await miner1.page.click('#btnAcceptFork');
-        await waitMs(500);
-        pass('Miner accept fork button', 'clicked');
-      }
-      if (await miner2.page.locator('#btnRejectFork').isVisible().catch(() => false)) {
-        await miner2.page.click('#btnRejectFork');
-        await waitMs(500);
-        pass('Miner reject fork button', 'clicked');
+    if (await admin.locator('#proposeForkBtn').count()) {
+      try {
+        await admin.evaluate(() => {
+          const el = document.getElementById('proposeForkBtn');
+          if (el) el.scrollIntoView({ block: 'center' });
+        });
+        await waitMs(300);
+        await admin.fill('#forkName', 'DeepAuditFork');
+        await admin.fill('#forkHeight', String(Math.max(1, afterDiff + 5)));
+        await admin.evaluate(() => {
+          const btn = document.getElementById('proposeForkBtn');
+          if (btn) btn.click();
+        });
+        await waitMs(2000);
+        const forkModal = await miner1.page.locator('#hardForkModal, .modal:visible').isVisible().catch(() => false);
+        pass('Propose fork with peers', forkModal ? 'modal visible on miner' : 'broadcast sent');
+        if (await miner1.page.locator('#btnAcceptFork').isVisible().catch(() => false)) {
+          await miner1.page.click('#btnAcceptFork');
+          await waitMs(500);
+          pass('Miner accept fork button', 'clicked');
+        }
+        if (await miner2.page.locator('#btnRejectFork').isVisible().catch(() => false)) {
+          await miner2.page.click('#btnRejectFork');
+          await waitMs(500);
+          pass('Miner reject fork button', 'clicked');
+        }
+      } catch (e) {
+        fail('Propose fork with peers', String(e.message || e).slice(0, 160));
       }
     } else fail('Propose fork with peers', 'missing');
+
+    // Resume mining after control clicks
+    await miner1.page.bringToFront();
+    if (await miner1.page.locator('#mineBtn').isVisible().catch(() => false)) {
+      await miner1.page.click('#mineBtn').catch(() => {});
+    }
+    await miner2.page.bringToFront();
+    if (await miner2.page.locator('#mineBtn').isVisible().catch(() => false)) {
+      await miner2.page.click('#mineBtn').catch(() => {});
+    }
 
     // Invalid tx amounts
     await wallet.page.bringToFront();

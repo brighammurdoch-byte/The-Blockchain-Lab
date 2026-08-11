@@ -465,13 +465,10 @@ async function waitMs(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
     // Demos page filters + start button
     const demos = await context.newPage();
-    await demos.goto(BASE.replace(/\/?$/, '/') + 'demos/' + code, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(async () => {
-      await demos.goto(BASE + '/../demos/' + code, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
-    });
-    // Prefer LabPaths-style URL
-    if (!/demos/i.test(demos.url())) {
-      await demos.goto('http://localhost:3000/lab/demos/' + code, { waitUntil: 'domcontentloaded', timeout: 45000 });
-    }
+    const demosUrl = /github\.io/i.test(BASE)
+      ? BASE.replace(/\/lab\/?$/, '/lab/demos.html')
+      : (BASE.replace(/\/?$/, '/') + 'demos/' + code);
+    await demos.goto(demosUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
     await waitMs(1500);
     await shot(demos, '12-demos');
     for (const [label, fn] of [
@@ -481,11 +478,23 @@ async function waitMs(ms) { return new Promise((r) => setTimeout(r, ms)); }
       ['show all', 'showAllDemos()']
     ]) {
       const clicked = await demos.evaluate((call) => {
-        try { eval(call); return true; } catch (e) { return false; }
+        try {
+          // Prefer globals without eval when possible
+          if (call.indexOf('filterDemos') === 0 && typeof filterDemos === 'function') {
+            filterDemos(call.match(/'([^']+)'/)[1]);
+            return true;
+          }
+          if (call.indexOf('showAllDemos') === 0 && typeof showAllDemos === 'function') {
+            showAllDemos();
+            return true;
+          }
+          eval(call);
+          return true;
+        } catch (e) { return false; }
       }, fn);
       await waitMs(300);
       if (clicked) pass('Demos ' + label, 'ok');
-      else fail('Demos ' + label, 'fn missing');
+      else fail('Demos ' + label, 'fn missing @ ' + demos.url());
     }
     const viewBtn = demos.locator('button:has-text("View"), button:has-text("Demo"), h5[onclick*="viewDemo"]').first();
     if (await viewBtn.count()) {
@@ -499,7 +508,7 @@ async function waitMs(ms) { return new Promise((r) => setTimeout(r, ms)); }
         pass('Demos view interaction', 'no modal start (catalog only)');
       }
     } else {
-      fail('Demos catalog items', 'none clickable');
+      fail('Demos catalog items', 'none clickable @ ' + demos.url());
     }
     await demos.close().catch(() => {});
 
