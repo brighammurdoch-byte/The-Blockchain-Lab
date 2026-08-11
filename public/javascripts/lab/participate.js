@@ -146,7 +146,10 @@ function applyCanonicalChain(chain, opts) {
   }
 
   if (newTip) {
-    $('#blockHeight').text(newTip.index);
+    const h = (newTip.index != null)
+      ? newTip.index
+      : Math.max(0, window.lastRelayedChain.length - 1);
+    $('#blockHeight').text(h);
   }
 
   // Always remine after a hub sync while mining — cancels private optimistic forks
@@ -1753,7 +1756,15 @@ function updatePendingTransactions(blockchain) {
 
 function updateNetworkStats(blockchain) {
   const stats = blockchain.networkStats || {};
-  $('#blockHeight').text(stats.blockHeight || 0);
+  let height = stats.blockHeight;
+  if (height == null && Array.isArray(blockchain.chain) && blockchain.chain.length > 0) {
+    height = Math.max(0, blockchain.chain.length - 1);
+  }
+  if (height == null && window.lastRelayedChain && window.lastRelayedChain.length > 0) {
+    height = Math.max(0, window.lastRelayedChain.length - 1);
+  }
+  if (height == null) height = 0;
+  $('#blockHeight').text(height);
   $('#participantCount').text(blockchain.participants ? blockchain.participants.length : 0);
   $('#totalHashrate').text((stats.totalHashrate || 0).toFixed(0) + ' H/s');
 }

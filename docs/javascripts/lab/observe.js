@@ -197,23 +197,39 @@ function initClientSideNetworkingForObserver(mode) {
         chain: window._observerChain,
         orphans: state.orphans || [],
         participants: state.participants || [],
-        networkStats: state.networkStats
+        pendingTransactions: state.pendingTransactions,
+        networkStats: state.networkStats,
+        newHeight: state.newHeight
       });
       return;
     }
+    // Compact tip-extension (common over MQTT): only the new block is sent
     if (state.block) {
       if (!window._observerChain) window._observerChain = [];
       const tip = window._observerChain[window._observerChain.length - 1];
       if (!tip || state.block.previousHash === tip.hash) {
         window._observerChain.push(state.block);
-      } else if (tip.hash !== state.block.hash) {
+      } else if (tip.hash === state.block.hash) {
+        // Already at tip (duplicate delivery)
+      } else {
         // Orphan without full chain — request sync
         net.send('request-state', { from: userId });
         return;
       }
+      const derivedHeight = (state.newHeight != null)
+        ? state.newHeight
+        : Math.max(0, window._observerChain.length - 1);
+      const stats = Object.assign({}, state.networkStats || {}, {
+        blockHeight: (state.networkStats && state.networkStats.blockHeight != null)
+          ? state.networkStats.blockHeight
+          : derivedHeight
+      });
       populateObserverUIFromState({
         chain: window._observerChain,
-        participants: state.participants || []
+        participants: state.participants || [],
+        pendingTransactions: state.pendingTransactions,
+        networkStats: stats,
+        newHeight: derivedHeight
       });
     } else {
       populateObserverUIFromState(state);
@@ -224,8 +240,20 @@ function initClientSideNetworkingForObserver(mode) {
     const block = (msg.payload && msg.payload.block) || msg.block;
     if (!block) return;
     if (!window._observerChain) window._observerChain = [];
-    window._observerChain.push(block);
-    populateObserverUIFromState({ chain: window._observerChain.slice() });
+    const tip = window._observerChain[window._observerChain.length - 1];
+    if (tip && tip.hash === block.hash) {
+      /* already have it */
+    } else if (!tip || block.previousHash === tip.hash) {
+      window._observerChain.push(block);
+    } else {
+      net.send('request-state', { from: userId });
+      return;
+    }
+    populateObserverUIFromState({
+      chain: window._observerChain.slice(),
+      networkStats: { blockHeight: Math.max(0, window._observerChain.length - 1) },
+      newHeight: Math.max(0, window._observerChain.length - 1)
+    });
   });
 
   net.on('initial-state', (msg) => {
@@ -315,8 +343,23 @@ function populateObserverUIFromState(state) {
       updateAdminSettings(state.adminSettings);
     }
 
+    // Prefer hub networkStats, then newHeight, then derive from local chain length.
+    // Compact MQTT block-accepted often omits full chain but still carries newHeight.
+    const derivedHeight = Math.max(0, chain.length > 0 ? chain.length - 1 : 0);
+    const stats = Object.assign({}, state.networkStats || {});
+    if (stats.blockHeight == null) {
+      if (state.newHeight != null) stats.blockHeight = state.newHeight;
+      else if (chain.length > 0) stats.blockHeight = derivedHeight;
+    }
+
     if (typeof updateNetworkStats === 'function') {
-      updateNetworkStats({ networkStats: state.networkStats || {}, participants: participants });
+      updateNetworkStats({
+        networkStats: stats,
+        participants: participants,
+        chain: chain
+      });
+    } else if (stats.blockHeight != null) {
+      $('#blockHeight').text(stats.blockHeight);
     }
 
     if (typeof updateParticipantList === 'function') {
@@ -480,10 +523,15 @@ function toggleTransactions(blockIndex) {
 
 function updateNetworkStats(blockchain) {
   const stats = blockchain.networkStats || {};
-  $('#blockHeight').text(stats.blockHeight || 0);
+  let height = stats.blockHeight;
+  if (height == null && Array.isArray(blockchain.chain) && blockchain.chain.length > 0) {
+    height = Math.max(0, blockchain.chain.length - 1);
+  }
+  if (height == null) height = 0;
+  $('#blockHeight').text(height);
   $('#participantCount').text(blockchain.participants ? blockchain.participants.length : 0);
   $('#totalHashrate').text((stats.totalHashrate || 0).toFixed(0) + ' H/s');
-  
+
   if (stats.lastBlockTime) {
     const secondsAgo = Math.floor((Date.now() - stats.lastBlockTime) / 1000);
     $('#lastBlockTime').text(secondsAgo + 's ago');
