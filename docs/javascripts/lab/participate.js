@@ -83,6 +83,49 @@ function scheduleRemineForMempool() {
   }, 350);
 }
 
+function txKey(tx) {
+  if (!tx) return '';
+  if (tx.id) return String(tx.id);
+  return String(tx.from || '') + ':' + String(tx.to || '') + ':' + String(tx.timestamp || '');
+}
+
+/** Keys of transfers already present on a chain (or a single block). */
+function confirmedTxKeysFromChain(chainOrBlocks) {
+  const ids = new Set();
+  const blocks = Array.isArray(chainOrBlocks) ? chainOrBlocks : [];
+  blocks.forEach(function (b) {
+    const txs = (b && Array.isArray(b.transactions)) ? b.transactions : [];
+    txs.forEach(function (t) {
+      const k = txKey(t);
+      if (k) ids.add(k);
+    });
+  });
+  return ids;
+}
+
+/**
+ * Drop confirmed transfers from the local mempool mirror.
+ * Always re-filter against the local chain so a stale hub pending list can't resurrect them.
+ */
+function pruneLocalMempool(extraBlocks) {
+  const confirmed = confirmedTxKeysFromChain(window.lastRelayedChain || []);
+  if (extraBlocks) {
+    confirmedTxKeysFromChain(Array.isArray(extraBlocks) ? extraBlocks : [extraBlocks])
+      .forEach(function (k) { confirmed.add(k); });
+  }
+  if (!confirmed.size) return confirmed;
+  localPendingTxs = localPendingTxs.filter(function (t) {
+    return !confirmed.has(txKey(t));
+  });
+  return confirmed;
+}
+
+/** Mempool slice safe to mine — never re-include confirmed transfers. */
+function mempoolForNextBlock() {
+  pruneLocalMempool();
+  return localPendingTxs.slice(0, 20);
+}
+
 function pushOptimisticTip(block) {
   if (!block || !block.hash) return;
   if (!window.lastRelayedChain) window.lastRelayedChain = [];
@@ -120,11 +163,13 @@ function applyCanonicalChain(chain, opts) {
     updateNetworkBlockchainView(window.lastRelayedChain, orphans, parts);
     if (opts.pendingTransactions) {
       localPendingTxs = opts.pendingTransactions.slice();
-      updatePendingTransactions({
-        pendingTransactions: localPendingTxs,
-        participants: parts
-      });
     }
+    // Strip anything already on the new chain (hub list can lag under MQTT races)
+    pruneLocalMempool();
+    updatePendingTransactions({
+      pendingTransactions: localPendingTxs,
+      participants: parts
+    });
     if (opts.networkStats || parts.length) {
       updateNetworkStats({
         networkStats: opts.networkStats || {},
@@ -153,6 +198,7 @@ function applyCanonicalChain(chain, opts) {
   }
 
   // Always remine after a hub sync while mining — cancels private optimistic forks
+  // (mempool already pruned so the next template cannot re-include confirmed txs)
   if (opts.remine !== false && isMining) {
     remineOnCanonicalTip();
   }
@@ -541,25 +587,36 @@ function initClientSideNetworkingForParticipant(mode) {
       if (block.hash) seenBlocks.add(block.hash);
       try { handleGossipBlock(block, minerId || 'relay-admin'); } catch (e) {}
       if (!window.lastRelayedChain) window.lastRelayedChain = [];
+
+      // 1) Refresh mempool FIRST (before remine) so the next template is clean
+      if (Array.isArray(payload.pendingTransactions)) {
+        localPendingTxs = payload.pendingTransactions.slice();
+      }
+      // Always strip txs from this accepted block + local chain — hub pending can lag
+      pruneLocalMempool(block);
+      try {
+        updatePendingTransactions({
+          pendingTransactions: localPendingTxs,
+          participants: payload.participants || []
+        });
+      } catch (e) {}
+
+      // 2) Extend tip, then remine on the updated mempool
+      let shouldRemine = false;
       const tip = window.lastRelayedChain[window.lastRelayedChain.length - 1];
       if (!tip || tip.hash === block.hash) {
-        /* already at tip */
+        shouldRemine = isMining; // still remine so in-flight template drops confirmed txs
       } else if (block.previousHash === tip.hash) {
         window.lastRelayedChain.push(block);
-        remineOnCanonicalTip();
+        shouldRemine = isMining;
       } else {
         // Stale/orphan without chain snapshot — ask hub for canonical state
         net.send('request-state', { from: userId });
       }
-      if (Array.isArray(payload.pendingTransactions)) {
-        localPendingTxs = payload.pendingTransactions.slice();
-        try {
-          updatePendingTransactions({
-            pendingTransactions: localPendingTxs,
-            participants: payload.participants || []
-          });
-        } catch (e) {}
+      if (shouldRemine) {
+        remineOnCanonicalTip();
       }
+
       if (payload.participants && payload.participants.length) {
         try { updateParticipantList({ participants: payload.participants }); } catch (e) {}
         try { applyMyBalanceFromParticipants(payload.participants); } catch (e) {}
@@ -1133,7 +1190,7 @@ function fetchDataAndMine() {
       timestamp: Date.now(),
       nonce: 0,
       previousHash: tipBlock.hash,
-      transactions: localPendingTxs.slice(0, 20),
+      transactions: mempoolForNextBlock(),
       miner: userId,
       difficulty: getMiningDifficulty(),
       hash: '',
@@ -1249,17 +1306,7 @@ function mineBlock(block, adminSettings) {
 
         // Drop included txs from local mempool BEFORE starting the next block,
         // otherwise the same transfer can be mined twice under load.
-        if (Array.isArray(minedBlock.transactions) && minedBlock.transactions.length) {
-          const included = new Set(
-            minedBlock.transactions.map(function (t) {
-              return t.id || (String(t.from) + ':' + String(t.to) + ':' + String(t.timestamp));
-            })
-          );
-          localPendingTxs = localPendingTxs.filter(function (t) {
-            const key = t.id || (String(t.from) + ':' + String(t.to) + ':' + String(t.timestamp));
-            return !included.has(key);
-          });
-        }
+        pruneLocalMempool(minedBlock);
 
         submitMinedBlock(minedBlock, startTime, totalIterations);
         
@@ -1268,7 +1315,7 @@ function mineBlock(block, adminSettings) {
         block.previousHash = block.hash;
         block.nonce = 0;
         block.hash = '';
-        block.transactions = localPendingTxs.slice(0, 20);
+        block.transactions = mempoolForNextBlock();
         block.timestamp = Date.now();
         block.forkId = myForkChoice;
         nonce = 0;

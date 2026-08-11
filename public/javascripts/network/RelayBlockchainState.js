@@ -168,6 +168,26 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     return best;
   }
 
+  /** Stable id for a transfer (used for mempool + double-include checks). */
+  _txKey(tx) {
+    if (!tx) return '';
+    if (tx.id) return String(tx.id);
+    return String(tx.from || '') + ':' + String(tx.to || '') + ':' + String(tx.timestamp || '');
+  }
+
+  /** All transaction keys already present on the current canonical chain. */
+  _confirmedTxIds() {
+    const ids = new Set();
+    (this.chain || []).forEach((block) => {
+      const txs = (block && Array.isArray(block.transactions)) ? block.transactions : [];
+      txs.forEach((tx) => {
+        const k = this._txKey(tx);
+        if (k) ids.add(k);
+      });
+    });
+    return ids;
+  }
+
   /**
    * Recompute balances from the canonical chain:
    * mining rewards + all included transfers.
@@ -260,6 +280,33 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
     this.ensureGenesis();
 
+    // Reject blocks that re-include transfers already on the canonical chain.
+    // (Common race: two miners both hash the same mempool snapshot.)
+    const confirmed = this._confirmedTxIds();
+    const blockTxs = Array.isArray(block.transactions) ? block.transactions : [];
+    const seenInBlock = new Set();
+    for (let i = 0; i < blockTxs.length; i++) {
+      const k = this._txKey(blockTxs[i]);
+      if (!k) continue;
+      if (confirmed.has(k)) {
+        return {
+          accepted: false,
+          reason: 'Duplicate transaction already on chain',
+          chain: this.chain.slice(),
+          newHeight: Math.max(0, this.chain.length - 1)
+        };
+      }
+      if (seenInBlock.has(k)) {
+        return {
+          accepted: false,
+          reason: 'Duplicate transaction within block',
+          chain: this.chain.slice(),
+          newHeight: Math.max(0, this.chain.length - 1)
+        };
+      }
+      seenInBlock.add(k);
+    }
+
     const oldTip = this.chain[this.chain.length - 1] || null;
 
     if (!this.allBlocks.has(block.previousHash) && block.previousHash !== '0') {
@@ -292,9 +339,14 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
     this._recomputeMiningRewards();
 
-    // Drop included mempool txs when this block lands on the canonical chain
-    if (onBest && typeof this.clearIncludedTransactions === 'function') {
-      this.clearIncludedTransactions(block);
+    // Drop confirmed mempool txs whenever the canonical tip moves
+    if (onBest) {
+      if (typeof this.clearIncludedTransactions === 'function') {
+        this.clearIncludedTransactions(block);
+      }
+      if (typeof this.purgeConfirmedFromMempool === 'function') {
+        this.purgeConfirmedFromMempool();
+      }
     }
 
     return {
@@ -319,8 +371,12 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     if (!normalized.from || !normalized.to || !(normalized.amount > 0)) {
       return { accepted: false, reason: 'Invalid transaction' };
     }
-    // Dedupe
-    if (this.pendingTransactions.some((t) => t.id === normalized.id)) {
+    // Already confirmed on chain — never re-enter mempool
+    if (this._confirmedTxIds().has(String(normalized.id))) {
+      return { accepted: false, reason: 'Transaction already confirmed' };
+    }
+    // Dedupe in mempool
+    if (this.pendingTransactions.some((t) => this._txKey(t) === String(normalized.id))) {
       return { accepted: true, duplicate: true };
     }
     this.pendingTransactions.push(normalized);
@@ -334,14 +390,16 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       return;
     }
     const keys = new Set(
-      block.transactions.map((t) =>
-        (t.id) || (String(t.from) + ':' + String(t.to) + ':' + String(t.timestamp))
-      )
+      block.transactions.map((t) => this._txKey(t)).filter(Boolean)
     );
-    this.pendingTransactions = this.pendingTransactions.filter((t) => {
-      const key = t.id || (String(t.from) + ':' + String(t.to) + ':' + String(t.timestamp));
-      return !keys.has(key);
-    });
+    this.pendingTransactions = this.pendingTransactions.filter((t) => !keys.has(this._txKey(t)));
+  }
+
+  /** Drop any mempool entry that already appears anywhere on the canonical chain. */
+  purgeConfirmedFromMempool() {
+    const confirmed = this._confirmedTxIds();
+    if (!confirmed.size) return;
+    this.pendingTransactions = this.pendingTransactions.filter((t) => !confirmed.has(this._txKey(t)));
   }
 
   // What we send to a newly joined peer

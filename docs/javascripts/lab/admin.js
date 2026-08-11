@@ -264,6 +264,7 @@ function initClientSideNetworking(mode, roomCode) {
   // === Real blockchain state for this admin-relay room ===
   if (window.RelayBlockchainState) {
     relayState = new RelayBlockchainState(roomCode);
+    window.relayState = relayState; // projector + audits
     relayState.ensureGenesis();
 
     // Try to restore previous session (admin refresh survival)
