@@ -213,6 +213,25 @@ block content
 
         .panel.panel-default
           .panel-heading
+            h3.panel-title.pull-left Mempool
+              |  
+              span.label.label-default#mempoolCountBadge 0
+            .clearfix
+          .panel-body(style="max-height: 260px; overflow-y: auto;")
+            p.small.text-muted(style="margin-top:0;") Pending transactions waiting for the next block. All roles see this same mempool.
+            table.table.table-striped.table-hover(style="margin-bottom:0;")
+              thead
+                tr
+                  th From
+                  th To
+                  th Amount
+                  th Time
+              tbody#pendingTransactions
+                tr
+                  td(colspan="4").text-center.text-muted No pending transactions
+
+        .panel.panel-default
+          .panel-heading
             h3.panel-title.pull-left Blockchain
             .clearfix
           .panel-body(style="max-height: 600px; overflow-y: auto;")
@@ -244,10 +263,10 @@ block content
   script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=fixrelay")
   script(src="/javascripts/network/MqttAdminRelayTransport.js?v=mqtt1")
   script(src="/javascripts/network/P2PAdminRelayTransport.js?v=mobjoin1")
-  script(src="/javascripts/network/AdminRelayCoordinator.js?v=mqttslim1")
+  script(src="/javascripts/network/AdminRelayCoordinator.js?v=mempool1")
   script(src="/javascripts/network/Persistence.js?v=fixrelay")
   script(src="/javascripts/network/RelayBlockchainState.js?v=adminwallet1")
   script(src="/javascripts/network/NetworkManager.js?v=mqtt1")
   script(src="/javascripts/lab/chainDisplay.js?v=name1")
   script(src="/javascripts/lab/networkVisualization.js?v=topoanim1")
-  script(src="/javascripts/lab/admin.js?v=adminwallet1")
+  script(src="/javascripts/lab/admin.js?v=mempool1")

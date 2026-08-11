@@ -445,8 +445,21 @@ function initClientSideNetworking(mode, roomCode) {
     if (typeof renderClientParticipants === 'function') renderClientParticipants();
     if (typeof scheduleRenderClientRelayChain === 'function') scheduleRenderClientRelayChain();
     else if (typeof renderClientRelayChain === 'function') renderClientRelayChain();
-    const n = (payload && payload.pendingTransactions && payload.pendingTransactions.length) ||
-      (relayState && relayState.pendingTransactions && relayState.pendingTransactions.length) || 0;
+
+    const pending = (payload && Array.isArray(payload.pendingTransactions))
+      ? payload.pendingTransactions
+      : (relayState && Array.isArray(relayState.pendingTransactions)
+        ? relayState.pendingTransactions
+        : []);
+    if (typeof updatePendingTransactions === 'function') {
+      updatePendingTransactions({
+        pendingTransactions: pending,
+        participants: relayState
+          ? Array.from(relayState.participants.values())
+          : []
+      });
+    }
+    const n = pending.length;
     showToastNotification('Transaction in mempool (' + n + ' pending)', 'info');
   });
 
@@ -1075,6 +1088,16 @@ function renderClientRelayChain() {
   // Update participants table from relay state
   renderClientParticipants();
 
+  // Shared mempool (pending txs) — visible on admin projector
+  if (typeof updatePendingTransactions === 'function') {
+    updatePendingTransactions({
+      pendingTransactions: Array.isArray(relayState.pendingTransactions)
+        ? relayState.pendingTransactions
+        : [],
+      participants: participants
+    });
+  }
+
   // Feed live data to network visualization
   const viz = window.networkViz || networkViz;
   if (viz && typeof viz.updateTopology === 'function') {
@@ -1126,6 +1149,41 @@ function renderClientRelayChain() {
     } catch (e) {
       console.warn('[Viz] updateTopology non-fatal:', e && e.message);
     }
+  }
+}
+
+/** Render the shared mempool table (pending transactions). */
+function updatePendingTransactions(blockchain) {
+  const transactions = (blockchain && blockchain.pendingTransactions) || [];
+  const participants = (blockchain && blockchain.participants) ||
+    (relayState ? Array.from(relayState.participants.values()) : []);
+  const CD = window.ChainDisplay;
+  const nameLookup = CD ? CD.buildParticipantNameLookup(participants) : {};
+  const fmtAddr = (addr) => (CD
+    ? CD.formatChainParticipantHtml(addr, nameLookup)
+    : `<code style="font-size:11px;word-break:break-all;">${addr || ''}</code>`);
+
+  let html = '';
+  transactions.forEach((tx) => {
+    html += `
+      <tr>
+        <td>${fmtAddr(tx.from)}</td>
+        <td>${fmtAddr(tx.to)}</td>
+        <td><strong>${tx.amount}</strong></td>
+        <td>${tx.timestamp ? new Date(tx.timestamp).toLocaleTimeString() : '—'}</td>
+      </tr>
+    `;
+  });
+  if (transactions.length === 0) {
+    html = '<tr><td colspan="4" class="text-center text-muted">No pending transactions</td></tr>';
+  }
+  $('#pendingTransactions').html(html);
+  const $badge = $('#mempoolCountBadge');
+  if ($badge.length) {
+    $badge.text(String(transactions.length));
+    $badge
+      .toggleClass('label-default', transactions.length === 0)
+      .toggleClass('label-warning', transactions.length > 0);
   }
 }
 
@@ -1211,6 +1269,12 @@ function submitAdminWalletTransaction() {
 
   // Local projector refresh
   if (typeof renderClientParticipants === 'function') renderClientParticipants();
+  if (typeof updatePendingTransactions === 'function') {
+    updatePendingTransactions({
+      pendingTransactions: pending,
+      participants: participants
+    });
+  }
   if (typeof scheduleRenderClientRelayChain === 'function') scheduleRenderClientRelayChain();
   else if (typeof renderClientRelayChain === 'function') renderClientRelayChain();
   updateAdminWalletUI();

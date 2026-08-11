@@ -616,7 +616,7 @@ function initClientSideNetworkingForParticipant(mode) {
     }
     updatePendingTransactions({
       pendingTransactions: localPendingTxs,
-      participants: []
+      participants: payload.participants || []
     });
     showToastNotification('Transaction added to mempool', 'success');
     // Fold new mempool txs into the next block — debounced to avoid mid-submit races
@@ -1735,23 +1735,30 @@ function updatePendingTransactions(blockchain) {
   const nameLookup = CD ? CD.buildParticipantNameLookup(blockchain.participants || []) : {};
   const fmtAddr = (addr) => (CD ? CD.formatChainParticipantHtml(addr, nameLookup) : `<code>${addr || ''}</code>`);
   let html = '';
-  
+
   transactions.forEach(tx => {
     html += `
       <tr>
         <td>${fmtAddr(tx.from)}</td>
         <td>${fmtAddr(tx.to)}</td>
-        <td>${tx.amount}</td>
-        <td>${new Date(tx.timestamp).toLocaleTimeString()}</td>
+        <td><strong>${tx.amount}</strong></td>
+        <td>${tx.timestamp ? new Date(tx.timestamp).toLocaleTimeString() : '—'}</td>
       </tr>
     `;
   });
-  
+
   if (transactions.length === 0) {
     html = '<tr><td colspan="4" class="text-center text-muted">No pending transactions</td></tr>';
   }
-  
+
   $('#pendingTransactions').html(html);
+  const $badge = $('#mempoolCountBadge');
+  if ($badge.length) {
+    $badge.text(String(transactions.length));
+    $badge
+      .toggleClass('label-default', transactions.length === 0)
+      .toggleClass('label-warning', transactions.length > 0);
+  }
 }
 
 function updateNetworkStats(blockchain) {

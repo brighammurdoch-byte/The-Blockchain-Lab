@@ -175,9 +175,13 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
       const pending = (this.lab && Array.isArray(this.lab.pendingTransactions))
         ? this.lab.pendingTransactions.slice()
         : [];
+      const participants = (this.lab && this.lab.participants instanceof Map)
+        ? Array.from(this.lab.participants.values())
+        : [];
       this.net.send('transaction-accepted', {
         transaction: result.transaction || tx,
-        pendingTransactions: pending
+        pendingTransactions: pending,
+        participants: participants
       });
     }
   }

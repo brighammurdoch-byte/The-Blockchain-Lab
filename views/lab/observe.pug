@@ -126,9 +126,12 @@ block content
 
         .panel.panel-default
           .panel-heading
-            h3.panel-title Pending Transactions
+            h3.panel-title Mempool
+              |  
+              span.label.label-default#mempoolCountBadge 0
           .panel-body(style="max-height: 300px; overflow-y: auto;")
-            table.table.table-striped.table-hover
+            p.small.text-muted(style="margin-top:0;") Pending transactions waiting to be mined into a block.
+            table.table.table-striped.table-hover(style="margin-bottom:0;")
               thead
                 tr
                   th From
@@ -137,7 +140,7 @@ block content
                   th Time
               tbody#pendingTransactions
                 tr
-                  td(colspan="4").text-center No pending transactions
+                  td(colspan="4").text-center.text-muted No pending transactions
 
   script(src="/javascripts/lib/p2pt.bundle.js?v=fixrelay")
   script(src="/javascripts/lib/mqtt.min.js?v=mqtt1")
@@ -151,4 +154,4 @@ block content
   script(src="/javascripts/network/NetworkManager.js?v=mqtt1")
   script(src="/javascripts/lab/sessionProbe.js?v=probe22")
   script(src="/javascripts/lab/chainDisplay.js?v=name1")
-  script(src="/javascripts/lab/observe.js?v=bal2")
+  script(src="/javascripts/lab/observe.js?v=mempool1")
