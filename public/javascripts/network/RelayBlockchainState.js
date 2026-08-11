@@ -217,6 +217,15 @@ if (typeof window.RelayBlockchainState === 'undefined') {
         recipient.balance = (recipient.balance || 0) + amount;
       });
     });
+
+    // Classroom demo: admin hub can carry a starting endowment so the instructor
+    // can fund student wallets without mining first. Applied after chain replay.
+    this.participants.forEach((p) => {
+      const endow = Number(p.endowment) || 0;
+      if (endow > 0) {
+        p.balance = (p.balance || 0) + endow;
+      }
+    });
   }
 
   // Main entry point: a miner submitted a block via the relay

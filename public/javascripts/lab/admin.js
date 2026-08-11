@@ -301,10 +301,29 @@ function initClientSideNetworking(mode, roomCode) {
     };
     relayState.updateSettings(initialSettings);
 
-    // Ensure admin registers itself so lists + viz show the hub from the start (educational)
+    // Ensure admin registers itself so lists + viz show the hub from the start (educational).
+    // Endowment gives the instructor starter coins to fund student wallets without mining.
     if (relayState && typeof relayState.addOrUpdateParticipant === 'function') {
-      relayState.addOrUpdateParticipant(adminUserId, 'admin', { displayName: 'Admin (Hub)', hashrate: 0, status: 'idle' });
+      const existing = relayState.participants.get(adminUserId);
+      const endow = (existing && existing.endowment != null) ? existing.endowment : 100;
+      relayState.addOrUpdateParticipant(adminUserId, 'admin', {
+        displayName: (existing && (existing.displayName || existing.name)) || 'Admin (Hub)',
+        hashrate: 0,
+        status: 'idle',
+        endowment: endow
+      });
+      // Apply endowment into displayed balance (recompute may not run until first block)
+      if (typeof relayState._recomputeMiningRewards === 'function') {
+        relayState._recomputeMiningRewards();
+      } else {
+        const p = relayState.participants.get(adminUserId);
+        if (p && (Number(p.balance) || 0) === 0 && endow > 0) p.balance = endow;
+      }
     }
+
+    // Show address immediately (wallet panel)
+    $('#yourAddress').text(adminUserId);
+    if (typeof updateAdminWalletUI === 'function') updateAdminWalletUI();
 
     // Render immediately now that state exists (at least genesis)
     if (typeof renderClientRelayChain === 'function') {
@@ -633,6 +652,34 @@ function setupEventHandlers() {
     }).catch(err => {
       console.error('Could not copy text: ', err);
     });
+  });
+
+  $('#copyAdminAddressBtn').on('click', function () {
+    const text = ($('#yourAddress').text() || '').trim();
+    if (!text || text === 'Loading...') {
+      showToastNotification('Address not ready yet', 'warning');
+      return;
+    }
+    navigator.clipboard.writeText(text).then(() => {
+      showToastNotification('Admin address copied', 'success');
+    }).catch(() => {
+      showToastNotification('Could not copy address', 'error');
+    });
+  });
+
+  // Click a participant row / Use button to fill recipient
+  $(document).on('click', '.use-recipient-btn', function () {
+    const addr = $(this).data('address') || $(this).attr('data-address');
+    if (!addr) return;
+    $('#recipientAddress').val(addr);
+    $('#transactionAmount').focus();
+    showToastNotification('Recipient set — enter an amount and send', 'info');
+  });
+
+  // Admin wallet: submit a transfer into the hub mempool
+  $('#transactionForm').on('submit', function (e) {
+    e.preventDefault();
+    submitAdminWalletTransaction();
   });
   
   // Clean up legacy 51% attack UI elements and inject Team Collusion Attack panel dynamically
@@ -1082,6 +1129,105 @@ function renderClientRelayChain() {
   }
 }
 
+/** Refresh admin wallet address + confirmed balance from hub state */
+function updateAdminWalletUI() {
+  if (!net || !net.userId) return;
+  $('#yourAddress').text(net.userId);
+  if (!relayState || !relayState.participants) {
+    $('#yourBalance').text('0');
+    return;
+  }
+  const me = relayState.participants.get(net.userId);
+  const bal = me && me.balance != null ? me.balance : 0;
+  $('#yourBalance').text(bal);
+}
+
+/**
+ * Instructor sends coins from the admin hub wallet into the mempool.
+ * Same path as student wallets, but local (no MQTT round-trip to self).
+ */
+function submitAdminWalletTransaction() {
+  if (!net || !net.userId) {
+    showToastNotification('Hub not ready yet', 'error');
+    return;
+  }
+  if (relayState && relayState.networkPaused) {
+    showToastNotification('Network is paused — transactions blocked', 'warning');
+    return;
+  }
+
+  const toUserId = ($('#recipientAddress').val() || '').trim();
+  const amount = parseFloat($('#transactionAmount').val());
+  if (!toUserId || !amount || amount <= 0) {
+    showToastNotification('Enter a valid recipient address and amount', 'error');
+    return;
+  }
+  if (toUserId === net.userId) {
+    showToastNotification('Cannot send to yourself', 'error');
+    return;
+  }
+
+  const me = relayState && relayState.participants
+    ? relayState.participants.get(net.userId)
+    : null;
+  const bal = me && me.balance != null ? Number(me.balance) : 0;
+  if (bal < amount) {
+    showToastNotification('Insufficient balance (' + bal + ' coins available)', 'error');
+    return;
+  }
+
+  const tx = {
+    from: net.userId,
+    to: toUserId,
+    amount: amount,
+    timestamp: Date.now()
+  };
+
+  let result = { accepted: false };
+  if (relayState && typeof relayState.tryAddTransaction === 'function') {
+    result = relayState.tryAddTransaction(tx) || result;
+  }
+  if (!result.accepted) {
+    showToastNotification((result && result.reason) || 'Transaction rejected', 'error');
+    return;
+  }
+  if (result.duplicate) {
+    showToastNotification('Transaction already in mempool', 'info');
+    return;
+  }
+
+  const pending = relayState.pendingTransactions
+    ? relayState.pendingTransactions.slice()
+    : [];
+  const participants = relayState.participants
+    ? Array.from(relayState.participants.values())
+    : [];
+
+  net.send('transaction-accepted', {
+    transaction: result.transaction || tx,
+    pendingTransactions: pending,
+    participants: participants
+  });
+
+  // Local projector refresh
+  if (typeof renderClientParticipants === 'function') renderClientParticipants();
+  if (typeof scheduleRenderClientRelayChain === 'function') scheduleRenderClientRelayChain();
+  else if (typeof renderClientRelayChain === 'function') renderClientRelayChain();
+  updateAdminWalletUI();
+
+  $('#recipientAddress').val('');
+  $('#transactionAmount').val('');
+  showToastNotification('Transaction added to mempool — miners will include it', 'success');
+
+  // Topology animation
+  try {
+    const viz = window.networkViz || networkViz;
+    if (viz && typeof viz.animateTransactionPropagation === 'function') {
+      viz.animateTransactionPropagation(net.userId, result.transaction || tx);
+    }
+  } catch (e) {}
+}
+
 // Render participants list from relayState (client-relay mode)
 function renderClientParticipants() {
   if (!relayState) return;
@@ -1096,17 +1242,23 @@ function renderClientParticipants() {
   if (participants.length === 0) {
     html = '<tr><td colspan="5" class="text-center text-muted">No miners or wallets yet</td></tr>';
   } else {
+    const adminId = net && net.userId ? net.userId : '';
     participants.forEach(p => {
       const roleClass = p.role === 'wallet' ? 'label-info' : (p.role === 'admin' ? 'label-warning' : 'label-success');
       const roleText = p.role === 'wallet' ? 'Wallet' : (p.role === 'admin' ? 'Admin' : 'Miner');
       const mined = p.blocksMined != null ? p.blocksMined : (p.minedBlocks || 0);
       const name = p.displayName || p.name || '';
       const nameHtml = name ? `<strong style="display:block;margin-bottom:2px;">${name}</strong>` : '';
+      const isSelf = adminId && p.userId === adminId;
+      const useBtn = isSelf
+        ? ''
+        : `<button type="button" class="btn btn-xs btn-default use-recipient-btn" data-address="${p.userId}" title="Send coins to this address" style="margin-top:4px;">Send to…</button>`;
       html += `
         <tr>
           <td>
             ${nameHtml}
             <code style="font-size: 11px; word-break: break-all;">${p.userId}</code>
+            ${useBtn}
           </td>
           <td><span class="label ${roleClass}">${roleText}</span></td>
           <td><strong>${mined}</strong></td>
@@ -1118,6 +1270,7 @@ function renderClientParticipants() {
   }
 
   $('#participantsList').html(html);
+  updateAdminWalletUI();
 
   // Keep Node Names table in sync too
   let namesHtml = '';
