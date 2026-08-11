@@ -361,6 +361,33 @@ function initClientSideNetworking(mode, roomCode) {
 
   // Re-render our own view when we (or the coordinator) accept a new block
   net.on('block-accepted', (msg) => {
+    const payload = msg.payload || msg;
+    const block = payload.block;
+    const minerId = payload.minerId || (block && block.miner) || msg.from;
+
+    // Live topology: flash finder + send block packets along edges
+    try {
+      const viz = window.networkViz || networkViz;
+      if (viz && minerId && minerId !== 'genesis') {
+        if (typeof viz.animateBlockMined === 'function') viz.animateBlockMined(minerId);
+        if (relayState && typeof viz.animateBlockPropagation === 'function') {
+          const recipients = Array.from(relayState.participants.keys())
+            .filter(function (id) {
+              return id && id !== minerId && String(id).indexOf('probe-') !== 0;
+            });
+          viz.animateBlockPropagation(minerId, recipients, block || { index: payload.newHeight });
+        }
+        if (relayState && typeof relayState.setParticipantStatus === 'function') {
+          relayState.setParticipantStatus(minerId, 'block-found');
+          setTimeout(function () {
+            const p = relayState.participants.get(minerId);
+            const back = p && p.hashrate > 0 ? 'mining' : 'idle';
+            relayState.setParticipantStatus(minerId, back);
+          }, 1200);
+        }
+      }
+    } catch (e) {}
+
     if (typeof scheduleRenderClientRelayChain === 'function') {
       scheduleRenderClientRelayChain();
     } else if (typeof renderClientRelayChain === 'function') {
@@ -374,6 +401,17 @@ function initClientSideNetworking(mode, roomCode) {
 
   net.on('transaction-accepted', (msg) => {
     const payload = msg.payload || msg;
+    const tx = payload.transaction || payload;
+    const fromId = (tx && tx.from) || msg.from;
+
+    // Animate tx packets along star paths
+    try {
+      const viz = window.networkViz || networkViz;
+      if (viz && fromId && typeof viz.animateTransactionPropagation === 'function') {
+        viz.animateTransactionPropagation(fromId, tx);
+      }
+    } catch (e) {}
+
     // Ensure hub state is current (coordinator already added); refresh projector lists
     if (typeof renderClientParticipants === 'function') renderClientParticipants();
     if (typeof scheduleRenderClientRelayChain === 'function') scheduleRenderClientRelayChain();
@@ -391,6 +429,11 @@ function initClientSideNetworking(mode, roomCode) {
     if (relayState && uid) {
       relayState.updateHashrate(uid, hashrate);
       if (typeof renderClientParticipants === 'function') renderClientParticipants();
+      const viz = window.networkViz || networkViz;
+      const p = relayState.participants.get(uid);
+      if (viz && p && typeof viz.setNodeStatus === 'function') {
+        viz.setNodeStatus(uid, p.status || 'idle');
+      }
     }
   });
   net.on('hashrate-update', (msg) => {
@@ -400,7 +443,26 @@ function initClientSideNetworking(mode, roomCode) {
     if (relayState && uid) {
       relayState.updateHashrate(uid, hashrate);
       if (typeof renderClientParticipants === 'function') renderClientParticipants();
+      const viz = window.networkViz || networkViz;
+      const p = relayState.participants.get(uid);
+      if (viz && p && typeof viz.setNodeStatus === 'function') {
+        viz.setNodeStatus(uid, p.status || 'idle');
+      }
     }
+  });
+
+  // Miner announced which tip they are hashing
+  net.on('mining-on-block', (msg) => {
+    const payload = msg.payload || msg;
+    const uid = payload.minerAddress || payload.userId || msg.from;
+    if (!uid || !relayState) return;
+    relayState.addOrUpdateParticipant(uid, 'miner');
+    relayState.setParticipantStatus(uid, 'mining');
+    const viz = window.networkViz || networkViz;
+    if (viz && typeof viz.setNodeStatus === 'function') {
+      viz.setNodeStatus(uid, 'mining');
+    }
+    if (typeof renderClientParticipants === 'function') renderClientParticipants();
   });
 
   // Student display-name changes → topology + participant lists
@@ -955,10 +1017,16 @@ function renderClientRelayChain() {
           return id && String(id).indexOf('probe-') !== 0;
         });
       const vizMiners = participantsArr.map(function (p) {
+        var st = p.status;
+        if (!st) {
+          if (p.role === 'admin') st = 'idle';
+          else if ((p.hashrate || 0) > 0) st = 'mining';
+          else st = 'idle';
+        }
         return {
           userId: p.userId || p.id,
           name: p.displayName || p.name || String(p.userId || '').substring(0, 8),
-          status: p.status || (p.role === 'admin' ? 'idle' : 'mining'),
+          status: st,
           chainHeight: p.blocksMined || 0,
           hashrate: p.hashrate || 0,
           address: p.userId,
@@ -980,11 +1048,11 @@ function renderClientRelayChain() {
       viz.updateTopology(vizMiners, peerAssignments);
 
       const tip = chain[chain.length - 1];
-      if (tip && tip.miner && tip.miner !== 'genesis' && typeof viz.blockFound === 'function') {
-        // Only pulse when the tip miner changes (avoid constant yellow flash)
-        if (viz._lastTipMiner !== tip.miner) {
-          viz._lastTipMiner = tip.miner;
-          viz.blockFound(tip.miner);
+      if (tip && tip.miner && tip.miner !== 'genesis' && tip.hash) {
+        // Pulse when tip changes (avoid constant yellow flash)
+        if (viz._lastTipHash !== tip.hash) {
+          viz._lastTipHash = tip.hash;
+          if (typeof viz.blockFound === 'function') viz.blockFound(tip.miner);
         }
       }
     } catch (e) {

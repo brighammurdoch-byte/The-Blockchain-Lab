@@ -118,8 +118,19 @@ block content
                   span(style="background: #2196F3; display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px;")
                   | Receiving
                 span.legend-item.ml-3
+                  span(style="background: #26A69A; display: inline-block; width: 12px; height: 12px; transform: rotate(45deg); margin-right: 7px; vertical-align: -1px;")
+                  | Sending / Tx
+                span.legend-item.ml-3
                   span(style="background: #f0f0f0; border: 2px solid #999; display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px;")
-                  | Idle / Offline
+                  | Idle
+              div(style="margin-top: 6px;")
+                strong(style="font-size: 12px;") On the wires
+                span.legend-item.ml-3
+                  span(style="background: #FFC107; display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px; border: 1px solid #F57F17;")
+                  | Block packet
+                span.legend-item.ml-3
+                  span(style="background: #26A69A; display: inline-block; width: 10px; height: 10px; transform: rotate(45deg); margin-right: 7px; vertical-align: -1px; border: 1px solid #004D40;")
+                  | Transaction packet
 
         .panel.panel-default
           .panel-heading
@@ -209,8 +220,8 @@ block content
   script(src="/javascripts/network/P2PAdminRelayTransport.js?v=mobjoin1")
   script(src="/javascripts/network/AdminRelayCoordinator.js?v=mqttslim1")
   script(src="/javascripts/network/Persistence.js?v=fixrelay")
-  script(src="/javascripts/network/RelayBlockchainState.js?v=txfix1")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=topoanim1")
   script(src="/javascripts/network/NetworkManager.js?v=mqtt1")
   script(src="/javascripts/lab/chainDisplay.js?v=name1")
-  script(src="/javascripts/lab/networkVisualization.js?v=topo2")
-  script(src="/javascripts/lab/admin.js?v=uidbounce1")
+  script(src="/javascripts/lab/networkVisualization.js?v=topoanim1")
+  script(src="/javascripts/lab/admin.js?v=topoanim1")

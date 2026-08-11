@@ -369,10 +369,28 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const p = this.participants.get(userId);
     if (p) {
       p.hashrate = hashrate || 0;
+      p.lastActivityAt = Date.now();
+      const role = String(p.role || 'miner').toLowerCase();
+      if (role === 'admin' || role === 'hub') {
+        p.status = 'idle';
+      } else if (role === 'wallet' || role === 'observer') {
+        // Wallets stay idle unless a short-lived viz flash overrides
+        if (p.status !== 'receiving' && p.status !== 'sending') p.status = 'idle';
+      } else {
+        p.status = (p.hashrate > 0) ? 'mining' : 'idle';
+      }
       // Recalculate total
       let total = 0;
       this.participants.forEach(pp => total += (pp.hashrate || 0));
       this.networkStats.totalHashrate = total;
+    }
+  }
+
+  setParticipantStatus(userId, status) {
+    const p = this.participants.get(userId);
+    if (p) {
+      p.status = status || 'idle';
+      p.lastActivityAt = Date.now();
     }
   }
 }

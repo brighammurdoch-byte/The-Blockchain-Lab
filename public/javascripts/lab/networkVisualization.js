@@ -1,6 +1,7 @@
 /**
  * Network Visualization for Blockchain Lab
- * D3.js-based real-time visualization of network topology and block propagation
+ * D3.js-based real-time visualization of network topology,
+ * node status colors, and packet travel (blocks + transactions).
  */
 
 if (typeof window.NetworkVisualization === 'undefined') {
@@ -8,34 +9,84 @@ class NetworkVisualization {
   constructor(svgSelector) {
     this.svgSelector = svgSelector;
     this.svg = d3.select(svgSelector);
-    
-    // Use client dimensions or getBoundingClientRect to support responsive CSS widths
+
     const node = this.svg.node();
     this.width = node.clientWidth || node.getBoundingClientRect().width || 800;
     this.height = node.clientHeight || node.getBoundingClientRect().height || 600;
-    
+
     this.nodes = [];
     this.links = [];
-    this.nodeNames = new Map(); // Maps userId to display name
-    this.nodeData = new Map(); // Maps userId to detailed node data {name, address, chainHeight, hashrate}
+    this.nodeNames = new Map();
+    this.nodeData = new Map();
     this.blockInTransit = null;
-    
-    // Initialize D3 simulation with improved centering
+    this._statusTimers = new Map();
+    this._lastTipMiner = null;
+    this._lastTipHash = null;
+
     this.simulation = d3.forceSimulation()
       .force('link', d3.forceLink().id(d => d.id).distance(120))
       .force('charge', d3.forceManyBody().strength(-500))
       .force('center', d3.forceCenter(this.width / 2, this.height / 2))
       .force('collision', d3.forceCollide().radius(48));
-    
+
     this.setupSVG();
     this.setupTooltip();
+    this._ensurePulseStyles();
   }
-  
-  /**
-   * Setup the tooltip element
-   */
+
+  _ensurePulseStyles() {
+    if (document.getElementById('networkVizPulseStyles')) return;
+    const style = document.createElement('style');
+    style.id = 'networkVizPulseStyles';
+    style.textContent = `
+      @keyframes nv-mining-pulse {
+        0% { opacity: 0.55; stroke-width: 2; }
+        50% { opacity: 0.15; stroke-width: 8; }
+        100% { opacity: 0.55; stroke-width: 2; }
+      }
+      @keyframes nv-found-flash {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.45; }
+      }
+      .nv-pulse-ring.mining {
+        fill: none;
+        stroke: #4CAF50;
+        animation: nv-mining-pulse 1.4s ease-in-out infinite;
+        pointer-events: none;
+      }
+      .nv-pulse-ring.block-found {
+        fill: none;
+        stroke: #FFC107;
+        animation: nv-found-flash 0.45s ease-in-out 3;
+        pointer-events: none;
+      }
+      .nv-pulse-ring.receiving {
+        fill: none;
+        stroke: #2196F3;
+        animation: nv-found-flash 0.4s ease-in-out 2;
+        pointer-events: none;
+      }
+      .nv-pulse-ring.attacking {
+        fill: none;
+        stroke: #F44336;
+        animation: nv-mining-pulse 0.8s ease-in-out infinite;
+        pointer-events: none;
+      }
+      .nv-link-active {
+        stroke: #26A69A !important;
+        stroke-width: 3 !important;
+        opacity: 1 !important;
+      }
+      .nv-link-block {
+        stroke: #FFC107 !important;
+        stroke-width: 3 !important;
+        opacity: 1 !important;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
   setupTooltip() {
-    // Create tooltip div if it doesn't exist
     if (!document.getElementById('networkTooltip')) {
       const tooltip = document.createElement('div');
       tooltip.id = 'networkTooltip';
@@ -55,85 +106,65 @@ class NetworkVisualization {
       document.body.appendChild(tooltip);
     }
   }
-  
-  /**
-   * Store detailed node data for tooltip display
-   */
+
   setNodeData(nodeId, data) {
     this.nodeData.set(nodeId, data);
   }
-  
-  /**
-   * Show detailed node tooltip on hover
-   */
+
   showNodeTooltip(event, nodeId) {
     const tooltip = document.getElementById('networkTooltip');
     const node = this.nodes.find(n => n.id === nodeId);
     const nodeInfo = this.nodeData.get(nodeId);
-    
+
     if (!node) return;
-    
+
     let tooltipHTML = `<strong style="color: #333; font-size: 13px;">${node.displayName || node.label || 'Unnamed Node'}</strong><br/>`;
-    
+
     if (nodeInfo) {
       tooltipHTML += `<small><strong>Role:</strong> ${this._roleLabel(nodeInfo.role || node.role)}</small><br/>`;
       if (nodeInfo.address) {
         tooltipHTML += `<small><strong>Address:</strong> <code style="color: #666; font-size: 10px;">${nodeInfo.address.substring(0, 16)}...</code></small><br/>`;
       }
       if (nodeInfo.chainHeight !== undefined) {
-        tooltipHTML += `<small><strong>Chain Height:</strong> ${nodeInfo.chainHeight}</small><br/>`;
+        tooltipHTML += `<small><strong>Blocks mined:</strong> ${nodeInfo.chainHeight}</small><br/>`;
       }
       if (nodeInfo.hashrate !== undefined) {
-        tooltipHTML += `<small><strong>Hashrate:</strong> ${nodeInfo.hashrate.toFixed(1)} H/s</small><br/>`;
+        tooltipHTML += `<small><strong>Hashrate:</strong> ${Number(nodeInfo.hashrate).toFixed(1)} H/s</small><br/>`;
       }
       if (nodeInfo.forkChoice && nodeInfo.forkChoice !== 'classic') {
         tooltipHTML += `<small><strong>Fork:</strong> <span style="color: #9C27B0;">${nodeInfo.forkChoice.toUpperCase()}</span></small><br/>`;
       }
-      if (nodeInfo.status) {
-        tooltipHTML += `<small><strong>Status:</strong> <span style="color: ${this.getStatusColor(nodeInfo.status)};">${nodeInfo.status}</span></small>`;
-      }
+      const st = node.status || nodeInfo.status || 'idle';
+      tooltipHTML += `<small><strong>Status:</strong> <span style="color: ${this.getStatusColor(st)}; font-weight:600;">${st}</span></small>`;
     } else {
       tooltipHTML += `<small style="color: #999;">ID: ${nodeId.substring(0, 12)}...</small>`;
     }
-    
+
     tooltip.innerHTML = tooltipHTML;
     tooltip.style.display = 'block';
-    
-    // Position tooltip near cursor
-    const x = event.pageX + 10;
-    const y = event.pageY + 10;
-    tooltip.style.left = x + 'px';
-    tooltip.style.top = y + 'px';
+    tooltip.style.left = (event.pageX + 10) + 'px';
+    tooltip.style.top = (event.pageY + 10) + 'px';
   }
-  
-  /**
-   * Hide node tooltip
-   */
+
   hideNodeTooltip() {
     const tooltip = document.getElementById('networkTooltip');
-    if (tooltip) {
-      tooltip.style.display = 'none';
-    }
+    if (tooltip) tooltip.style.display = 'none';
   }
-  
-  /**
-   * Get color for status text
-   */
+
   getStatusColor(status) {
-    switch(status) {
+    switch (status) {
       case 'mining': return '#4CAF50';
       case 'block-found': return '#FFC107';
       case 'receiving': return '#2196F3';
       case 'attacking': return '#F44336';
-      default: return '#999';
+      case 'sending': return '#26A69A';
+      default: return '#9E9E9E';
     }
   }
-  
+
   setupSVG() {
-    // Clear previous content
     this.svg.selectAll('*').remove();
-    
-    // Add arrow markers for directed links
+
     this.svg.append('defs').append('marker')
       .attr('id', 'arrowhead')
       .attr('markerWidth', 10)
@@ -144,28 +175,20 @@ class NetworkVisualization {
       .append('polygon')
       .attr('points', '0 0, 10 3, 0 6')
       .attr('fill', '#999');
-    
-    // Create link layer (drawn first, so it appears behind)
+
     this.linkLayer = this.svg.append('g').attr('class', 'links');
-    
-    // Create node layer
     this.nodeLayer = this.svg.append('g').attr('class', 'nodes');
-    
-    // Create animation layer (for block propagation)
     this.animLayer = this.svg.append('g').attr('class', 'animations');
   }
-  
+
   /**
-   * Update the network topology
-   * @param {Array} miners - Array of miner objects {id, status, chainHeight, name, address, hashrate}
-   * @param {Map} peerAssignments - Map of userId -> [peer userIds]
+   * @param {Array} miners - {userId, status, chainHeight, name, address, hashrate, role}
+   * @param {Map} peerAssignments - userId -> [peer userIds]
    */
   updateTopology(miners, peerAssignments) {
-    // Recalculate dimensions in case window resized or SVG was hidden on load
     const svgNode = this.svg.node();
     let w = svgNode.clientWidth || svgNode.getBoundingClientRect().width || 0;
     let h = svgNode.clientHeight || svgNode.getBoundingClientRect().height || 0;
-    // SVG with width="100%" can report 0 before layout — use parent / attributes
     if (!w || w < 40) {
       const parent = svgNode.parentElement;
       w = (parent && parent.clientWidth) || parseFloat(svgNode.getAttribute('width')) || 800;
@@ -176,32 +199,36 @@ class NetworkVisualization {
     this.width = w;
     this.height = h;
     this.simulation.force('center', d3.forceCenter(this.width / 2, this.height / 2));
-    
+
     const existingNodes = new Map(this.nodes.map(n => [n.id, n]));
     let nodesChanged = false;
 
-    // Update existing nodes and find new ones
     miners.forEach(miner => {
       const role = this._normalizeRole(miner.role);
       const existing = existingNodes.get(miner.userId);
+      const nextStatus = miner.status || 'idle';
       if (existing) {
-        // Update properties but keep the object reference and its x/y
         existing.label = miner.name || miner.userId.substring(0, 8);
         existing.displayName = miner.name || '';
-        existing.status = miner.status || 'idle';
+        // Don't clobber short-lived flash statuses from live animations
+        if (!this._statusTimers.has(miner.userId) ||
+            (nextStatus !== 'idle' && nextStatus !== existing.status)) {
+          if (!this._statusTimers.has(miner.userId)) {
+            existing.status = nextStatus;
+          }
+        }
         existing.chainHeight = miner.chainHeight || 0;
         existing.hashrate = miner.hashrate || 0;
         existing.forkChoice = miner.forkChoice || 'classic';
         existing.isColluding = miner.isColluding || false;
         existing.role = role;
       } else {
-        // This is a new node
         this.nodes.push({
           id: miner.userId,
           label: miner.name || miner.userId.substring(0, 8),
           displayName: miner.name || '',
           idShort: miner.userId.substring(0, 6),
-          status: miner.status || 'idle',
+          status: nextStatus,
           chainHeight: miner.chainHeight || 0,
           hashrate: miner.hashrate || 0,
           forkChoice: miner.forkChoice || 'classic',
@@ -212,15 +239,11 @@ class NetworkVisualization {
       }
     });
 
-    // Find and remove nodes that are no longer present
     const minerIds = new Set(miners.map(m => m.userId));
     const initialNodeCount = this.nodes.length;
     this.nodes = this.nodes.filter(n => minerIds.has(n.id));
-    if (this.nodes.length !== initialNodeCount) {
-      nodesChanged = true;
-    }
+    if (this.nodes.length !== initialNodeCount) nodesChanged = true;
 
-    // Store detailed node data for tooltip
     miners.forEach(miner => {
       this.nodeData.set(miner.userId, {
         name: miner.name || 'Unnamed Node',
@@ -232,19 +255,15 @@ class NetworkVisualization {
         isColluding: miner.isColluding || false,
         role: this._normalizeRole(miner.role)
       });
-      if (miner.name) {
-        this.nodeNames.set(miner.userId, miner.name);
-      }
+      if (miner.name) this.nodeNames.set(miner.userId, miner.name);
     });
-    
-    // Build links from peer assignments (only current peers)
+
     const newLinks = [];
     const linkSet = new Set();
-    
+
     peerAssignments.forEach((peers, userId) => {
       if (peers && Array.isArray(peers)) {
         peers.forEach(peerId => {
-          // Only add if peer node exists
           if (this.nodes.find(n => n.id === peerId)) {
             const key = [userId, peerId].sort().join('->');
             if (!linkSet.has(key)) {
@@ -259,37 +278,27 @@ class NetworkVisualization {
         });
       }
     });
-    
-    // Animate link changes (disappearing old, appearing new)
+
     this.animateLinkChanges(this.links, newLinks);
-    
     this.links = newLinks;
-    
-    // Update simulation
+
     this.simulation.nodes(this.nodes);
     this.simulation.force('link').links(this.links);
-    
-    // Only restart simulation if the number of nodes changed to prevent twitching
+
     if (nodesChanged) {
       this.simulation.alpha(0.3).restart();
     }
     this.render();
   }
-  
-  /**
-   * Animate peer connections appearing and disappearing
-   */
+
   animateLinkChanges(oldLinks, newLinks) {
-    const oldLinkKeys = new Set(oldLinks.map(l => `${l.source.id || l.source}-${l.target.id || l.target}`));
     const newLinkKeys = new Set(newLinks.map(l => `${l.source}-${l.target}`));
-    
-    // Find removed links
+
     oldLinks.forEach(link => {
       const key = `${link.source.id || link.source}-${link.target.id || link.target}`;
       if (!newLinkKeys.has(key)) {
-        // Animate link removal
         d3.select(this.svgSelector)
-          .selectAll('line')
+          .selectAll('line.nv-link')
           .filter(d => {
             const dKey = `${d.source.id || d.source}-${d.target.id || d.target}`;
             return dKey === key;
@@ -301,27 +310,27 @@ class NetworkVisualization {
       }
     });
   }
-  
+
   render() {
-    // Update links
-    const links = this.linkLayer.selectAll('line').data(this.links, d => `${d.source.id || d.source}-${d.target.id || d.target}`);
-    
+    const links = this.linkLayer.selectAll('line.nv-link')
+      .data(this.links, d => `${d.source.id || d.source}-${d.target.id || d.target}`);
+
     links.enter()
       .append('line')
-      .attr('stroke', '#999')
+      .attr('class', 'nv-link')
+      .attr('stroke', '#90A4AE')
       .attr('stroke-width', 1.5)
-      .attr('opacity', 0.6)
+      .attr('opacity', 0.55)
       .merge(links)
       .attr('x1', d => d.source.x)
       .attr('y1', d => d.source.y)
       .attr('x2', d => d.target.x)
       .attr('y2', d => d.target.y);
-    
+
     links.exit().remove();
-    
-    // Update nodes
+
     const nodes = this.nodeLayer.selectAll('g.node').data(this.nodes, d => d.id);
-    
+
     const nodesEnter = nodes.enter()
       .append('g')
       .attr('class', 'node')
@@ -341,8 +350,14 @@ class NetworkVisualization {
           d.fy = null;
         })
       );
-    
-    // Role shape (admin diamond / miner circle / wallet square)
+
+    nodesEnter.append('circle')
+      .attr('class', 'nv-pulse-ring')
+      .attr('r', 28)
+      .attr('cx', 0)
+      .attr('cy', 0)
+      .attr('opacity', 0);
+
     nodesEnter.append('path')
       .attr('class', 'node-shape')
       .style('cursor', 'pointer')
@@ -354,8 +369,7 @@ class NetworkVisualization {
         this.hideNodeTooltip();
         d3.select(event.target).transition().duration(200).attr('transform', 'scale(1)');
       });
-    
-    // Name above the shape
+
     nodesEnter.append('text')
       .attr('text-anchor', 'middle')
       .attr('dy', '-28px')
@@ -364,8 +378,7 @@ class NetworkVisualization {
       .attr('fill', '#1a1a1a')
       .attr('class', 'node-label-name')
       .attr('pointer-events', 'none');
-    
-    // Role + short id below
+
     nodesEnter.append('text')
       .attr('text-anchor', 'middle')
       .attr('dy', '34px')
@@ -373,42 +386,56 @@ class NetworkVisualization {
       .attr('fill', '#555')
       .attr('class', 'node-label-id')
       .attr('pointer-events', 'none');
-    
+
     const allNodes = nodes.merge(nodesEnter);
 
-    allNodes
-      .attr('transform', d => `translate(${d.x || 0},${d.y || 0})`);
+    allNodes.attr('transform', d => `translate(${d.x || 0},${d.y || 0})`);
 
     allNodes.select('.node-shape')
       .attr('d', d => this.getRoleShapePath(d.role))
+      .transition()
+      .duration(280)
       .attr('fill', d => this.getNodeColor(d.status))
       .attr('stroke', d => this.getNodeStroke(d.status))
-      .attr('stroke-width', 2)
-      .attr('opacity', 0.9);
-    
+      .attr('stroke-width', d => (d.status === 'mining' || d.status === 'attacking') ? 3 : 2)
+      .attr('opacity', 0.95);
+
+    allNodes.select('.nv-pulse-ring')
+      .attr('class', d => {
+        const st = d.status || 'idle';
+        if (st === 'mining' || st === 'block-found' || st === 'receiving' || st === 'attacking') {
+          return 'nv-pulse-ring ' + st;
+        }
+        return 'nv-pulse-ring';
+      })
+      .attr('opacity', d => {
+        const st = d.status || 'idle';
+        return (st === 'idle' || st === 'sending') ? 0 : null;
+      });
+
     allNodes.select('.node-label-name')
       .text(d => {
         const name = (d.displayName || d.label || '').trim();
         if (!name) return 'Unnamed';
         return name.length > 16 ? name.substring(0, 14) + '…' : name;
       });
-    
+
     allNodes.select('.node-label-id')
       .text(d => {
         const roleLabel = this._roleLabel(d.role);
         return roleLabel + ' · ' + (d.idShort || String(d.id || '').substring(0, 6));
       });
-    
+
     this.simulation.on('tick', () => {
-      links
+      this.linkLayer.selectAll('line.nv-link')
         .attr('x1', d => d.source.x)
         .attr('y1', d => d.source.y)
         .attr('x2', d => d.target.x)
         .attr('y2', d => d.target.y);
-      
+
       allNodes.attr('transform', d => `translate(${d.x},${d.y})`);
     });
-    
+
     nodes.exit().remove();
   }
 
@@ -426,206 +453,321 @@ class NetworkVisualization {
     return 'Miner';
   }
 
-  /** SVG path centered at 0,0 — diamond / circle / square by role */
   getRoleShapePath(role) {
     const r = this._normalizeRole(role);
     if (r === 'admin') {
-      // Diamond
       return 'M 0,-22 L 22,0 L 0,22 L -22,0 Z';
     }
     if (r === 'wallet') {
-      // Rounded square approximated as square
       return 'M -18,-18 H 18 V 18 H -18 Z';
     }
-    // Miner circle
     const rad = 20;
     return 'M ' + rad + ',0 A ' + rad + ',' + rad + ' 0 1,0 ' + (-rad) + ',0 A ' + rad + ',' + rad + ' 0 1,0 ' + rad + ',0';
   }
-  
+
   getNodeColor(status) {
-    switch(status) {
+    switch (status) {
       case 'mining': return '#4CAF50';
       case 'block-found': return '#FFC107';
       case 'receiving': return '#2196F3';
       case 'attacking': return '#F44336';
+      case 'sending': return '#26A69A';
       default: return '#9E9E9E';
     }
   }
-  
+
   getNodeStroke(status) {
     if (status === 'attacking') return '#FF5252';
-    return '#333';
+    if (status === 'mining') return '#2E7D32';
+    if (status === 'block-found') return '#F9A825';
+    if (status === 'receiving') return '#1565C0';
+    if (status === 'sending') return '#00897B';
+    return '#546E7A';
   }
-  
-  /**
-   * Animate a block being mined
-   * @param {string} minerId - ID of the miner who found the block
-   */
-  animateBlockMined(minerId) {
-    const minerNode = this.nodes.find(n => n.id === minerId);
-    if (!minerNode) return;
-    
-    // Highlight miner in yellow (block found)
-    d3.select(this.svgSelector)
+
+  _nodeSelection(nodeId) {
+    return d3.select(this.svgSelector)
       .selectAll('g.node')
-      .filter(d => d.id === minerId)
-      .select('.node-circle')
+      .filter(d => d.id === nodeId);
+  }
+
+  _paintNode(nodeId, status) {
+    const sel = this._nodeSelection(nodeId);
+    sel.select('.node-shape')
       .transition()
-      .duration(300)
-      .attr('fill', '#FFC107')
-      .on('end', () => {
-        // Reset to mining color
-        d3.select(this.svgSelector)
-          .selectAll('g.node')
-          .filter(d => d.id === minerId)
-          .select('.node-circle')
-          .transition()
-          .duration(300)
-          .attr('fill', '#4CAF50');
-      });
+      .duration(200)
+      .attr('fill', this.getNodeColor(status))
+      .attr('stroke', this.getNodeStroke(status))
+      .attr('stroke-width', (status === 'mining' || status === 'attacking') ? 3 : 2);
+
+    sel.select('.nv-pulse-ring')
+      .attr('class', function () {
+        if (status === 'mining' || status === 'block-found' || status === 'receiving' || status === 'attacking') {
+          return 'nv-pulse-ring ' + status;
+        }
+        return 'nv-pulse-ring';
+      })
+      .attr('opacity', (status === 'idle' || status === 'sending') ? 0 : null);
   }
-  
+
   /**
-   * Animate block propagation from miner to peers
-   * @param {string} minerId - ID of the original miner
-   * @param {Array} recipientIds - IDs of nodes receiving the block
-   * @param {Object} block - The block object
+   * Temporary status flash that auto-reverts to a baseline.
    */
-  animateBlockPropagation(minerId, recipientIds, block) {
-    const minerNode = this.nodes.find(n => n.id === minerId);
-    if (!minerNode) return;
-    
-    // Animate block traveling to each peer
-    recipientIds.forEach((recipientId, index) => {
-      const recipientNode = this.nodes.find(n => n.id === recipientId);
-      if (!recipientNode) return;
-      
-      // Stagger animations slightly
-      setTimeout(() => {
-        this.animateBlockTravel(minerNode, recipientNode, block);
-      }, index * 150);
-    });
+  flashNodeStatus(nodeId, status, ms, revertTo) {
+    const node = this.nodes.find(n => n.id === nodeId);
+    if (!node) return;
+    if (this._statusTimers.has(nodeId)) {
+      clearTimeout(this._statusTimers.get(nodeId));
+    }
+    const baseline = revertTo != null ? revertTo : (node._baselineStatus || node.status || 'idle');
+    node._baselineStatus = baseline;
+    node.status = status;
+    const info = this.nodeData.get(nodeId);
+    if (info) info.status = status;
+    this._paintNode(nodeId, status);
+
+    const t = setTimeout(() => {
+      this._statusTimers.delete(nodeId);
+      const n = this.nodes.find(x => x.id === nodeId);
+      if (!n) return;
+      const back = n._baselineStatus || 'idle';
+      n.status = back;
+      const ni = this.nodeData.get(nodeId);
+      if (ni) ni.status = back;
+      this._paintNode(nodeId, back);
+    }, ms || 900);
+    this._statusTimers.set(nodeId, t);
   }
-  
-  /**
-   * Animate a single block traveling between two nodes
-   */
-  animateBlockTravel(sourceNode, targetNode, block) {
-    const animGroup = this.animLayer.append('g').attr('class', 'block-in-transit');
-    
-    // Create animated block circle
-    const blockCircle = animGroup.append('circle')
-      .attr('r', 8)
-      .attr('fill', '#FFD700')
-      .attr('opacity', 0.8)
-      .attr('cx', sourceNode.x)
-      .attr('cy', sourceNode.y);
-    
-    // Create label showing block hash (shortened)
-    const blockLabel = animGroup.append('text')
-      .attr('text-anchor', 'middle')
-      .attr('dy', '.3em')
-      .attr('font-size', '9px')
-      .attr('fill', '#333')
-      .attr('cx', sourceNode.x)
-      .attr('cy', sourceNode.y)
-      .text(`#${block.index}`);
-    
-    // Animate movement from source to target
-    blockCircle.transition()
-      .duration(800)
-      .attr('cx', targetNode.x)
-      .attr('cy', targetNode.y)
-      .on('end', () => {
-        // Highlight receiving node
-        d3.select(this.svgSelector)
-          .selectAll('g.node')
-          .filter(d => d.id === targetNode.id)
-          .select('.node-circle')
-          .transition()
-          .duration(200)
-          .attr('fill', '#2196F3')
-          .on('end', () => {
-            // Reset color
-            d3.select(this.svgSelector)
-              .selectAll('g.node')
-              .filter(d => d.id === targetNode.id)
-              .select('.node-circle')
-              .transition()
-              .duration(200)
-              .attr('fill', '#4CAF50');
-          });
-        
-        // Remove block animation
-        animGroup.remove();
-      });
-    
-    blockLabel.transition()
-      .duration(800)
-      .attr('x', targetNode.x)
-      .attr('y', targetNode.y)
-      .on('end', () => blockLabel.remove());
+
+  setNodeStatus(nodeId, status) {
+    const node = this.nodes.find(n => n.id === nodeId);
+    if (!node) return;
+    // Don't overwrite an active flash with a weaker idle update mid-animation
+    if (this._statusTimers.has(nodeId) && (status === 'idle' || status === 'mining')) {
+      node._baselineStatus = status;
+      return;
+    }
+    node.status = status;
+    node._baselineStatus = status;
+    const nodeInfo = this.nodeData.get(nodeId);
+    if (nodeInfo) nodeInfo.status = status;
+    this._paintNode(nodeId, status);
   }
-  
-  /**
-   * Update a node's name
-   * @param {string} nodeId - The node ID
-   * @param {string} name - The new display name
-   */
+
   setNodeName(nodeId, name) {
     const node = this.nodes.find(n => n.id === nodeId);
     if (node) {
       node.displayName = name;
       node.label = name;
       this.nodeNames.set(nodeId, name);
-      
-      // Update node data for tooltip
       const nodeInfo = this.nodeData.get(nodeId);
-      if (nodeInfo) {
-        nodeInfo.name = name;
-      }
-      
-      // Update label immediately
-      d3.select(this.svgSelector)
-        .selectAll('g.node')
-        .filter(d => d.id === nodeId)
+      if (nodeInfo) nodeInfo.name = name;
+      this._nodeSelection(nodeId)
         .select('.node-label-name')
         .text(name.length > 15 ? name.substring(0, 12) + '...' : name);
     }
   }
-  
+
+  _findHubId() {
+    const admin = this.nodes.find(n => this._normalizeRole(n.role) === 'admin');
+    return admin ? admin.id : (this.nodes[0] && this.nodes[0].id);
+  }
+
+  _linkKey(a, b) {
+    return [a, b].sort().join('-');
+  }
+
+  _highlightLink(sourceId, targetId, klass, ms) {
+    const key1 = `${sourceId}-${targetId}`;
+    const key2 = `${targetId}-${sourceId}`;
+    const lines = this.linkLayer.selectAll('line.nv-link')
+      .filter(d => {
+        const s = d.source.id || d.source;
+        const t = d.target.id || d.target;
+        return (`${s}-${t}` === key1 || `${s}-${t}` === key2);
+      });
+    lines.classed(klass || 'nv-link-active', true);
+    setTimeout(() => {
+      lines.classed('nv-link-active', false).classed('nv-link-block', false);
+    }, ms || 900);
+  }
+
+  /** Alias used by admin projector */
+  blockFound(minerId) {
+    this.animateBlockMined(minerId);
+  }
+
+  animateBlockMined(minerId) {
+    const minerNode = this.nodes.find(n => n.id === minerId);
+    if (!minerNode) return;
+    const revert = minerNode.hashrate > 0 ? 'mining' : (minerNode._baselineStatus || 'idle');
+    this.flashNodeStatus(minerId, 'block-found', 1200, revert);
+  }
+
+  animateBlockPropagation(minerId, recipientIds, block) {
+    const minerNode = this.nodes.find(n => n.id === minerId);
+    if (!minerNode) return;
+    const ids = (recipientIds || []).filter(id => id && id !== minerId);
+    ids.forEach((recipientId, index) => {
+      const recipientNode = this.nodes.find(n => n.id === recipientId);
+      if (!recipientNode) return;
+      setTimeout(() => {
+        this.animatePacketTravel(minerNode, recipientNode, {
+          kind: 'block',
+          label: block && block.index != null ? '#' + block.index : 'blk',
+          color: '#FFC107',
+          linkClass: 'nv-link-block'
+        });
+      }, index * 120);
+    });
+  }
+
   /**
-   * Set a node's status
-   * @param {string} nodeId - The node ID
-   * @param {string} status - Status: 'idle', 'mining', 'attacking', etc.
+   * Fan-out transaction packets: sender → hub → everyone else (star topology).
    */
-  setNodeStatus(nodeId, status) {
-    const node = this.nodes.find(n => n.id === nodeId);
-    if (node) {
-      node.status = status;
-      
-      // Update node data for tooltip
-      const nodeInfo = this.nodeData.get(nodeId);
-      if (nodeInfo) {
-        nodeInfo.status = status;
-      }
-      
-      // Update visual immediately
-      d3.select(this.svgSelector)
-        .selectAll('g.node')
-        .filter(d => d.id === nodeId)
-        .select('.node-shape')
-        .attr('fill', this.getNodeColor(status));
+  animateTransactionPropagation(fromId, tx) {
+    const fromNode = this.nodes.find(n => n.id === fromId);
+    if (!fromNode) return;
+
+    const amount = tx && tx.amount != null ? tx.amount : '';
+    const label = amount !== '' ? String(amount) : 'tx';
+    const hubId = this._findHubId();
+    const others = this.nodes.map(n => n.id).filter(id => id !== fromId);
+
+    this.flashNodeStatus(fromId, 'sending', 700, fromNode._baselineStatus || fromNode.status || 'idle');
+
+    const runLeg = (srcId, dstId, delay) => {
+      const src = this.nodes.find(n => n.id === srcId);
+      const dst = this.nodes.find(n => n.id === dstId);
+      if (!src || !dst) return;
+      setTimeout(() => {
+        this.animatePacketTravel(src, dst, {
+          kind: 'tx',
+          label: label,
+          color: '#26A69A',
+          linkClass: 'nv-link-active'
+        });
+      }, delay);
+    };
+
+    if (hubId && fromId !== hubId) {
+      runLeg(fromId, hubId, 0);
+      let i = 0;
+      others.forEach(id => {
+        if (id === hubId) return;
+        runLeg(hubId, id, 650 + i * 110);
+        i += 1;
+      });
+    } else {
+      others.forEach((id, i) => runLeg(fromId, id, i * 110));
     }
   }
-  
-  /**
-   * Clear all animations
-   */
+
+  animatePacketTravel(sourceNode, targetNode, opts) {
+    opts = opts || {};
+    const color = opts.color || '#FFD700';
+    const label = opts.label != null ? String(opts.label) : '';
+    const duration = opts.duration || 750;
+    const kind = opts.kind || 'block';
+
+    this._highlightLink(sourceNode.id, targetNode.id, opts.linkClass || 'nv-link-active', duration + 100);
+
+    const animGroup = this.animLayer.append('g').attr('class', 'packet-in-transit');
+
+    let packet;
+    if (kind === 'tx') {
+      // Diamond packet for transactions
+      packet = animGroup.append('path')
+        .attr('d', 'M 0,-7 L 7,0 L 0,7 L -7,0 Z')
+        .attr('fill', color)
+        .attr('stroke', '#004D40')
+        .attr('stroke-width', 1)
+        .attr('opacity', 0.95)
+        .attr('transform', `translate(${sourceNode.x},${sourceNode.y})`);
+    } else {
+      packet = animGroup.append('circle')
+        .attr('r', 8)
+        .attr('fill', color)
+        .attr('stroke', '#F57F17')
+        .attr('stroke-width', 1.5)
+        .attr('opacity', 0.9)
+        .attr('cx', sourceNode.x)
+        .attr('cy', sourceNode.y);
+    }
+
+    const packetLabel = animGroup.append('text')
+      .attr('text-anchor', 'middle')
+      .attr('dy', kind === 'tx' ? -12 : 3)
+      .attr('font-size', '9px')
+      .attr('font-weight', 'bold')
+      .attr('fill', kind === 'tx' ? '#00695C' : '#333')
+      .attr('x', sourceNode.x)
+      .attr('y', sourceNode.y)
+      .text(label);
+
+    const sx = sourceNode.x;
+    const sy = sourceNode.y;
+    const tx = targetNode.x;
+    const ty = targetNode.y;
+
+    if (kind === 'tx') {
+      packet.transition()
+        .duration(duration)
+        .ease(d3.easeCubicInOut)
+        .attrTween('transform', () => {
+          return (t) => {
+            const x = sx + (tx - sx) * t;
+            const y = sy + (ty - sy) * t;
+            return `translate(${x},${y})`;
+          };
+        })
+        .on('end', () => {
+          this.flashNodeStatus(
+            targetNode.id,
+            'receiving',
+            700,
+            targetNode.hashrate > 0 ? 'mining' : (targetNode._baselineStatus || targetNode.status || 'idle')
+          );
+          animGroup.remove();
+        });
+    } else {
+      packet.transition()
+        .duration(duration)
+        .ease(d3.easeCubicInOut)
+        .attr('cx', tx)
+        .attr('cy', ty)
+        .on('end', () => {
+          this.flashNodeStatus(
+            targetNode.id,
+            'receiving',
+            700,
+            targetNode.hashrate > 0 ? 'mining' : (targetNode._baselineStatus || targetNode.status || 'idle')
+          );
+          animGroup.remove();
+        });
+    }
+
+    packetLabel.transition()
+      .duration(duration)
+      .ease(d3.easeCubicInOut)
+      .attr('x', tx)
+      .attr('y', ty);
+  }
+
+  /** Backward-compatible name */
+  animateBlockTravel(sourceNode, targetNode, block) {
+    this.animatePacketTravel(sourceNode, targetNode, {
+      kind: 'block',
+      label: block && block.index != null ? '#' + block.index : 'blk',
+      color: '#FFC107',
+      linkClass: 'nv-link-block'
+    });
+  }
+
   clearAnimations() {
     this.animLayer.selectAll('*').remove();
   }
 }
 
 window.NetworkVisualization = NetworkVisualization;
-} // end guard typeof window.NetworkVisualization
+} // end guard
