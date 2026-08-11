@@ -22,6 +22,7 @@ class NetworkVisualization {
     this._statusTimers = new Map();
     this._lastTipMiner = null;
     this._lastTipHash = null;
+    this.topologyMode = 'star'; // 'star' | 'mesh' — drives layout + packet paths
 
     this.simulation = d3.forceSimulation()
       .force('link', d3.forceLink().id(d => d.id).distance(120))
@@ -184,8 +185,10 @@ class NetworkVisualization {
   /**
    * @param {Array} miners - {userId, status, chainHeight, name, address, hashrate, role}
    * @param {Map} peerAssignments - userId -> [peer userIds]
+   * @param {Object} [opts] - { topologyMode: 'star'|'mesh', forceRelayout: boolean }
    */
-  updateTopology(miners, peerAssignments) {
+  updateTopology(miners, peerAssignments, opts) {
+    opts = opts || {};
     const svgNode = this.svg.node();
     let w = svgNode.clientWidth || svgNode.getBoundingClientRect().width || 0;
     let h = svgNode.clientHeight || svgNode.getBoundingClientRect().height || 0;
@@ -199,6 +202,22 @@ class NetworkVisualization {
     this.width = w;
     this.height = h;
     this.simulation.force('center', d3.forceCenter(this.width / 2, this.height / 2));
+
+    const prevMode = this.topologyMode;
+    if (opts.topologyMode === 'mesh' || opts.topologyMode === 'star') {
+      this.topologyMode = opts.topologyMode;
+    }
+
+    // Mesh needs slightly longer links / stronger repulsion so the graph opens up
+    const isMesh = this.topologyMode === 'mesh';
+    const linkForce = this.simulation.force('link');
+    if (linkForce) {
+      linkForce.distance(isMesh ? 150 : 120);
+    }
+    const chargeForce = this.simulation.force('charge');
+    if (chargeForce) {
+      chargeForce.strength(isMesh ? -650 : -500);
+    }
 
     const existingNodes = new Map(this.nodes.map(n => [n.id, n]));
     let nodesChanged = false;
@@ -279,14 +298,31 @@ class NetworkVisualization {
       }
     });
 
+    const oldLinkKeys = new Set(
+      (this.links || []).map(l => {
+        const s = (l.source && l.source.id) || l.source;
+        const t = (l.target && l.target.id) || l.target;
+        return [s, t].sort().join('->');
+      })
+    );
+    let linksChanged = oldLinkKeys.size !== linkSet.size;
+    if (!linksChanged) {
+      linkSet.forEach(k => {
+        if (!oldLinkKeys.has(k)) linksChanged = true;
+      });
+    }
+    const modeChanged = prevMode !== this.topologyMode;
+
     this.animateLinkChanges(this.links, newLinks);
     this.links = newLinks;
 
     this.simulation.nodes(this.nodes);
     this.simulation.force('link').links(this.links);
 
-    if (nodesChanged) {
-      this.simulation.alpha(0.3).restart();
+    // Restart forces when nodes, edges, or star↔mesh mode change so the layout reflows
+    if (nodesChanged || linksChanged || modeChanged || opts.forceRelayout) {
+      const alpha = (modeChanged || opts.forceRelayout) ? 0.9 : (linksChanged ? 0.55 : 0.3);
+      this.simulation.alpha(alpha).restart();
     }
     this.render();
   }
@@ -623,7 +659,9 @@ class NetworkVisualization {
   }
 
   /**
-   * Fan-out transaction packets: sender → hub → everyone else (star topology).
+   * Fan-out transaction packets.
+   * Star (admin-hosted): sender → hub → everyone else.
+   * Mesh (full P2P): sender → every other peer directly.
    */
   animateTransactionPropagation(fromId, tx) {
     const fromNode = this.nodes.find(n => n.id === fromId);
@@ -631,7 +669,6 @@ class NetworkVisualization {
 
     const amount = tx && tx.amount != null ? tx.amount : '';
     const label = amount !== '' ? String(amount) : 'tx';
-    const hubId = this._findHubId();
     const others = this.nodes.map(n => n.id).filter(id => id !== fromId);
 
     this.flashNodeStatus(fromId, 'sending', 700, fromNode._baselineStatus || fromNode.status || 'idle');
@@ -650,6 +687,12 @@ class NetworkVisualization {
       }, delay);
     };
 
+    if (this.topologyMode === 'mesh') {
+      others.forEach((id, i) => runLeg(fromId, id, i * 90));
+      return;
+    }
+
+    const hubId = this._findHubId();
     if (hubId && fromId !== hubId) {
       runLeg(fromId, hubId, 0);
       let i = 0;

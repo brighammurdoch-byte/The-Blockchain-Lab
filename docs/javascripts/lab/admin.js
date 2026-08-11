@@ -638,6 +638,12 @@ function setupEventHandlers() {
 
     showToastNotification('Settings broadcast to peers (client relay)', 'success');
     updateSettingsDisplay(newSettings);
+
+    // Topology must switch star ↔ mesh immediately when network mode changes
+    if (typeof renderClientRelayChain === 'function') {
+      renderClientRelayChain({ forceTopologyRelayout: true });
+    }
+    updateTopologyModeCaption(selectedMode);
   });
   
   // Network toggle — peers listen for 'network-toggled'; hub also rejects blocks/txs while paused
@@ -1050,7 +1056,66 @@ function scheduleRenderClientRelayChain() {
   }, 400);
 }
 
-function renderClientRelayChain() {
+/**
+ * Build projector link map from the current networking mode.
+ * Admin-hosted → star around the hub; Full P2P → mesh among all peers.
+ */
+function buildVizPeerAssignments(vizMiners, mode) {
+  const peerAssignments = new Map();
+  if (!vizMiners || vizMiners.length < 2) return peerAssignments;
+
+  const isP2p = mode === 'p2p' || mode === 'mesh';
+  if (isP2p) {
+    // Full mesh (teachable “everyone gossips with everyone”)
+    for (let i = 0; i < vizMiners.length; i++) {
+      const peers = [];
+      for (let j = 0; j < vizMiners.length; j++) {
+        if (i !== j) peers.push(vizMiners[j].userId);
+      }
+      peerAssignments.set(vizMiners[i].userId, peers);
+    }
+    return peerAssignments;
+  }
+
+  // Star around the instructor hub
+  const center = vizMiners.find(function (m) {
+    return m.role === 'admin' || /admin/i.test(m.userId || '') || /admin/i.test(m.name || '');
+  }) || vizMiners[0];
+  if (center) {
+    vizMiners.forEach(function (m) {
+      if (m.userId !== center.userId) {
+        peerAssignments.set(m.userId, [center.userId]);
+      }
+    });
+  }
+  return peerAssignments;
+}
+
+function resolveVizNetworkMode() {
+  if (networkMode) return networkMode;
+  if (relayState && relayState.settings && relayState.settings.networkMode) {
+    return relayState.settings.networkMode;
+  }
+  return 'admin-relay';
+}
+
+function updateTopologyModeCaption(mode) {
+  const isP2p = mode === 'p2p' || mode === 'mesh';
+  const text = isP2p
+    ? 'Layout: Full P2P mesh (peer ↔ peer gossip)'
+    : 'Layout: Admin-hosted star (hub in the center)';
+  let $el = $('#topologyModeCaption');
+  if (!$el.length) {
+    $('#networkTopologyLegend').prepend(
+      '<div id="topologyModeCaption" style="margin-bottom:8px;font-size:12px;font-weight:600;color:#37474f;"></div>'
+    );
+    $el = $('#topologyModeCaption');
+  }
+  $el.text(text);
+}
+
+function renderClientRelayChain(opts) {
+  opts = opts || {};
   if (!relayState || !relayState.chain || relayState.chain.length === 0) {
     $('#blockchainView').html('<p class="text-muted">Waiting for first blocks...</p>');
     return;
@@ -1128,19 +1193,14 @@ function renderClientRelayChain() {
           role: p.role || 'miner'
         };
       });
-      const peerAssignments = new Map();
-      // Admin-hosted: star topology around the instructor hub
-      const center = vizMiners.find(function (m) {
-        return m.role === 'admin' || /admin/i.test(m.userId || '') || /admin/i.test(m.name || '');
-      }) || vizMiners[0];
-      if (center && vizMiners.length > 1) {
-        vizMiners.forEach(function (m) {
-          if (m.userId !== center.userId) {
-            peerAssignments.set(m.userId, [center.userId]);
-          }
-        });
-      }
-      viz.updateTopology(vizMiners, peerAssignments);
+      const mode = resolveVizNetworkMode();
+      const peerAssignments = buildVizPeerAssignments(vizMiners, mode);
+      const topoMode = (mode === 'p2p' || mode === 'mesh') ? 'mesh' : 'star';
+      viz.updateTopology(vizMiners, peerAssignments, {
+        topologyMode: topoMode,
+        forceRelayout: !!opts.forceTopologyRelayout
+      });
+      updateTopologyModeCaption(mode);
 
       const tip = chain[chain.length - 1];
       if (tip && tip.miner && tip.miner !== 'genesis' && tip.hash) {
