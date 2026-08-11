@@ -12,8 +12,6 @@ var bodyParser = require('body-parser');
 var routes = require('./routes/index');
 var labRoutes = require('./routes/lab');
 
-var BlockchainLab = require('./lib/blockchainLab');
-
 var app = express();
 
 // Configure i18n first, before initializing it
@@ -22,8 +20,8 @@ i18n.configure({
   directory: __dirname + '/locales'
 });
 
-// Initialize BlockchainLab singleton
-app.blockchainLab = new BlockchainLab();
+// Pure client-relay mode only (no BlockchainLab singleton, no server-side rooms or Socket.io coordination for the lab).
+// The /lab routes now only serve the static pages + validator code for the editor tab.
 
 // view engine setup
 app.set('views', path.join(__dirname, 'views'));

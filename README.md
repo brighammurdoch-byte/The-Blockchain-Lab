@@ -5,6 +5,8 @@
 
 **The Blockchain Lab** is an interactive educational platform that demonstrates how blockchain networks function at scale. It allows educators to create isolated classroom blockchain networks where students can participate as observers or miners, learning real-world blockchain concepts.
 
+> **New (Recommended):** The lab now has a fully client-side **Admin Relay** mode. The instructor's browser acts as the coordinator. No backend server is required for students to join and mine. This works reliably even on restrictive school networks. See the "Client-Side Admin Relay Mode" section below.
+
 ## Features
 
 ### For Instructors
@@ -34,11 +36,28 @@
 
 ### Network Features
 - **Real Proof-of-Work** - Actual SHA256 hashing with configurable difficulty
-- **Consensus mechanism** - First miner to find valid nonce wins the block
+- **Consensus mechanism** - First miner to find valid nonce wins the block (admin hub) or longest-chain gossip (Full P2P)
 - **Transaction pool** - Pending transactions included in mined blocks
-- **51% attack simulation** - Attack becomes possible when one participant has >50% network hashrate
-- **Distributed network** - Each participant's computer contributes computing power
-- **Real-time updates** - WebSocket-based updates for all connected clients
+- **51% attack simulation** - Team collusion / hashrate attack demos
+- **Distributed network** - Each participant's device contributes computing power
+- **Real-time updates** - WebRTC peer networking (no Socket.io required for the lab)
+
+## Classroom modes (no backend session server)
+
+The lab coordinates **in the browser**. Two topologies (switchable on the admin dashboard):
+
+| Mode | Behavior |
+|------|----------|
+| **Admin-hosted** (default) | Instructor tab is the hub; validates and relays blocks |
+| **Full P2P** | Peers gossip blocks directly (mesh) for a decentralization demo |
+
+**How to use in class (GitHub Pages):**
+1. Build static site: `npm run build:static` → enable Pages from `/docs` (see [INSTRUCTOR_GUIDE.md](INSTRUCTOR_GUIDE.md)).
+2. Open the Pages lab URL on the instructor laptop → **Create Session**.
+3. Share the 6-character code. Students join as Miner or Wallet.
+4. Keep the instructor tab open. Optional: switch Network Mode to Full P2P.
+
+**Local prep:** `npm start` → `http://localhost:3000/lab` (Express only serves files; simulation stays client-side).
 
 ## Getting Started
 
@@ -46,8 +65,8 @@
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/your-username/blockchain-demo-lab.git
-   cd blockchain-demo-lab
+   git clone https://github.com/brighammurdoch-byte/The-Blockchain-Lab.git
+   cd The-Blockchain-Lab/blockchain-demo
    ```
 
 2. **Install dependencies**
@@ -70,7 +89,7 @@ The server will start on `http://localhost:3000`
 
 2. **Create a session (Instructor)**
    - Click "Create Session"
-   - Your admin token will be displayed (save it!)
+   - Session code shown immediately (admin's browser is the relay hub; no separate token)
    - You'll be redirected to the admin dashboard
    - Share the join code with students
 
@@ -81,24 +100,18 @@ The server will start on `http://localhost:3000`
 
 ## Architecture
 
-### Backend
-- **Express.js** - HTTP server and routing
-- **Socket.io** - Real-time bidirectional communication
-- **Node.js Crypto** - SHA256 hashing for mining
-- **In-memory storage** - Session and blockchain state
-
-### Frontend
-- **Bootstrap 3** - Responsive UI framework
-- **jQuery** - DOM manipulation
-- **CryptoJS** - Client-side hashing (via sha256.js)
-- **Socket.io client** - Real-time updates
+### Classroom lab (current)
+- **Express or GitHub Pages** — serves HTML/JS only
+- **Admin-hosted WebRTC** — default peer coordination via bundled `p2pt` (+ BroadcastChannel mirror)
+- **Full P2P mesh** — optional teaching mode from the admin Network Mode control
+- **CryptoJS SHA256** — client-side mining
 
 ### Key Components
-- `lib/blockchainLab.js` - Core blockchain logic
-- `lib/miningUtils.js` - Mining and validation utilities
-- `lib/socketHandlers.js` - Real-time event handlers
-- `routes/lab.js` - HTTP endpoints for lab operations
-- `views/lab/` - Pug template views for UI
+- `public/javascripts/network/` — NetworkManager, P2P transports, RelayBlockchainState
+- `public/javascripts/lab/` — admin / participate / observe / landing UI
+- `views/lab/` — Pug templates (also rendered by `npm run build:static`)
+- `scripts/build-static.js` — GitHub Pages export into `docs/`
+- `INSTRUCTOR_GUIDE.md` — classroom runbook
 
 ## How It Works
 

@@ -1,0 +1,140 @@
+<!DOCTYPE html><html><head>
+    <meta name="lab-base-path" content="/The-Blockchain-Lab">
+    <script>window.LAB_STATIC_MODE=true;window.LAB_BASE_PATH="/The-Blockchain-Lab";document.documentElement.setAttribute('data-lab-static','true');</script><meta charset="utf-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="A live blockchain demo in a browser."><meta name="author" content="Anders Brownworth"><link rel="icon" href="/The-Blockchain-Lab/favicon.ico"><title>Blockchain Demo</title><link rel="stylesheet" href="/The-Blockchain-Lab/stylesheets/lib/bootstrap.min.css"><link rel="stylesheet" href="/The-Blockchain-Lab/stylesheets/lib/bootstrap-theme.min.css"><link rel="stylesheet" href="/The-Blockchain-Lab/stylesheets/lib/bootstrap-horizon.css"><link rel="stylesheet" href="/The-Blockchain-Lab/stylesheets/lib/ladda-themeless.min.css"><link rel="stylesheet" href="/The-Blockchain-Lab/stylesheets/lib/ie10-viewport-bug-workaround.css"><link rel="stylesheet" href="/The-Blockchain-Lab/stylesheets/blockchain.css"><script src="/The-Blockchain-Lab/javascripts/lib/jquery.min.js"></script><script src="/The-Blockchain-Lab/javascripts/lib/bootstrap.min.js"></script><script src="/The-Blockchain-Lab/javascripts/lib/spin.min.js"></script><script src="/The-Blockchain-Lab/javascripts/lib/ladda.min.js"></script><script src="/The-Blockchain-Lab/javascripts/lib/ie10-viewport-bug-workaround.js"></script><script src="/The-Blockchain-Lab/javascripts/lib/sha256.js"></script><script src="https://d3js.org/d3.v7.min.js"></script><script src="/The-Blockchain-Lab/javascripts/blockchain.js"></script><!-- lab/networkVisualization.js is included per-page (admin) with cache-buster for client-relay lab only; not global--></head><body><nav class="navbar navbar-inverse navbar-fixed-top"><div class="container"><div class="navbar-header"><button class="navbar-toggle collapsed" type="button" data-toggle="collapse" data-target="#navbar" aria-expanded="false" aria-controls="navbar"><span class="sr-only">Toggle navigation</span><span class="icon-bar"></span><span class="icon-bar"></span><span class="icon-bar"></span></button><a class="navbar-brand" href="/The-Blockchain-Lab/lab/index.html">The Blockchain Lab</a></div><div class="collapse navbar-collapse" id="navbar"><ul class="nav navbar-nav navbar-right"><li class="dropdown"><a class="dropdown-toggle" href="#" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="false">Learning Demos<span class="caret"></span></a><ul class="dropdown-menu"><li><a href="/The-Blockchain-Lab/hash">Hash</a></li><li><a href="/The-Blockchain-Lab/block">Block</a></li><li><a href="/The-Blockchain-Lab/blockchain">Blockchain</a></li><li><a href="/The-Blockchain-Lab/distributed">Distributed</a></li><li><a href="/The-Blockchain-Lab/tokens">Tokens</a></li><li><a href="/The-Blockchain-Lab/coinbase">Coinbase</a></li></ul></li><li><a href="/The-Blockchain-Lab/lab"> <i class="glyphicon glyphicon-play"></i> Full Simulation</a></li></ul></div></div></nav><div class="container-fluid"><div class="row"><!-- Code Editor Section (70% width)--><div class="col-md-7"><div class="panel panel-primary"><div class="panel-heading"><h3 class="panel-title"><i class="glyphicon glyphicon-edit"></i>&nbsp; Validator Code Editor</h3><small class="pull-right"><span id="codeStatus"></span> <span class="label label-success">Original</span></small></div><div class="panel-body"><div class="form-group"><label><strong>BlockValidator.js</strong></label><p class="text-muted"><small>This is the validation code running on your miner. Modify it to experiment with <strong>forks</strong>, <strong>attacks</strong>, or <strong>consensus changes</strong>!</small></p><!-- Syntax highlighted code editor--><pre id="codeEditor" style="height: 600px; border: 1px solid #ddd; padding: 10px;"></pre><p><button class="btn btn-info btn-sm" id="loadCode"><i class="glyphicon glyphicon-refresh"></i>&nbsp;Load Code</button><button class="btn btn-warning btn-sm" onclick="resetCode()"><i class="glyphicon glyphicon-remove"></i>&nbsp;Reset to Original</button><button class="btn btn-success btn-sm" id="submitCode"><i class="glyphicon glyphicon-ok"></i>&nbsp;Submit Modified Code</button><button class="btn btn-danger btn-sm" onclick="toggleDiff()"><i class="glyphicon glyphicon-list"></i>&nbsp;Show Changes</button></p></div></div></div></div><!-- Learning Panel (30% width)--><div class="col-md-5"><!-- Key Functions Panel--><div class="panel panel-info"><div class="panel-heading"><h4 class="panel-title">Key Functions to Modify</h4></div><div class="panel-body"><div class="accordion" id="accordion"><div class="panel panel-default"><div class="panel-heading"><h5 class="panel-title"><a data-toggle="collapse" data-parent="#accordion" href="#validateHash"><code>validateBlockHash()</code> - Proof-of-Work</a></h5></div><div class="panel-collapse collapse" id="validateHash"><div class="panel-body"><p><strong>What it does:</strong>Checks if the block hash has the required number of leading zeros</p><p><strong>Experiment:</strong>Try changing <code>requiredLeadingZeros: 3</code>to 4 or 2</p><p><strong>What happens:</strong></p><ul><li>3 zeros: Normal mining difficulty</li><li>4 zeros: HARD FORK - incompatible with others</li><li>2 zeros: Soft fork - blocks still validate</li></ul><p><strong>Educational value:</strong>Learn why Proof-of-Work difficulty is critical to blockchain security</p></div></div></div><div class="panel panel-default"><div class="panel-heading"><h5 class="panel-title"><a data-toggle="collapse" data-parent="#accordion" href="#validateTx"><code>validateTransaction()</code> - Double-Spend Prevention</a></h5></div><div class="panel-collapse collapse" id="validateTx"><div class="panel-body"><p><strong>What it does:</strong>Verifies that users can't spend coins they don't have</p><p><strong>Experiment:</strong>Try removing the balance check to allow double-spending</p><p><strong>What happens:</strong></p><ul><li>Remove check: Can send infinite coins ✗</li><li>Keep check: Transactions validated ✓</li></ul><p><strong>Educational value:</strong>This is the fundamental security preventing coin duplication</p></div></div></div><div class="panel panel-default"><div class="panel-heading"><h5 class="panel-title"><a data-toggle="collapse" data-parent="#accordion" href="#validateChain"><code>validatePreviousHash()</code> - Chain Integrity</a></h5></div><div class="panel-collapse collapse" id="validateChain"><div class="panel-body"><p><strong>What it does:</strong>Ensures each block links to the previous block</p><p><strong>Experiment:</strong>Try allowing ANY previous hash (remove the check)</p><p><strong>What happens:</strong></p><ul><li>Remove check: Chain breaks into fragments ✗</li><li>Keep check: Chain stays linked ✓</li></ul><p><strong>Educational value:</strong>This is the "chain" in "blockchain" - without it, anyone could reorganize history</p></div></div></div></div></div></div><!-- Guided Demos Link--><div class="panel panel-warning"><div class="panel-heading"><h4 class="panel-title">Guided Demos</h4></div><div class="panel-body"><p>Want to learn specific attack scenarios? Check out the guided demos:</p><ul class="list-group"><li class="list-group-item"><a href="#" onclick="viewDemo('hard-fork-difficulty')"><strong>Hard Fork Demo</strong></a><br><small>Increase difficulty to 4 - see network split</small></li><li class="list-group-item"><a href="#" onclick="viewDemo('attack-51-will-succeed')"><strong>51% Attack (Success)</strong></a><br><small>With majority power, override original chain</small></li><li class="list-group-item"><a href="#" onclick="viewDemo('attack-double-spend')"><strong>Double-Spend Attack</strong></a><br><small>Reverse transactions with majority hashrate</small></li></ul></div></div><!-- Code Status Panel--><div class="panel panel-danger"><div class="panel-heading"><h4 class="panel-title">Code Status</h4></div><div class="panel-body"><ul class="list-unstyled"><li><i class="glyphicon glyphicon-ok text-success" id="statusOriginal"></i>&nbsp;<span id="statusOriginalText">Using original validator code</span></li><li><i class="glyphicon glyphicon-remove text-danger" id="statusModified" style="display:none;"></i>&nbsp;<span id="statusModifiedText"><strong>You modified your validator!</strong><br><small>Monitor the network for chain forks or consensus conflicts</small></span></li><li><i class="glyphicon glyphicon-warning-sign text-warning" id="statusWaiting" style="display:none;"></i>&nbsp;<span id="statusWaitingText">Waiting for code validation...</span></li></ul><p id="networkStatus" style="margin-top: 10px;"><small class="text-muted">No network changes detected</small></p></div></div></div></div></div><!-- CodeMirror for syntax highlighting--><script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css"><script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/ace.min.js"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/mode-javascript.min.js"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/theme-monokai.min.js"></script><script>// Initialize Ace Editor
+var editor = ace.edit("codeEditor");
+editor.setTheme("ace/theme/monokai");
+editor.session.setMode("ace/mode/javascript");
+editor.setFontSize(14);
+editor.setWrapBehavioursEnabled(true);
+
+var originalCode = "";
+var sessionId = "";
+var userId = "anonymous";
+
+// Load validator code
+document.getElementById('loadCode').addEventListener('click', function() {
+  fetch('/lab/validator-code')
+    .then(res => res.json())
+    .then(data => {
+      if (data.success) {
+        originalCode = data.code;
+        editor.setValue(originalCode);
+        document.getElementById('codeStatus').textContent = "Code loaded";
+        updateStatus('original');
+      }
+    })
+    .catch(err => {
+      alert('Error loading code: ' + err.message);
+      // Load blockValidator.js for demo
+      fetch('/lib/blockValidator.js')
+        .then(res => res.text())
+        .then(code => {
+          originalCode = code;
+          editor.setValue(code);
+        });
+    });
+});
+
+// Submit modified code
+document.getElementById('submitCode').addEventListener('click', function() {
+  var modifiedCode = editor.getValue();
+  
+  if (modifiedCode === originalCode) {
+    alert('You haven\'t made any changes to the code.');
+    return;
+  }
+
+  if (!confirm('Submit your modified validator code? This may cause your node to fork from the network!')) {
+    return;
+  }
+
+  // Disable button during submission
+  this.disabled = true;
+
+  fetch('/lab/validator-code', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId: sessionId,
+      userId: userId,
+      modifiedCode: modifiedCode
+    })
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.success) {
+      updateStatus('modified');
+      document.getElementById('networkStatus').innerHTML = 
+        '<strong style="color: orange;">⚠ Your validator is now MODIFIED.</strong> ' +
+        'Other miners may reject or accept your blocks depending on their code.';
+      
+      // Re-enable button
+      this.disabled = false;
+    } else {
+      alert('Error: ' + data.error);
+      this.disabled = false;
+    }
+  })
+  .catch(err => {
+    alert('Error submitting code: ' + err.message);
+    this.disabled = false;
+  });
+});
+
+function resetCode() {
+  if (confirm('Reset validator code to original? Your modifications will be lost.')) {
+    editor.setValue(originalCode);
+    updateStatus('original');
+    document.getElementById('networkStatus').innerHTML = '';
+  }
+}
+
+function updateStatus(status) {
+  document.getElementById('statusOriginal').style.display = status === 'original' ? 'inline' : 'none';
+  document.getElementById('statusOriginalText').style.display = status === 'original' ? 'inline' : 'none';
+  
+  document.getElementById('statusModified').style.display = status === 'modified' ? 'inline' : 'none';
+  document.getElementById('statusModifiedText').style.display = status === 'modified' ? 'inline' : 'none';
+  
+  document.getElementById('codeStatus').textContent = status === 'modified' ? 'MODIFIED' : 'Original';
+  document.querySelector('span.label').className = status === 'modified' ? 'label label-danger' : 'label label-success';
+}
+
+function toggleDiff() {
+  var current = editor.getValue();
+  if (current === originalCode) {
+    alert('No changes detected');
+  } else {
+    alert('You have modified the following functions:\n' + 
+          '- Lines with red background show your changes');
+  }
+}
+
+function viewDemo(demoName) {
+  // Load demo into a modal
+  fetch('/lab/demos/' + demoName)
+    .then(res => res.json())
+    .then(data => {
+      if (data.success) {
+        var demo = data.demo;
+        var msg = demo.name + '\n\n' + 
+                  (demo.setup ? demo.setup.description + '\n' : '') +
+                  '\nClick the Guided Demos tab to see full details.';
+        alert(msg);
+      }
+    });
+}
+
+// Load code on page load
+window.addEventListener('load', function() {
+  document.getElementById('loadCode').click();
+});
+
+// WebSocket listener for network changes
+if (window.socket) {
+  socket.on('validator-modified', function(data) {
+    document.getElementById('networkStatus').innerHTML += 
+      '<br><strong style="color: orange;">' + new Date().toLocaleTimeString() + 
+      ':</strong> ' + data.message;
+  });
+}</script></body></html>

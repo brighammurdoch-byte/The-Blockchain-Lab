@@ -13,6 +13,7 @@
   "scripts": {
     "start": "node ./bin/www",
     "start:prod": "NODE_ENV=production node ./bin/www",
+    "build:static": "node scripts/build-static.js",
     "pm2:start": "pm2 start ecosystem.config.js --env production",
     "pm2:stop": "pm2 stop blockchain-lab",
     "pm2:restart": "pm2 restart blockchain-lab",

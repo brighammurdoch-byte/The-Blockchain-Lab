@@ -8,19 +8,11 @@ block content
           .panel-heading
             h3.panel-title Session Information
           .panel-body
-            .row
-              .col-md-6
-                p
-                  strong Session Code:
-                  br
-                  code#sessionCode.text-center(style="display: block; font-size: 1.5em; padding: 10px; background: #f5f5f5;") Loading...
-                small Share this code with students to join
-              .col-md-6
-                p
-                  strong Admin Token:
-                  br
-                  code#adminTokenDisplay.text-center(style="display: block; font-size: 0.9em; padding: 10px; background: #f5f5f5; word-break: break-all;") Loading...
-                small Keep this secret - needed to manage settings
+            p
+              strong Session Code:
+              br
+              code#sessionCode.text-center(style="display: block; font-size: 1.5em; padding: 10px; background: #f5f5f5;") #{sessionId}
+            small Share this code with students to join. <strong>This browser is the admin hub</strong> (no separate token needed in client-relay mode).
 
     .row
       .col-md-3
@@ -43,6 +35,17 @@ block content
             .form-group
               label Mining Reward (coins):
               input.form-control#miningReward(type="number", min="1", max="100", value="10")
+
+            .form-group
+              label Network Mode:
+              select.form-control#networkModeSelect
+                option(value="admin-relay" selected) Admin-hosted (recommended)
+                option(value="p2p") Full P2P (mesh gossip)
+              small.form-text.text-muted#networkModeHelp Admin-hosted is most reliable for class. Full P2P shows decentralized gossip.
+              p#connectionStatus(style="margin-top:8px;")
+                span.label.label-default#peerCountBadge Peers: 0
+                |  
+                small.text-muted Keep this tab open — you are the classroom hub.
 
             .form-group
               .checkbox
@@ -162,7 +165,14 @@ block content
         .modal-footer
           button.btn.btn-secondary(type="button", data-dismiss="modal") Close
 
-  script(src="/socket.io/socket.io.js")
-  script(src="/javascripts/lab/chainDisplay.js")
-  script(src="/javascripts/lab/network-visualization.js")
-  script(src="/javascripts/lab/admin.js")
+  script(src="/javascripts/lib/p2pt.bundle.js?v=classroom")
+  script(src="/javascripts/lab/labPaths.js?v=classroom")
+  script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=classroom")
+  script(src="/javascripts/network/P2PAdminRelayTransport.js?v=classroom")
+  script(src="/javascripts/network/AdminRelayCoordinator.js?v=classroom")
+  script(src="/javascripts/network/Persistence.js?v=classroom")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=classroom")
+  script(src="/javascripts/network/NetworkManager.js?v=classroom")
+  script(src="/javascripts/lab/chainDisplay.js?v=classroom")
+  script(src="/javascripts/lab/networkVisualization.js?v=classroom")
+  script(src="/javascripts/lab/admin.js?v=classroom")

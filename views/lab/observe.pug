@@ -13,7 +13,7 @@ block content
                 p
                   strong Session Code:
                   br
-                  code#sessionCode.text-center(style="display: block; font-size: 1.5em; padding: 10px; background: #f5f5f5;") Loading...
+                  code#sessionCode.text-center(style="display: block; font-size: 1.5em; padding: 10px; background: #f5f5f5;") #{sessionId}
 
     .row
       .col-md-3
@@ -26,6 +26,19 @@ block content
                 strong Your Address
                 br
                 code.small#yourAddress(style="word-break: break-all;") Loading...
+                script.
+                  (function() {
+                    try {
+                      var sid = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || window.location.pathname.split('/').pop();
+                      var uid = localStorage.getItem('userId_' + sid);
+                      if (!uid) {
+                        uid = 'user_' + Math.random().toString(36).substr(2, 9);
+                        localStorage.setItem('userId_' + sid, uid);
+                      }
+                      var el = document.getElementById('yourAddress');
+                      if (el) el.textContent = uid;
+                    } catch (err) {}
+                  })();
             .well
               p.text-center
                 strong Wallet display name
@@ -120,6 +133,13 @@ block content
                 tr
                   td(colspan="4").text-center No pending transactions
 
-  script(src="/socket.io/socket.io.js")
-  script(src="/javascripts/lab/chainDisplay.js")
-  script(src="/javascripts/lab/observe.js")
+  script(src="/javascripts/lib/p2pt.bundle.js?v=classroom")
+  script(src="/javascripts/lab/labPaths.js?v=classroom")
+  script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=classroom")
+  script(src="/javascripts/network/P2PAdminRelayTransport.js?v=classroom")
+  script(src="/javascripts/network/AdminRelayCoordinator.js?v=classroom")
+  script(src="/javascripts/network/Persistence.js?v=classroom")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=classroom")
+  script(src="/javascripts/network/NetworkManager.js?v=classroom")
+  script(src="/javascripts/lab/chainDisplay.js?v=classroom")
+  script(src="/javascripts/lab/observe.js?v=classroom")
