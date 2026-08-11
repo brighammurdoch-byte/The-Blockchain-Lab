@@ -121,41 +121,70 @@ block content
           .panel-body
             svg#networkVisualizationSvg(width="100%", height="500", style="border: 1px solid #ddd; border-radius: 4px; background: #f9f9f9;")
             .mt-2.text-center#networkTopologyLegend
-              div(style="margin-bottom: 8px;")
-                strong(style="font-size: 12px;") Role shapes
-                span.legend-item.ml-3
-                  span(style="display: inline-block; width: 14px; height: 14px; background: #9E9E9E; border: 2px solid #333; transform: rotate(45deg); margin-right: 8px; vertical-align: -2px;")
+              style.
+                #networkTopologyLegend { padding: 10px 6px 4px; line-height: 1.6; }
+                #networkTopologyLegend .topo-legend-row {
+                  display: flex;
+                  flex-wrap: wrap;
+                  align-items: center;
+                  justify-content: center;
+                  gap: 10px 22px;
+                  margin-bottom: 14px;
+                }
+                #networkTopologyLegend .topo-legend-row:last-child { margin-bottom: 4px; }
+                #networkTopologyLegend .topo-legend-label {
+                  font-size: 12px;
+                  font-weight: 700;
+                  margin-right: 4px;
+                  color: #37474f;
+                }
+                #networkTopologyLegend .legend-item {
+                  display: inline-flex;
+                  align-items: center;
+                  white-space: nowrap;
+                  font-size: 12px;
+                  margin: 0 !important;
+                  padding: 2px 0;
+                }
+                #networkTopologyLegend .legend-item > span:first-child {
+                  margin-right: 10px !important;
+                  flex-shrink: 0;
+                }
+              .topo-legend-row
+                span.topo-legend-label Role shapes
+                span.legend-item
+                  span(style="display: inline-block; width: 14px; height: 14px; background: #9E9E9E; border: 2px solid #333; transform: rotate(45deg); vertical-align: -2px;")
                   | Admin
-                span.legend-item.ml-3
-                  span(style="display: inline-block; width: 14px; height: 14px; background: #9E9E9E; border: 2px solid #333; border-radius: 50%; margin-right: 6px; vertical-align: -2px;")
+                span.legend-item
+                  span(style="display: inline-block; width: 14px; height: 14px; background: #9E9E9E; border: 2px solid #333; border-radius: 50%; vertical-align: -2px;")
                   | Miner
-                span.legend-item.ml-3
-                  span(style="display: inline-block; width: 14px; height: 14px; background: #9E9E9E; border: 2px solid #333; margin-right: 6px; vertical-align: -2px;")
+                span.legend-item
+                  span(style="display: inline-block; width: 14px; height: 14px; background: #9E9E9E; border: 2px solid #333; vertical-align: -2px;")
                   | Wallet
-              div
-                strong(style="font-size: 12px;") Status colors
-                span.legend-item.ml-3
-                  span(style="background: #4CAF50; display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px;")
+              .topo-legend-row
+                span.topo-legend-label Status colors
+                span.legend-item
+                  span(style="background: #4CAF50; display: inline-block; width: 12px; height: 12px; border-radius: 50%;")
                   | Mining
-                span.legend-item.ml-3
-                  span(style="background: #FFC107; display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px;")
+                span.legend-item
+                  span(style="background: #FFC107; display: inline-block; width: 12px; height: 12px; border-radius: 50%;")
                   | Block Found
-                span.legend-item.ml-3
-                  span(style="background: #2196F3; display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px;")
+                span.legend-item
+                  span(style="background: #2196F3; display: inline-block; width: 12px; height: 12px; border-radius: 50%;")
                   | Receiving
-                span.legend-item.ml-3
-                  span(style="background: #26A69A; display: inline-block; width: 12px; height: 12px; transform: rotate(45deg); margin-right: 7px; vertical-align: -1px;")
+                span.legend-item
+                  span(style="background: #26A69A; display: inline-block; width: 12px; height: 12px; transform: rotate(45deg); vertical-align: -1px;")
                   | Sending / Tx
-                span.legend-item.ml-3
-                  span(style="background: #f0f0f0; border: 2px solid #999; display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px;")
+                span.legend-item
+                  span(style="background: #f0f0f0; border: 2px solid #999; display: inline-block; width: 12px; height: 12px; border-radius: 50%;")
                   | Idle
-              div(style="margin-top: 6px;")
-                strong(style="font-size: 12px;") On the wires
-                span.legend-item.ml-3
-                  span(style="background: #FFC107; display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px; border: 1px solid #F57F17;")
+              .topo-legend-row
+                span.topo-legend-label On the wires
+                span.legend-item
+                  span(style="background: #FFC107; display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 1px solid #F57F17;")
                   | Block packet
-                span.legend-item.ml-3
-                  span(style="background: #26A69A; display: inline-block; width: 10px; height: 10px; transform: rotate(45deg); margin-right: 7px; vertical-align: -1px; border: 1px solid #004D40;")
+                span.legend-item
+                  span(style="background: #26A69A; display: inline-block; width: 10px; height: 10px; transform: rotate(45deg); vertical-align: -1px; border: 1px solid #004D40;")
                   | Transaction packet
 
         .panel.panel-default
