@@ -287,6 +287,9 @@ function initClientSideNetworking(mode, roomCode) {
         if (relayState.networkPaused) {
           $('#toggleNetworkBtn').text('Resume Network').data('paused', true);
         }
+        if (restored.settings) {
+          applyParameterLockUI(!!restored.settings.parametersLocked);
+        }
       }
     }
 
@@ -356,6 +359,17 @@ function initClientSideNetworking(mode, roomCode) {
   }
 
   // Presence + initial-state are sent after initAsAdmin resolves (see above)
+
+  // Miner hard-fork votes → show on projector
+  net.on('hard-fork-vote', (msg) => {
+    const payload = msg.payload || msg;
+    const uid = msg.from || payload.userId;
+    const choice = payload.choice || 'classic';
+    if (relayState && uid) {
+      relayState.addOrUpdateParticipant(uid, 'miner', { forkChoice: choice });
+      if (typeof renderClientParticipants === 'function') renderClientParticipants();
+    }
+  });
 
   // Listen for high-level events (coordinator handles most now)
   net.on('peer-joined', (msg) => {
@@ -597,15 +611,51 @@ function setupEventHandlers() {
     updateDifficultyDisplay();
   });
   
+  // Reflect current lock state on load / restore
+  if (relayState && relayState.settings) {
+    applyParameterLockUI(!!relayState.settings.parametersLocked);
+  } else {
+    applyParameterLockUI($('#lockParameters').is(':checked'));
+  }
+
+  $('#lockParameters').on('change', function () {
+    // Unchecking immediately re-enables controls; locking still requires Update Settings
+    if (!$(this).is(':checked')) {
+      applyParameterLockUI(false);
+    }
+  });
+
   // Update Settings Button
   $('#updateSettingsBtn').click(function() {
     const selectedMode = $('#networkModeSelect').val() || 'admin-relay';
+    const wantLock = $('#lockParameters').is(':checked');
+    const wasLocked = !!(relayState && relayState.settings && relayState.settings.parametersLocked);
+
+    // While locked, only allow an unlock (uncheck + Update). Block other changes.
+    if (wasLocked && wantLock) {
+      showToastNotification('Parameters are locked — uncheck “Lock parameters” and click Update Settings to change them', 'warning');
+      // Re-sync UI to frozen values
+      if (relayState && relayState.settings) {
+        const s = relayState.settings;
+        $('#difficultyLeading').val(s.difficultyLeading);
+        $('#difficultySecondary').val(s.difficultySecondary != null ? s.difficultySecondary : 8);
+        $('#miningReward').val(s.miningRewardCoins || 10);
+        $('#networkModeSelect').val(s.networkMode === 'p2p' ? 'p2p' : 'admin-relay');
+        updateDifficultyDisplay();
+        applyParameterLockUI(true);
+      }
+      return;
+    }
+
     const newSettings = {
-      difficultyLeading: parseInt($('#difficultyLeading').val()),
-      difficultySecondary: parseInt($('#difficultySecondary').val()),
-      miningRewardCoins: parseInt($('#miningReward').val()),
+      difficultyLeading: parseInt($('#difficultyLeading').val(), 10) || 4,
+      difficultySecondary: (function () {
+        var s = parseInt($('#difficultySecondary').val(), 10);
+        return isNaN(s) ? 8 : s;
+      })(),
+      miningRewardCoins: parseInt($('#miningReward').val(), 10) || 10,
       networkMode: selectedMode,
-      parametersLocked: $('#lockParameters').is(':checked')
+      parametersLocked: wantLock
     };
 
     networkMode = selectedMode;
@@ -618,7 +668,6 @@ function setupEventHandlers() {
       : 'Admin-hosted (cloud relay)';
     $('#networkModeBadge').text(badgeText);
 
-    // Client-relay only
     console.log('[ClientNet] Broadcasting settings via admin relay:', newSettings);
 
     if (relayState && typeof relayState.updateSettings === 'function') {
@@ -631,15 +680,19 @@ function setupEventHandlers() {
       net.send('admin-settings-updated', newSettings);
     }
 
-    // Strong persistence on settings change
     if (relayState && net && net.roomCode) {
       Persistence.saveAdminState(net.roomCode, relayState.getFullState());
     }
 
-    showToastNotification('Settings broadcast to peers (client relay)', 'success');
+    applyParameterLockUI(wantLock);
+    showToastNotification(
+      wantLock
+        ? 'Settings updated and LOCKED — difficulty/reward/mode frozen'
+        : (wasLocked ? 'Parameters unlocked and settings updated' : 'Settings broadcast to peers'),
+      wantLock ? 'warning' : 'success'
+    );
     updateSettingsDisplay(newSettings);
 
-    // Topology must switch star ↔ mesh immediately when network mode changes
     if (typeof renderClientRelayChain === 'function') {
       renderClientRelayChain({ forceTopologyRelayout: true });
     }
@@ -725,14 +778,9 @@ function setupEventHandlers() {
   
   $('#startTeamAttackBtn').click(function(e) {
     e.preventDefault();
-    const blocksBack = parseInt($('#teamAttackBlocksBack').val()) || 2;
-    if (confirm('Initiate Team 51% attack simulation going back ' + blocksBack + ' blocks?')) {
-      if (net) {
-        net.send('start-team-attack', { blocksBack });
-        $('#teamAttackStats').show();
-        showToastNotification('Team attack broadcast (client relay)', 'success');
-      }
-    }
+    const blocksBack = Math.max(1, parseInt($('#teamAttackBlocksBack').val(), 10) || 2);
+    if (!confirm('Initiate Team 51% attack simulation going back ' + blocksBack + ' blocks?')) return;
+    startTeamCollusionAttack(blocksBack);
   });
   
   // Inject Hard Fork Simulation panel dynamically
@@ -749,18 +797,19 @@ function setupEventHandlers() {
       <input type="number" id="forkHeight" class="form-control" value="10" min="1" />
     </div>
     <button id="proposeForkBtn" class="btn btn-warning btn-block">Propose Hard Fork</button>
+    <div id="adminForkStatus" style="display:none; margin-top:10px;" class="alert alert-warning"></div>
   `);
   
   $('#proposeForkBtn').click(function(e) {
     e.preventDefault();
-    const height = parseInt($('#forkHeight').val()) || 10;
-    const name = $('#forkName').val() || 'Hard Fork';
-    if (confirm('Propose ' + name + ' at block ' + height + '?')) {
-      if (net) {
-        net.send('propose-hard-fork', { height, name });
-        showToastNotification('Hard fork broadcast (client relay)', 'success');
-      }
+    const height = parseInt($('#forkHeight').val(), 10) || 10;
+    const name = ($('#forkName').val() || 'Hard Fork').trim() || 'Hard Fork';
+    if (!Number.isFinite(height) || height < 1) {
+      showToastNotification('Enter a valid activation block height', 'error');
+      return;
     }
+    if (!confirm('Propose “' + name + '” at block ' + height + '?')) return;
+    proposeHardFork(name, height);
   });
 
   // === Client-relay testing helper button ===
@@ -798,6 +847,18 @@ function updateDifficultyDisplay() {
   
   $('#difficultyLeadingValue').text(leading);
   $('#difficultySecondaryValue').text(secondary.toString(16).toUpperCase());
+}
+
+/** Freeze difficulty/reward/mode controls when parameters are locked. */
+function applyParameterLockUI(locked) {
+  const on = !!locked;
+  $('#difficultyLeading, #difficultySecondary, #miningReward, #networkModeSelect')
+    .prop('disabled', on);
+  if (on) {
+    $('#lockParameters').closest('.checkbox').addClass('text-danger');
+  } else {
+    $('#lockParameters').closest('.checkbox').removeClass('text-danger');
+  }
 }
 
 // Legacy loadBlockchainState removed (client-relay only now uses renderClientRelayChain)
@@ -992,11 +1053,12 @@ function updateNodeNamesList() {
 }
 
 function updateSettingsDisplay(settings) {
+  if (!settings) return;
   $('#adminDifficultyLeading').text(settings.difficultyLeading);
-  $('#adminDifficultySecondary').text('0x' + settings.difficultySecondary.toString(16).toUpperCase());
-  $('#adminMiningReward').text(settings.miningRewardCoins + ' coins');
-  $('#adminParams').html(settings.parametersLocked ? 
-    '<span class="label label-danger">Locked</span>' : 
+  $('#adminDifficultySecondary').text('0x' + Number(settings.difficultySecondary != null ? settings.difficultySecondary : 8).toString(16).toUpperCase());
+  $('#adminMiningReward').text((settings.miningRewardCoins || 0) + ' coins');
+  $('#adminParams').html(settings.parametersLocked ?
+    '<span class="label label-danger">Locked</span>' :
     '<span class="label label-success">Unlocked</span>'
   );
 
@@ -1005,11 +1067,131 @@ function updateSettingsDisplay(settings) {
     $('#difficultyLeading').val(settings.difficultyLeading);
     $('#difficultySecondary').val(settings.difficultySecondary);
     $('#miningReward').val(settings.miningRewardCoins);
-    $('#networkModeSelect').val(settings.networkMode || 'simulated-p2p');
+    $('#networkModeSelect').val(settings.networkMode === 'p2p' ? 'p2p' : 'admin-relay');
     $('#lockParameters').prop('checked', settings.parametersLocked);
     updateDifficultyDisplay();
+    applyParameterLockUI(!!settings.parametersLocked);
     initialSettingsLoaded = true;
   }
+}
+
+/**
+ * Team 51% collusion: split miners into colluders vs honest, fork from tip-N.
+ * Broadcasts team-attack-started so miner tabs actually enter collusion mode.
+ */
+function startTeamCollusionAttack(blocksBack) {
+  blocksBack = Math.max(1, parseInt(blocksBack, 10) || 2);
+  if (!net) {
+    showToastNotification('Network hub not ready', 'error');
+    return;
+  }
+  if (!relayState || !Array.isArray(relayState.chain) || relayState.chain.length === 0) {
+    showToastNotification('No chain yet — wait for genesis / first blocks', 'error');
+    return;
+  }
+
+  const minerIds = Array.from(relayState.participants.values())
+    .filter(function (p) {
+      const id = p.userId || p.id || '';
+      if (!id || String(id).indexOf('probe-') === 0) return false;
+      const role = String(p.role || 'miner').toLowerCase();
+      if (role === 'admin' || role === 'wallet' || role === 'observer' || role === 'hub') return false;
+      return true;
+    })
+    .map(function (p) { return p.userId || p.id; });
+
+  if (minerIds.length < 2) {
+    showToastNotification('Need at least 2 miners (wallets/admin do not count)', 'error');
+    return;
+  }
+
+  // Fisher–Yates shuffle
+  for (let i = minerIds.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = minerIds[i];
+    minerIds[i] = minerIds[j];
+    minerIds[j] = tmp;
+  }
+
+  const half = Math.ceil(minerIds.length / 2);
+  const colluders = minerIds.slice(0, half);
+  const honest = minerIds.slice(half);
+
+  const chain = relayState.chain;
+  const tipIndex = Math.max(0, chain.length - 1);
+  const forkParentIndex = Math.max(0, tipIndex - blocksBack);
+  const forkBlock = chain[forkParentIndex] || chain[0];
+  const forkIndex = forkBlock.index != null ? forkBlock.index : forkParentIndex;
+
+  colluders.forEach(function (id) {
+    relayState.addOrUpdateParticipant(id, 'miner', { isAttacker: true, isColluding: true, status: 'attacking' });
+  });
+  honest.forEach(function (id) {
+    relayState.addOrUpdateParticipant(id, 'miner', { isAttacker: false, isColluding: false });
+  });
+
+  const payload = {
+    colluders: colluders,
+    honest: honest,
+    forkBlock: { hash: forkBlock.hash, index: forkIndex },
+    blocksBack: blocksBack,
+    appliesAtBlock: tipIndex + blocksBack
+  };
+
+  // Event name miners actually listen for
+  net.send('team-attack-started', payload);
+
+  // Hashrate stats for projector
+  let honestHr = 0;
+  let collusionHr = 0;
+  colluders.forEach(function (id) {
+    const p = relayState.participants.get(id);
+    collusionHr += (p && p.hashrate) ? Number(p.hashrate) : 0;
+  });
+  honest.forEach(function (id) {
+    const p = relayState.participants.get(id);
+    honestHr += (p && p.hashrate) ? Number(p.hashrate) : 0;
+  });
+  $('#honestHashrate').text(honestHr.toFixed(0));
+  $('#collusionHashrate').text(collusionHr.toFixed(0));
+  $('#teamAttackStats').show();
+
+  if (typeof renderClientParticipants === 'function') renderClientParticipants();
+  if (typeof renderClientRelayChain === 'function') renderClientRelayChain();
+
+  showToastNotification(
+    'Team collusion started: ' + colluders.length + ' colluder(s), ' + honest.length + ' honest — forking from block #' + forkIndex,
+    'warning'
+  );
+}
+
+/** Broadcast hard-fork proposal (event name miners listen for). */
+function proposeHardFork(name, height) {
+  if (!net) {
+    showToastNotification('Network hub not ready', 'error');
+    return;
+  }
+  const h = parseInt(height, 10);
+  const n = (name || 'Hard Fork').trim() || 'Hard Fork';
+  if (!Number.isFinite(h) || h < 1) {
+    showToastNotification('Invalid fork activation height', 'error');
+    return;
+  }
+
+  if (relayState) {
+    relayState.pendingFork = { height: h, name: n };
+  }
+
+  net.send('hard-fork-proposed', { height: h, name: n });
+
+  const $st = $('#adminForkStatus');
+  if ($st.length) {
+    $st.show().html(
+      '<strong>Hard fork proposed:</strong> ' + n +
+      ' at height <strong>' + h + '</strong>. Miners should see a choice modal.'
+    );
+  }
+  showToastNotification('Hard fork proposed: ' + n + ' @ block ' + h, 'warning');
 }
 
 function playBlockMinedAnimation() {
@@ -1377,6 +1559,12 @@ function renderClientParticipants() {
       const mined = p.blocksMined != null ? p.blocksMined : (p.minedBlocks || 0);
       const name = p.displayName || p.name || '';
       const nameHtml = name ? `<strong style="display:block;margin-bottom:2px;">${name}</strong>` : '';
+      const attackerLabel = (p.isAttacker || p.isColluding)
+        ? ' <span class="label label-danger">Attacker</span>'
+        : '';
+      const forkLabel = (p.forkChoice && p.forkChoice !== 'classic')
+        ? ' <span class="label label-info">' + String(p.forkChoice).toUpperCase() + '</span>'
+        : '';
       const isSelf = adminId && p.userId === adminId;
       const useBtn = isSelf
         ? ''
@@ -1388,7 +1576,7 @@ function renderClientParticipants() {
             <code style="font-size: 11px; word-break: break-all;">${p.userId}</code>
             ${useBtn}
           </td>
-          <td><span class="label ${roleClass}">${roleText}</span></td>
+          <td><span class="label ${roleClass}">${roleText}</span>${attackerLabel}${forkLabel}</td>
           <td><strong>${mined}</strong></td>
           <td>${p.balance || 0} coins</td>
           <td><span class="text-success">${p.status || 'idle'}</span> <small>(${(p.hashrate || 0).toFixed(0)} H/s)</small></td>

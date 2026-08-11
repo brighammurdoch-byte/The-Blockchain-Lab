@@ -535,11 +535,15 @@ function initClientSideNetworkingForParticipant(mode) {
 
     // Update UI elements that the old 'settingsUpdated' handler touched
     if (settings.difficultyLeading !== undefined) {
-      // Many places read from lastKnownAdminSettings or update displays
       $('#difficultyLevel').text(settings.difficultyLeading + ' + 0x' + (settings.difficultySecondary != null ? settings.difficultySecondary : 8).toString(16));
     }
+
+    if (settings.parametersLocked) {
+      showToastNotification('Admin locked network parameters (difficulty/reward frozen)', 'info');
+    }
+
     // Re-apply any mining parameter changes if mining
-    if (isMining) {
+    if (isMining && !isColluding) {
       remineOnCanonicalTip();
     }
   });
@@ -565,18 +569,29 @@ function initClientSideNetworkingForParticipant(mode) {
   });
 
   net.on('hard-fork-proposed', (msg) => {
-    const { height, name } = msg.payload || msg;
+    const data = msg.payload || msg;
+    const height = data.height;
+    const name = data.name || 'Hard Fork';
     pendingForkHeight = height;
-    // Trigger the existing fork UI flow
     showForkProposalModal(name, height);
+  });
+  // Legacy alias (older admin builds)
+  net.on('propose-hard-fork', (msg) => {
+    const data = msg.payload || msg;
+    showForkProposalModal(data.name || 'Hard Fork', data.height);
   });
 
   net.on('team-attack-started', (msg) => {
-    // Reuse existing handler logic if possible, or minimal version
     const data = msg.payload || msg;
     debugLog('Team attack started via relay', data);
-    // For now, just notify
-    showToastNotification('Team 51% attack simulation active on network', 'warning');
+    handleTeamAttackStarted(data);
+  });
+  // Legacy alias
+  net.on('start-team-attack', (msg) => {
+    const data = msg.payload || msg;
+    // Old payload may only have blocksBack — still show a notice
+    if (data.colluders || data.forkBlock) handleTeamAttackStarted(data);
+    else showToastNotification('Team attack signal received (incomplete payload)', 'warning');
   });
 
   net.on('network-toggled', handleNetworkToggled);
@@ -1118,6 +1133,111 @@ function handleNetworkToggled(msg) {
     showToastNotification('Network resumed by admin', 'success');
     if (window.lastMiningIntent && !isMining && !isColluding) {
       setTimeout(startMining, 100);
+    }
+  }
+}
+
+/** Show hard-fork modal + persistent fork control panel. */
+function showForkProposalModal(name, height) {
+  pendingForkHeight = height;
+  const n = name || 'Hard Fork';
+  const h = height != null ? height : '?';
+
+  $('#forkProposalName').text(n);
+  $('#forkProposalHeight').text(h);
+  $('#forkControlPanel').show();
+
+  try {
+    if (typeof $('#forkChoiceModal').modal === 'function') {
+      $('#forkChoiceModal').modal('show');
+    }
+  } catch (e) {
+    console.warn('Could not open fork modal', e);
+  }
+
+  showToastNotification('Hard fork proposed: ' + n + ' at block ' + h + ' — choose a side', 'warning');
+}
+
+/** Sticky collusion banner (outside #miningActivity so mine loop HTML won't wipe it). */
+function showCollusionBanner(htmlInner) {
+  $('#collusionBanner').remove();
+  const banner = $('<div class="alert alert-danger" id="collusionBanner" style="margin:10px 0;"></div>')
+    .html(htmlInner);
+  if ($('#forkControlPanel').length) {
+    $('#forkControlPanel').after(banner);
+  } else if ($('#blockchainView').length) {
+    $('#blockchainView').before(banner);
+  } else {
+    $('.container-fluid, .container').first().prepend(banner);
+  }
+}
+
+/**
+ * Apply team collusion assignment from admin.
+ * Colluders mine a private fork from forkBlock; honest stay on the tip.
+ */
+function handleTeamAttackStarted(data) {
+  data = data || {};
+  const colluders = data.colluders || [];
+  const honest = data.honest || [];
+  const forkBlock = data.forkBlock || {};
+  const onTeam = colluders.indexOf(userId) >= 0;
+  const onHonest = honest.indexOf(userId) >= 0;
+
+  // Expose for audits / debugging
+  window.__labCollusion = {
+    onTeam: onTeam,
+    onHonest: onHonest,
+    colluders: colluders.slice(),
+    honest: honest.slice(),
+    forkBlock: forkBlock,
+    userId: userId
+  };
+
+  if (onTeam) {
+    isColluding = true;
+    collusionTipHash = forkBlock.hash || null;
+    if (!collusionTipHash && window.lastRelayedChain && window.lastRelayedChain.length) {
+      const back = Math.max(1, data.blocksBack || 2);
+      const idx = Math.max(0, window.lastRelayedChain.length - 1 - back);
+      collusionTipHash = window.lastRelayedChain[idx].hash;
+    }
+    collusionHeight = (forkBlock.index != null ? forkBlock.index : 0) + 1;
+    collusionTransactions = localPendingTxs.slice(0, 5);
+
+    showCollusionBanner(
+      '<strong>Team collusion active</strong> — you are on the attack team.<br>' +
+      'Mining a private fork from block #' + (forkBlock.index != null ? forkBlock.index : '?') +
+      (collusionTipHash ? ' (' + String(collusionTipHash).substring(0, 12) + '…)' : '')
+    );
+
+    showToastNotification('You are a COLLUDER — mining a secret fork off block #' +
+      (forkBlock.index != null ? forkBlock.index : '?'), 'warning');
+
+    // Restart miner on the secret tip
+    if (isMining) {
+      try { if (miningWorker) { miningWorker.postMessage({ command: 'stop' }); miningWorker.terminate(); } } catch (e) {}
+      miningWorker = null;
+      fetchDataAndMine();
+    } else if (window.lastMiningIntent) {
+      setTimeout(startMining, 200);
+    }
+  } else {
+    // Honest (or unlisted) miner — stay on main chain
+    isColluding = false;
+    collusionTipHash = null;
+    $('#collusionBanner').remove();
+    if (onHonest || colluders.length) {
+      showCollusionBanner(
+        '<strong>Team 51% attack started</strong> — you are on the <em>honest</em> chain. Watch for a competing fork from colluders.'
+      );
+      $('#collusionBanner').removeClass('alert-danger').addClass('alert-info');
+      showToastNotification(
+        'Team 51% attack started — you are on the HONEST chain. Watch for a competing fork.',
+        'info'
+      );
+    } else {
+      showToastNotification('Team 51% attack simulation active on the network', 'warning');
     }
   }
 }
