@@ -60,5 +60,13 @@ html
             li(class={active: page === 'lab'})
               a(href='/lab')
                 | #{__('Full Simulation')}
+            li
+              a(
+                href='https://github.com/brighammurdoch-byte/The-Blockchain-Lab'
+                target='_blank'
+                rel='noopener noreferrer'
+                title='View source and contribute on GitHub'
+              )
+                | #{__('Contribute')}
 
     block content
