@@ -38,30 +38,30 @@
   P2PAdminRelayTransport.prototype.initAsAdmin = async function (roomCode, userId) {
     this.isAdmin = true;
     this.role = 'admin';
-    this.roomCode = roomCode;
+    this.roomCode = String(roomCode || '').toUpperCase();
     this.userId = userId;
     this.adminUserId = userId;
-    await this._initAll(roomCode);
+    await this._initAll(this.roomCode);
     this._announcePresence();
-    console.log('[P2PAdminRelay] Admin announced room:', roomCode, 'routing:', this.routingMode);
+    console.log('[P2PAdminRelay] Admin announced room:', this.roomCode, 'routing:', this.routingMode);
   };
 
   P2PAdminRelayTransport.prototype.joinRoom = async function (roomCode, userId, role) {
     this.isAdmin = role === 'admin';
     this.role = role || 'miner';
-    this.roomCode = roomCode;
+    this.roomCode = String(roomCode || '').toUpperCase();
     this.userId = userId;
-    await this._initAll(roomCode);
+    await this._initAll(this.roomCode);
     this._announcePresence();
     // Tell the hub we joined (same shape as BroadcastChannel transport)
     this.send({
       type: 'peer-joined',
-      roomCode: roomCode,
+      roomCode: this.roomCode,
       from: userId,
       role: this.role,
       timestamp: Date.now()
     });
-    console.log('[P2PAdminRelay] Joined room:', roomCode, 'as', userId, this.role);
+    console.log('[P2PAdminRelay] Joined room:', this.roomCode, 'as', userId, this.role);
   };
 
   P2PAdminRelayTransport.prototype.setRoutingMode = function (mode) {
@@ -199,7 +199,9 @@
 
   P2PAdminRelayTransport.prototype._handleIncoming = function (msg, source, peer) {
     if (!msg || typeof msg !== 'object') return;
-    if (msg.roomCode && this.roomCode && msg.roomCode !== this.roomCode) return;
+    var msgRoom = msg.roomCode ? String(msg.roomCode).toUpperCase() : '';
+    var myRoom = this.roomCode ? String(this.roomCode).toUpperCase() : '';
+    if (msgRoom && myRoom && msgRoom !== myRoom) return;
     if (msg.from && msg.from === this.userId && !msg.relayedByAdmin) return;
 
     var key = this._dedupeKey(msg);

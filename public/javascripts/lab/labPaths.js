@@ -24,7 +24,7 @@
 
   function getSessionIdFromLocation() {
     var params = new URLSearchParams((global.location && global.location.search) || '');
-    var q = params.get('session') || params.get('code');
+    var q = params.get('join') || params.get('session') || params.get('code');
     if (q) return q.trim().toUpperCase();
 
     var path = (global.location && global.location.pathname) || '';
@@ -37,6 +37,12 @@
     return '';
   }
 
+  function isStaticMode() {
+    return !!(global.LAB_STATIC_MODE ||
+      (typeof document !== 'undefined' && document.documentElement &&
+        document.documentElement.getAttribute('data-lab-static') === 'true'));
+  }
+
   /**
    * @param {'index'|'admin'|'participate'|'observe'|'demos'|'code'} page
    * @param {string} [sessionId]
@@ -44,22 +50,37 @@
   function labUrl(page, sessionId) {
     var base = getBasePath();
     var code = sessionId ? String(sessionId).toUpperCase() : '';
-    var staticMode = !!(global.LAB_STATIC_MODE ||
-      (typeof document !== 'undefined' && document.documentElement &&
-        document.documentElement.getAttribute('data-lab-static') === 'true'));
+    var staticMode = isStaticMode();
 
     if (staticMode) {
       var file = page === 'index' ? 'index.html' : (page + '.html');
       var url = base + '/lab/' + file;
-      if (code && page !== 'index' && page !== 'demos') {
+      if (code && page === 'index') {
+        url += '?join=' + encodeURIComponent(code);
+      } else if (code && page !== 'demos') {
         url += '?session=' + encodeURIComponent(code);
       }
       return url;
     }
 
-    if (page === 'index') return base + '/lab';
+    if (page === 'index') {
+      return base + '/lab' + (code ? ('?join=' + encodeURIComponent(code)) : '');
+    }
     if (page === 'demos') return base + '/lab/demos' + (code ? '/' + code : '');
     return base + '/lab/' + page + (code ? '/' + code : '');
+  }
+
+  /** Path or site-relative join link for students (landing with code pre-filled). */
+  function joinUrl(sessionId) {
+    return labUrl('index', sessionId);
+  }
+
+  /** Absolute https://… join URL for QR codes and sharing. */
+  function absoluteJoinUrl(sessionId) {
+    var path = joinUrl(sessionId);
+    if (/^https?:\/\//i.test(path)) return path;
+    var origin = (global.location && global.location.origin) ? global.location.origin : '';
+    return origin + path;
   }
 
   function assetUrl(path) {
@@ -73,6 +94,8 @@
     getBasePath: getBasePath,
     getSessionIdFromLocation: getSessionIdFromLocation,
     labUrl: labUrl,
+    joinUrl: joinUrl,
+    absoluteJoinUrl: absoluteJoinUrl,
     assetUrl: assetUrl
   };
 })(typeof window !== 'undefined' ? window : globalThis);

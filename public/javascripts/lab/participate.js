@@ -169,7 +169,20 @@ $(document).ready(function() {
   initClientSideNetworkingForParticipant(networkMode);
 
   // Note about relay
-  $('#blockchainView').prepend('<div class="alert alert-info small" id="networkModeNote" style="margin-bottom:8px">Using Admin-hosted relay — keep the instructor tab open.</div>');
+  $('#blockchainView').prepend('<div class="alert alert-info small" id="networkModeNote" style="margin-bottom:8px">Connecting to instructor hub…</div>');
+  $('#blockchainView').prepend('<div class="alert alert-warning small" id="connectionStatusNote" style="margin-bottom:8px; display:none;"></div>');
+
+  // If admin state never arrives (WebRTC blocked), seed matching genesis so mining can still start locally
+  setTimeout(function () {
+    if (!window.lastRelayedChain || window.lastRelayedChain.length === 0) {
+      seedLocalGenesisChain();
+      $('#connectionStatusNote').show().html(
+        'No response from instructor yet. Mining uses a local genesis tip — keep the <strong>admin tab open</strong> on the same lab URL. ' +
+        'On phones, use the QR/share link from the admin page (GitHub Pages), not localhost.'
+      );
+      showToastNotification('Waiting for instructor hub — seeded local genesis so you can mine', 'warning');
+    }
+  }, 2500);
 
   loadValidatorCode();
   
@@ -293,7 +306,7 @@ function initClientSideNetworkingForParticipant(mode) {
   net.on('admin-settings-updated', (msg) => {
     const settings = msg.payload || msg;
     debugLog('Settings updated via relay:', settings);
-    lastKnownAdminSettings = settings;
+    lastKnownAdminSettings = normalizeAdminSettings(settings);
 
     if (settings.networkMode) {
       networkMode = settings.networkMode;
@@ -362,6 +375,7 @@ function initClientSideNetworkingForParticipant(mode) {
   net.on('block-accepted', (msg) => {
     const { block, minerId } = msg.payload || msg;
     debugLog('Block accepted via relay from', minerId);
+    $('#connectionStatusNote').hide();
 
     if (block && !seenBlocks.has(block.hash)) {
       seenBlocks.add(block.hash);
@@ -371,7 +385,15 @@ function initClientSideNetworkingForParticipant(mode) {
 
       // Update local relayed chain reference
       if (!window.lastRelayedChain) window.lastRelayedChain = [];
-      window.lastRelayedChain.push(block);
+      const tip = window.lastRelayedChain[window.lastRelayedChain.length - 1];
+      if (!tip || tip.hash !== block.hash) {
+        if (!tip || block.previousHash === tip.hash) {
+          window.lastRelayedChain.push(block);
+        } else {
+          // Prefer longer tip from hub when possible
+          window.lastRelayedChain.push(block);
+        }
+      }
 
       // Update view
       $('#blockchainView').html(`<div class="alert alert-success">New block #${block.index} accepted from relay. Hash: ${block.hash.substring(0,16)}...</div>`);
@@ -393,9 +415,15 @@ function initClientSideNetworkingForParticipant(mode) {
   net.on('initial-state', (msg) => {
     const state = msg.payload || msg;
     debugLog('Received initial state from admin relay', state);
+    $('#connectionStatusNote').hide();
+    $('#networkModeNote').text(
+      networkMode === 'p2p'
+        ? 'Full P2P mode — blocks gossip peer-to-peer.'
+        : 'Connected to Admin-hosted relay — keep the instructor tab open.'
+    );
 
     if (state.adminSettings) {
-      lastKnownAdminSettings = state.adminSettings;
+      lastKnownAdminSettings = normalizeAdminSettings(state.adminSettings);
 
       $('#difficultyLevel').text(
         (state.adminSettings.difficultyLeading || 3) + ' + 0x' +
@@ -775,6 +803,59 @@ function startMining() {
   fetchDataAndMine();
 }
 
+function seedLocalGenesisChain() {
+  if (window.lastRelayedChain && window.lastRelayedChain.length > 0) return;
+  const genesis = {
+    index: 0,
+    hash: '0000000000000000000000000000000000000000000000000000000000000000',
+    previousHash: '0',
+    timestamp: Date.now() - 10000,
+    nonce: 0,
+    transactions: [],
+    miner: 'genesis',
+    data: 'Genesis Block - Blockchain Lab (Client Relay)'
+  };
+  window.lastRelayedChain = [genesis];
+  seenBlocks.add(genesis.hash);
+  lastKnownAdminSettings = normalizeAdminSettings({
+    difficultyLeading: 3,
+    difficultySecondary: 15,
+    miningRewardCoins: 10
+  });
+  $('#difficultyLevel').text('3 + 0xF');
+  $('#blockchainView').append(
+    '<div class="alert alert-warning">Local genesis ready. Start mining — blocks will sync when the instructor hub connects.</div>'
+  );
+}
+
+function normalizeAdminSettings(settings) {
+  const s = Object.assign({}, settings || {});
+  const leading = parseInt(s.difficultyLeading, 10);
+  const secondary = s.difficultySecondary !== undefined ? parseInt(s.difficultySecondary, 10) : 15;
+  s.difficultyLeading = isNaN(leading) ? 3 : leading;
+  s.difficultySecondary = isNaN(secondary) ? 15 : secondary;
+  if (!s.currentDifficulty || typeof s.currentDifficulty !== 'object') {
+    s.currentDifficulty = {
+      leadingZeros: s.difficultyLeading,
+      secondaryHex: Number(s.difficultySecondary).toString(16).toUpperCase()
+    };
+  } else {
+    s.currentDifficulty.leadingZeros = s.currentDifficulty.leadingZeros || s.difficultyLeading;
+    if (s.currentDifficulty.secondaryHex === undefined) {
+      s.currentDifficulty.secondaryHex = Number(s.difficultySecondary).toString(16).toUpperCase();
+    }
+  }
+  return s;
+}
+
+function getMiningDifficulty() {
+  if (lastKnownAdminSettings && lastKnownAdminSettings.currentDifficulty &&
+      typeof lastKnownAdminSettings.currentDifficulty === 'object') {
+    return lastKnownAdminSettings.currentDifficulty;
+  }
+  return normalizeAdminSettings(lastKnownAdminSettings || {}).currentDifficulty;
+}
+
 function fetchDataAndMine() {
   if (!isMining) return;
   
@@ -787,7 +868,7 @@ function fetchDataAndMine() {
       previousHash: collusionTipHash,
       transactions: collusionTransactions,
       miner: userId,
-      difficulty: lastKnownAdminSettings?.currentDifficulty || { leadingZeros: 4, secondaryHex: '8' },
+      difficulty: getMiningDifficulty(),
       hash: '',
       forkId: myForkChoice
     };
@@ -799,20 +880,21 @@ function fetchDataAndMine() {
   if (window.lastRelayedChain && window.lastRelayedChain.length > 0) {
     const tipBlock = window.lastRelayedChain[window.lastRelayedChain.length - 1];
     const newBlock = {
-      index: window.lastRelayedChain.length,
+      index: tipBlock.index + 1,
       timestamp: Date.now(),
       nonce: 0,
       previousHash: tipBlock.hash,
       transactions: [], // pending txs come via relay updates
       miner: userId,
-      difficulty: lastKnownAdminSettings?.currentDifficulty || { leadingZeros: 4, secondaryHex: '8' },
+      difficulty: getMiningDifficulty(),
       hash: '',
       forkId: myForkChoice
     };
     mineBlock(newBlock, lastKnownAdminSettings);
   } else {
-    // No state yet, wait a bit (the initial-state should arrive soon after join)
-    setTimeout(fetchDataAndMine, 1000);
+    // No state yet — seed genesis once, then mine
+    seedLocalGenesisChain();
+    setTimeout(fetchDataAndMine, 200);
   }
 }
 
@@ -1370,17 +1452,21 @@ function isValidHash(hash, difficulty) {
     }
   }
   
-  if (!difficulty) return false;
+  if (difficulty == null) return false;
+  if (typeof difficulty === 'number') {
+    difficulty = { leadingZeros: Math.max(1, Math.floor(difficulty)), secondaryHex: 'F' };
+  }
+  if (typeof difficulty !== 'object') return false;
   
-  const zeros = difficulty.leadingZeros || 4;
+  const zeros = difficulty.leadingZeros != null ? difficulty.leadingZeros : 3;
   for (let i = 0; i < zeros; i++) {
     if (hash[i] !== '0') return false;
   }
   
   // Check secondary difficulty constraint to match backend logic
-  if (difficulty.secondaryHex) {
+  if (difficulty.secondaryHex != null && String(difficulty.secondaryHex) !== '') {
     const nextChar = hash.charAt(zeros);
-    if (nextChar.toLowerCase() > difficulty.secondaryHex.toLowerCase()) return false;
+    if (nextChar && nextChar.toLowerCase() > String(difficulty.secondaryHex).toLowerCase()) return false;
   }
   
   return true;

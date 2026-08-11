@@ -25,15 +25,16 @@ class SimulatedAdminRelayTransport {
 
   async initAsAdmin(roomCode, userId) {
     this.isAdmin = true;
-    this.roomCode = roomCode;
+    this.roomCode = String(roomCode || '').toUpperCase();
     this.userId = userId;
 
-    const channelName = `blockchain-lab-relay-${roomCode}`;
+    const channelName = `blockchain-lab-relay-${this.roomCode}`;
     this.channel = new BroadcastChannel(channelName);
 
     this.channel.onmessage = (event) => {
       const msg = event.data;
-      if (msg.roomCode !== this.roomCode) return;
+      const msgRoom = msg && msg.roomCode ? String(msg.roomCode).toUpperCase() : '';
+      if (msgRoom && msgRoom !== this.roomCode) return;
 
       // Track peers
       if (msg.from && !this.peers.has(msg.from)) {
@@ -55,28 +56,29 @@ class SimulatedAdminRelayTransport {
 
   async joinRoom(roomCode, userId, role) {
     this.isAdmin = false;
-    this.roomCode = roomCode;
+    this.roomCode = String(roomCode || '').toUpperCase();
     this.userId = userId;
 
-    const channelName = `blockchain-lab-relay-${roomCode}`;
+    const channelName = `blockchain-lab-relay-${this.roomCode}`;
     this.channel = new BroadcastChannel(channelName);
 
     this.channel.onmessage = (event) => {
       const msg = event.data;
-      if (msg.roomCode !== this.roomCode) return;
+      const msgRoom = msg && msg.roomCode ? String(msg.roomCode).toUpperCase() : '';
+      if (msgRoom && msgRoom !== this.roomCode) return;
       if (this.onMessage) this.onMessage(msg);
     };
 
     // Announce ourselves to the admin
     this.send({
       type: 'peer-joined',
-      roomCode,
+      roomCode: this.roomCode,
       from: userId,
       role,
       timestamp: Date.now()
     });
 
-    console.log(`[AdminRelay] Joined relay room: ${roomCode} as ${userId}`);
+    console.log(`[AdminRelay] Joined relay room: ${this.roomCode} as ${userId}`);
   }
 
   send(message) {

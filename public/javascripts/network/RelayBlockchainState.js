@@ -30,7 +30,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       totalHashrate: 0,
       blockHeight: 0,
       lastBlockTime: null,
-      totalTransactions: 0
+      totalTransactions: 0,
+      averageBlockTimeMs: null,
+      blockIntervals: []
     };
     this.allBlocks = new Map(); // hash -> block (for simple fork/orphan handling)
     this.genesisCreated = false;
@@ -62,20 +64,38 @@ if (typeof window.RelayBlockchainState === 'undefined') {
   // Update admin settings (called when admin changes sliders)
   updateSettings(newSettings) {
     this.settings = { ...this.settings, ...newSettings };
-    // Recalculate effective difficulty if needed
-    if (newSettings.difficultyLeading !== undefined || newSettings.difficultySecondary !== undefined) {
-      this.settings.currentDifficulty = this.calculateDifficulty(
-        this.settings.difficultyLeading,
-        this.settings.difficultySecondary
-      );
-    }
+    // Always expose a miner-friendly difficulty object
+    const leading = this.settings.difficultyLeading || 3;
+    const secondary = this.settings.difficultySecondary !== undefined ? this.settings.difficultySecondary : 15;
+    this.settings.currentDifficulty = {
+      leadingZeros: leading,
+      secondaryHex: Number(secondary).toString(16).toUpperCase()
+    };
   }
 
   calculateDifficulty(leading, secondary) {
-    // Simplified version of the server logic
-    let diff = leading;
-    if (secondary < 15) diff += 0.5;
-    return diff;
+    return {
+      leadingZeros: leading || 3,
+      secondaryHex: Number(secondary !== undefined ? secondary : 15).toString(16).toUpperCase()
+    };
+  }
+
+  _recordBlockInterval(block) {
+    const prev = this.chain.length >= 2 ? this.chain[this.chain.length - 2] : null;
+    if (!prev || !block || !block.timestamp || !prev.timestamp) return;
+    // Ignore genesis→first interval noise if genesis used a fake older timestamp
+    if (prev.index === 0 && prev.miner === 'genesis') {
+      // still record first real block interval from "now-ish" genesis for demo value
+    }
+    const interval = Math.max(0, (block.timestamp || 0) - (prev.timestamp || 0));
+    if (!Array.isArray(this.networkStats.blockIntervals)) this.networkStats.blockIntervals = [];
+    this.networkStats.blockIntervals.push(interval);
+    // Keep last 20 intervals
+    if (this.networkStats.blockIntervals.length > 20) {
+      this.networkStats.blockIntervals = this.networkStats.blockIntervals.slice(-20);
+    }
+    const sum = this.networkStats.blockIntervals.reduce((a, b) => a + b, 0);
+    this.networkStats.averageBlockTimeMs = sum / this.networkStats.blockIntervals.length;
   }
 
   // Called when a new peer joins via the relay
@@ -133,12 +153,19 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       this.chain.push(block);
       this.networkStats.blockHeight = this.chain.length - 1;
       this.networkStats.lastBlockTime = block.timestamp || Date.now();
+      this._recordBlockInterval(block);
 
       // Reward the miner (educational)
       const miner = this.participants.get(fromUserId);
       if (miner) {
         miner.blocksMined = (miner.blocksMined || 0) + 1;
         miner.balance = (miner.balance || 0) + (this.settings.miningRewardCoins || 10);
+      } else if (fromUserId) {
+        // Auto-register unknown miner so UI updates even if peer-joined was missed
+        this.addOrUpdateParticipant(fromUserId, 'miner', {
+          blocksMined: 1,
+          balance: this.settings.miningRewardCoins || 10
+        });
       }
 
       return {

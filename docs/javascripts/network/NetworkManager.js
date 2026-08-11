@@ -56,7 +56,10 @@ class NetworkManager {
       if (!msg) return;
       // Honor targeted messages when present
       if (msg.to && self.userId && msg.to !== self.userId && !self.isAdmin) return;
-      if (msg.roomCode && self.roomCode && msg.roomCode !== self.roomCode) return;
+      // Normalize room codes (join codes are case-insensitive)
+      var msgRoom = msg.roomCode ? String(msg.roomCode).toUpperCase() : '';
+      var myRoom = self.roomCode ? String(self.roomCode).toUpperCase() : '';
+      if (msgRoom && myRoom && msgRoom !== myRoom) return;
       self._emit(msg.type, msg);
     };
 
@@ -96,12 +99,12 @@ class NetworkManager {
 
   async joinRoom(roomCode, userId, role) {
     role = role || 'miner';
-    this.roomCode = roomCode;
+    this.roomCode = String(roomCode || '').toUpperCase();
     this.userId = userId;
     this.role = role;
     this.isAdmin = (role === 'admin');
 
-    await this.transport.joinRoom(roomCode, userId, role);
+    await this.transport.joinRoom(this.roomCode, userId, role);
 
     this._emit('joined-room', {
       roomCode: roomCode,
@@ -115,7 +118,7 @@ class NetworkManager {
     var msg = {
       type: type,
       from: this.userId,
-      roomCode: this.roomCode,
+      roomCode: this.roomCode ? String(this.roomCode).toUpperCase() : this.roomCode,
       payload: payload,
       timestamp: Date.now()
     };
@@ -129,6 +132,8 @@ class NetworkManager {
     }
 
     this.transport.send(msg);
+    // Local echo so the sender's UI/handlers update (BroadcastChannel does not deliver to self)
+    this._emit(type, msg);
   }
 
   getPeerCount() {

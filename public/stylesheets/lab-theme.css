@@ -1,0 +1,514 @@
+/**
+ * The Blockchain Lab — classroom UI theme
+ * Cool slate + mint/amber accents (finance / ledger feel)
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Outfit:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap');
+
+:root {
+  --lab-ink: #0f1c24;
+  --lab-ink-soft: #2a3d4a;
+  --lab-muted: #5c7380;
+  --lab-paper: #e8f0f2;
+  --lab-paper-2: #f3f7f8;
+  --lab-surface: rgba(255, 255, 255, 0.86);
+  --lab-surface-solid: #fbfdfe;
+  --lab-line: rgba(15, 28, 36, 0.1);
+  --lab-teal: #0d9488;
+  --lab-teal-deep: #0f766e;
+  --lab-mint: #5eead4;
+  --lab-amber: #d97706;
+  --lab-amber-soft: #fbbf24;
+  --lab-danger: #c2410c;
+  --lab-radius: 14px;
+  --lab-shadow: 0 18px 40px rgba(15, 28, 36, 0.08);
+  --lab-font: 'Outfit', 'Segoe UI', sans-serif;
+  --lab-display: 'Syne', 'Outfit', sans-serif;
+  --lab-mono: 'IBM Plex Mono', Menlo, Consolas, monospace;
+}
+
+body.lab-app {
+  font-family: var(--lab-font);
+  color: var(--lab-ink);
+  background-color: #d7e4e8;
+  background-image:
+    radial-gradient(ellipse 90% 60% at 10% -10%, rgba(94, 234, 212, 0.35), transparent 55%),
+    radial-gradient(ellipse 70% 50% at 100% 0%, rgba(251, 191, 36, 0.18), transparent 50%),
+    radial-gradient(ellipse 80% 60% at 50% 110%, rgba(13, 148, 136, 0.12), transparent 55%),
+    linear-gradient(165deg, #eef5f7 0%, #dce8ec 48%, #d2e0e5 100%);
+  background-attachment: fixed;
+  min-height: 100%;
+}
+
+/* subtle ledger grid */
+body.lab-app::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.35;
+  background-image:
+    linear-gradient(rgba(15, 28, 36, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 28, 36, 0.04) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+}
+
+body.lab-app > .container,
+body.lab-app > .container-fluid {
+  position: relative;
+  z-index: 1;
+  padding-top: 72px;
+  padding-bottom: 40px;
+}
+
+/* ——— Nav ——— */
+body.lab-app .navbar-inverse {
+  background: rgba(15, 28, 36, 0.92);
+  border: none;
+  box-shadow: 0 8px 24px rgba(15, 28, 36, 0.18);
+  backdrop-filter: blur(10px);
+}
+
+body.lab-app .navbar-inverse .navbar-brand {
+  font-family: var(--lab-display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-size: 18px;
+  color: #fff !important;
+}
+
+body.lab-app .navbar-inverse .navbar-brand:hover {
+  color: var(--lab-mint) !important;
+}
+
+body.lab-app .navbar-inverse .navbar-nav > li > a {
+  color: rgba(255, 255, 255, 0.78) !important;
+  font-weight: 500;
+  font-size: 13px;
+}
+
+body.lab-app .navbar-inverse .navbar-nav > li > a:hover,
+body.lab-app .navbar-inverse .navbar-nav > .active > a {
+  color: #fff !important;
+  background: rgba(13, 148, 136, 0.25) !important;
+}
+
+/* ——— Landing ——— */
+.lab-landing {
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.lab-landing__brand {
+  text-align: center;
+  margin: 12px 0 36px;
+  animation: labFadeUp 0.55s ease-out both;
+}
+
+.lab-landing__brand h1 {
+  font-family: var(--lab-display);
+  font-weight: 800;
+  font-size: clamp(2.4rem, 5vw, 3.6rem);
+  letter-spacing: -0.04em;
+  margin: 0 0 10px;
+  color: var(--lab-ink);
+  line-height: 1.05;
+}
+
+.lab-landing__brand .lead {
+  font-size: 1.15rem;
+  color: var(--lab-muted);
+  max-width: 34em;
+  margin: 0 auto;
+  font-weight: 400;
+}
+
+.lab-landing__eyebrow {
+  display: inline-block;
+  font-family: var(--lab-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--lab-teal-deep);
+  background: rgba(13, 148, 136, 0.12);
+  border: 1px solid rgba(13, 148, 136, 0.22);
+  padding: 6px 12px;
+  border-radius: 999px;
+  margin-bottom: 16px;
+}
+
+.lab-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  animation: labFadeUp 0.65s 0.08s ease-out both;
+}
+
+@media (max-width: 767px) {
+  .lab-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.lab-action {
+  background: var(--lab-surface);
+  border: 1px solid var(--lab-line);
+  border-radius: var(--lab-radius);
+  box-shadow: var(--lab-shadow);
+  padding: 28px 26px 24px;
+  backdrop-filter: blur(8px);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.lab-action:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 22px 48px rgba(15, 28, 36, 0.12);
+}
+
+.lab-action h2 {
+  font-family: var(--lab-display);
+  font-size: 1.35rem;
+  font-weight: 700;
+  margin: 0 0 8px;
+  letter-spacing: -0.02em;
+}
+
+.lab-action p {
+  color: var(--lab-muted);
+  margin-bottom: 18px;
+}
+
+.lab-action--instructor {
+  border-top: 3px solid var(--lab-teal);
+}
+
+.lab-action--student {
+  border-top: 3px solid var(--lab-amber);
+}
+
+.lab-about {
+  margin-top: 28px;
+  padding: 22px 24px;
+  border-radius: var(--lab-radius);
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--lab-line);
+  animation: labFadeUp 0.7s 0.14s ease-out both;
+}
+
+.lab-about h3 {
+  font-family: var(--lab-display);
+  font-size: 1.05rem;
+  margin: 0 0 10px;
+}
+
+.lab-about ul {
+  margin: 8px 0 12px 18px;
+  color: var(--lab-ink-soft);
+}
+
+.lab-concept-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 4px;
+  padding: 0;
+  list-style: none;
+}
+
+.lab-concept-tags li {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: rgba(15, 28, 36, 0.05);
+  border: 1px solid var(--lab-line);
+  color: var(--lab-ink-soft);
+}
+
+/* ——— Buttons ——— */
+body.lab-app .btn {
+  font-family: var(--lab-font);
+  font-weight: 600;
+  border-radius: 10px;
+  border: none;
+  letter-spacing: 0.01em;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+body.lab-app .btn-lg {
+  padding: 12px 22px;
+  font-size: 15px;
+}
+
+body.lab-app .btn-primary,
+body.lab-app .btn-primary:focus {
+  background: linear-gradient(180deg, #14b8a6 0%, var(--lab-teal-deep) 100%);
+  box-shadow: 0 8px 18px rgba(13, 148, 136, 0.28);
+}
+
+body.lab-app .btn-primary:hover {
+  background: linear-gradient(180deg, #2dd4bf 0%, var(--lab-teal) 100%);
+  transform: translateY(-1px);
+}
+
+body.lab-app .btn-success,
+body.lab-app .btn-success:focus {
+  background: linear-gradient(180deg, #f59e0b 0%, var(--lab-amber) 100%);
+  box-shadow: 0 8px 18px rgba(217, 119, 6, 0.25);
+  color: #fff;
+}
+
+body.lab-app .btn-success:hover {
+  background: linear-gradient(180deg, #fbbf24 0%, #ea580c 100%);
+  color: #fff;
+}
+
+body.lab-app .btn-danger {
+  background: linear-gradient(180deg, #ea580c 0%, var(--lab-danger) 100%);
+}
+
+body.lab-app .btn-info {
+  background: linear-gradient(180deg, #38bdf8 0%, #0284c7 100%);
+}
+
+body.lab-app .btn-warning {
+  background: linear-gradient(180deg, #fbbf24 0%, #d97706 100%);
+  color: #1c1917;
+}
+
+body.lab-app .btn-default {
+  background: #fff;
+  border: 1px solid var(--lab-line);
+  color: var(--lab-ink);
+}
+
+body.lab-app .btn-block + .btn-block {
+  margin-top: 8px;
+}
+
+/* ——— Forms ——— */
+body.lab-app .form-control {
+  border-radius: 10px;
+  border: 1px solid var(--lab-line);
+  box-shadow: none;
+  height: auto;
+  padding: 10px 12px;
+  font-size: 14px;
+  background: #fff;
+}
+
+body.lab-app .form-control:focus {
+  border-color: var(--lab-teal);
+  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.18);
+}
+
+body.lab-app label {
+  font-weight: 600;
+  color: var(--lab-ink-soft);
+  font-size: 13px;
+}
+
+body.lab-app #joinCode {
+  font-family: var(--lab-mono);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-size: 18px;
+  text-align: center;
+}
+
+/* ——— Panels / wells (lab pages) ——— */
+body.lab-app .panel {
+  background: var(--lab-surface);
+  border: 1px solid var(--lab-line);
+  border-radius: var(--lab-radius);
+  box-shadow: var(--lab-shadow);
+  overflow: hidden;
+  backdrop-filter: blur(8px);
+}
+
+body.lab-app .panel > .panel-heading {
+  background: transparent !important;
+  border-bottom: 1px solid var(--lab-line);
+  color: var(--lab-ink) !important;
+  font-family: var(--lab-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  padding: 12px 16px;
+}
+
+body.lab-app .panel-title {
+  font-size: 15px;
+  color: inherit !important;
+}
+
+body.lab-app .panel-body {
+  padding: 16px;
+}
+
+body.lab-app .panel-primary > .panel-heading,
+body.lab-app .panel-info > .panel-heading,
+body.lab-app .panel-success > .panel-heading,
+body.lab-app .panel-warning > .panel-heading,
+body.lab-app .panel-default > .panel-heading,
+body.lab-app .panel-danger > .panel-heading {
+  background: rgba(15, 28, 36, 0.03) !important;
+}
+
+body.lab-app .panel-primary {
+  border-top: 3px solid var(--lab-teal);
+}
+
+body.lab-app .panel-success {
+  border-top: 3px solid #16a34a;
+}
+
+body.lab-app .panel-info {
+  border-top: 3px solid #0284c7;
+}
+
+body.lab-app .panel-warning {
+  border-top: 3px solid var(--lab-amber);
+}
+
+body.lab-app .panel-danger {
+  border-top: 3px solid var(--lab-danger);
+}
+
+body.lab-app .well {
+  background: rgba(15, 28, 36, 0.03);
+  border: 1px solid var(--lab-line);
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+body.lab-app .table {
+  font-size: 13px;
+}
+
+body.lab-app .table > thead > tr > th {
+  border-bottom: 1px solid var(--lab-line);
+  color: var(--lab-muted);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+body.lab-app .table-striped > tbody > tr:nth-of-type(odd) {
+  background: rgba(15, 28, 36, 0.025);
+}
+
+body.lab-app .label {
+  border-radius: 6px;
+  font-weight: 600;
+  font-family: var(--lab-font);
+  padding: 0.35em 0.55em;
+}
+
+body.lab-app code,
+body.lab-app #sessionCode {
+  font-family: var(--lab-mono) !important;
+}
+
+body.lab-app #sessionCode {
+  background: linear-gradient(180deg, #0f1c24 0%, #1a303c 100%) !important;
+  color: var(--lab-mint) !important;
+  border-radius: 12px !important;
+  border: 1px solid rgba(94, 234, 212, 0.25);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+/* Session share card */
+.lab-session-banner {
+  margin-bottom: 18px;
+}
+
+.lab-session-banner .panel-body {
+  padding: 20px;
+}
+
+#joinQrCanvas {
+  border-radius: 12px !important;
+  border: 1px solid var(--lab-line) !important;
+  box-shadow: 0 8px 20px rgba(15, 28, 36, 0.08);
+}
+
+body.lab-app .alert {
+  border-radius: 12px;
+  border: 1px solid var(--lab-line);
+}
+
+body.lab-app .alert-info {
+  background: rgba(14, 165, 233, 0.1);
+  color: #0c4a6e;
+}
+
+body.lab-app .alert-success {
+  background: rgba(13, 148, 136, 0.12);
+  color: #134e4a;
+}
+
+body.lab-app .alert-warning {
+  background: rgba(217, 119, 6, 0.12);
+  color: #7c2d12;
+}
+
+/* Stats strip */
+body.lab-app #blockHeight,
+body.lab-app #participantCount,
+body.lab-app #totalHashrate,
+body.lab-app #avgBlockTime,
+body.lab-app #lastBlockTime,
+body.lab-app #yourBalance,
+body.lab-app #blocksMined,
+body.lab-app #yourHashrate,
+body.lab-app #difficultyLevel {
+  font-family: var(--lab-display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--lab-ink);
+}
+
+body.lab-app #networkVisualizationSvg {
+  border-radius: 12px !important;
+  border: 1px solid var(--lab-line) !important;
+  background: linear-gradient(180deg, #f8fbfc 0%, #eef4f6 100%) !important;
+}
+
+/* Chain blocks in admin render */
+body.lab-app #blockchainView .panel {
+  transition: transform 0.15s ease;
+}
+
+body.lab-app #blockchainView .panel:hover {
+  transform: translateY(-1px);
+}
+
+@keyframes labFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 767px) {
+  body.lab-app > .container,
+  body.lab-app > .container-fluid {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .lab-landing__brand h1 {
+    font-size: 2.2rem;
+  }
+
+  .lab-action {
+    padding: 22px 18px;
+  }
+}

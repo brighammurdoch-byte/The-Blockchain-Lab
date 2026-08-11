@@ -1,18 +1,37 @@
 extends ../layout
 
+block config
+  - bodyClass = 'lab-app'
+
+block extra_css
+  link(rel='stylesheet', href='/stylesheets/lab-theme.css?v=labui1')
+
 block content
   .container-fluid
-    .row
+    .row.lab-session-banner
       .col-md-12.mb-3
         .panel.panel-info
           .panel-heading
             h3.panel-title Session Information
           .panel-body
-            p
-              strong Session Code:
-              br
-              code#sessionCode.text-center(style="display: block; font-size: 1.5em; padding: 10px; background: #f5f5f5;") #{sessionId}
-            small Share this code with students to join. <strong>This browser is the admin hub</strong> (no separate token needed in client-relay mode).
+            .row
+              .col-sm-7
+                p
+                  strong Session Code:
+                  br
+                  code#sessionCode.text-center(style="display: block; font-size: 2em; letter-spacing: 0.12em; padding: 12px; background: #f5f5f5;") #{sessionId}
+                p
+                  strong Share link (laptops / chat):
+                  .input-group
+                    input.form-control#joinShareLink(type="text", readonly, value="", style="font-size: 12px;")
+                    span.input-group-btn
+                      button.btn.btn-default#copyJoinLinkBtn(type="button") Copy
+                small.text-muted Students open the link, pick Miner or Wallet, then Join. <strong>Keep this admin tab open</strong> — it is the classroom hub.
+              .col-sm-5.text-center
+                strong#joinQrLabel Scan to join (phones)
+                br
+                canvas#joinQrCanvas(width="180", height="180", style="margin-top: 8px; border: 1px solid #ddd; border-radius: 4px; background: #fff;")
+                p.small.text-muted(style="margin-top: 8px;") Opens the lab with this session code filled in.
 
     .row
       .col-md-3
@@ -105,8 +124,12 @@ block content
                 h4#totalHashrate 0 H/s
                 small Network Hashrate
               .col-md-3
+                h4#avgBlockTime —
+                small Avg Block Time
+            .row.text-center(style="margin-top: 10px;")
+              .col-md-3
                 h4#lastBlockTime 0s
-                small Last Block
+                small Since Last Block
 
         .panel.panel-default
           .panel-heading
@@ -165,14 +188,15 @@ block content
         .modal-footer
           button.btn.btn-secondary(type="button", data-dismiss="modal") Close
 
-  script(src="/javascripts/lib/p2pt.bundle.js?v=classroom")
-  script(src="/javascripts/lab/labPaths.js?v=classroom")
-  script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=classroom")
-  script(src="/javascripts/network/P2PAdminRelayTransport.js?v=classroom")
-  script(src="/javascripts/network/AdminRelayCoordinator.js?v=classroom")
-  script(src="/javascripts/network/Persistence.js?v=classroom")
-  script(src="/javascripts/network/RelayBlockchainState.js?v=classroom")
-  script(src="/javascripts/network/NetworkManager.js?v=classroom")
-  script(src="/javascripts/lab/chainDisplay.js?v=classroom")
-  script(src="/javascripts/lab/networkVisualization.js?v=classroom")
-  script(src="/javascripts/lab/admin.js?v=classroom")
+  script(src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js")
+  script(src="/javascripts/lib/p2pt.bundle.js?v=fixrelay")
+  script(src="/javascripts/lab/labPaths.js?v=fixrelay")
+  script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=fixrelay")
+  script(src="/javascripts/network/P2PAdminRelayTransport.js?v=fixrelay")
+  script(src="/javascripts/network/AdminRelayCoordinator.js?v=fixrelay")
+  script(src="/javascripts/network/Persistence.js?v=fixrelay")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=fixrelay")
+  script(src="/javascripts/network/NetworkManager.js?v=fixrelay")
+  script(src="/javascripts/lab/chainDisplay.js?v=fixrelay")
+  script(src="/javascripts/lab/networkVisualization.js?v=fixrelay")
+  script(src="/javascripts/lab/admin.js?v=fixrelay")

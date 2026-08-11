@@ -65,4 +65,26 @@ $(document).ready(function () {
     const $btn = $('#joinForm button[type="submit"]');
     $btn.text(role === 'observer' ? 'Join as Wallet' : 'Join as Miner');
   })();
+
+  // Prefill from ?join= / ?session= / ?code= (QR + share links)
+  (function prefillJoinFromQuery() {
+    var code = (window.LabPaths && LabPaths.getSessionIdFromLocation)
+      ? LabPaths.getSessionIdFromLocation()
+      : '';
+    if (!code) {
+      try {
+        var params = new URLSearchParams(window.location.search || '');
+        code = (params.get('join') || params.get('session') || params.get('code') || '').trim().toUpperCase();
+      } catch (e) {}
+    }
+    if (!code) return;
+    $('#joinCode').val(code);
+    var $studentPanel = $('#joinForm').closest('.panel');
+    if ($studentPanel.length) {
+      $studentPanel.addClass('panel-success');
+      $studentPanel.find('.panel-heading .panel-title').text('Student — session ' + code);
+    }
+    $('html, body').animate({ scrollTop: $('#joinForm').offset().top - 80 }, 300);
+    $('#roleSelect').focus();
+  })();
 });

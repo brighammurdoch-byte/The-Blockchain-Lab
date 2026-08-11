@@ -62,6 +62,7 @@ $(document).ready(function() {
   // Display session code (from storage or the one passed from server/URL)
   const joinCode = localStorage.getItem('joinCode_' + sessionId) || sessionId;
   $('#sessionCode').text(joinCode);
+  renderJoinShareCard(joinCode);
   $('#sessionCode').after('<span style="display: block; margin-top: 10px; text-align: center;"><strong>Your Role: </strong><span class="label label-danger" style="font-size: 1em;">Admin</span></span>');
 
   // Client-relay badge
@@ -96,6 +97,84 @@ $(document).ready(function() {
   // Set up event handlers
   setupEventHandlers();
 });
+
+/** Share link + QR for student join (phones scan; laptops copy URL). */
+function renderJoinShareCard(roomCode) {
+  const code = String(roomCode || '').toUpperCase();
+  if (!code) return;
+
+  let url = '';
+  if (window.LabPaths && typeof LabPaths.absoluteJoinUrl === 'function') {
+    url = LabPaths.absoluteJoinUrl(code);
+  } else {
+    url = window.location.origin + '/lab?join=' + encodeURIComponent(code);
+  }
+
+  $('#joinShareLink').val(url);
+
+  $('#copyJoinLinkBtn').off('click').on('click', function () {
+    const link = $('#joinShareLink').val();
+    const done = function () {
+      showToastNotification('Join link copied — paste into chat or email', 'success');
+      $('#copyJoinLinkBtn').text('Copied!');
+      setTimeout(function () { $('#copyJoinLinkBtn').text('Copy'); }, 2000);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(done).catch(function () {
+        $('#joinShareLink').select();
+        try { document.execCommand('copy'); done(); } catch (e) {
+          showToastNotification('Select the link and copy manually (Ctrl+C)', 'info');
+        }
+      });
+    } else {
+      $('#joinShareLink').select();
+      try { document.execCommand('copy'); done(); } catch (e) {
+        showToastNotification('Select the link and copy manually (Ctrl+C)', 'info');
+      }
+    }
+  });
+
+  const canvas = document.getElementById('joinQrCanvas');
+  if (!canvas) return;
+
+  function drawQr() {
+    if (typeof QRCode === 'undefined' || typeof QRCode.toCanvas !== 'function') {
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#666';
+        ctx.font = '12px sans-serif';
+        ctx.fillText('QR unavailable', 40, 90);
+        ctx.fillText('(check network/CDN)', 30, 110);
+      }
+      return;
+    }
+    QRCode.toCanvas(canvas, url, {
+      width: 180,
+      margin: 2,
+      color: { dark: '#111111', light: '#ffffff' }
+    }, function (err) {
+      if (err) {
+        console.warn('[Admin] QR render failed', err);
+        showToastNotification('Could not draw QR code — use the share link instead', 'error');
+      }
+    });
+  }
+
+  if (typeof QRCode !== 'undefined') {
+    drawQr();
+  } else {
+    // CDN may still be loading
+    let tries = 0;
+    const timer = setInterval(function () {
+      tries += 1;
+      if (typeof QRCode !== 'undefined' || tries > 40) {
+        clearInterval(timer);
+        drawQr();
+      }
+    }, 100);
+  }
+}
 
 // Client-relay networking initialization (the only mode now)
 function initClientSideNetworking(mode, roomCode) {
@@ -170,11 +249,6 @@ function initClientSideNetworking(mode, roomCode) {
     if (typeof renderClientRelayChain === 'function') {
       renderClientRelayChain();
     }
-    // Also early defaults for stats
-    $('#blockHeight').text('0');
-    $('#participantCount').text('0');
-    $('#totalHashrate').text('0 H/s');
-    $('#lastBlockTime').text('0s');
 
     // Broadcast initial state so any already-joined peers (or late joiners) get the chain immediately
     if (net) {
@@ -743,6 +817,13 @@ function renderClientRelayChain() {
   if (relayState.networkStats.lastBlockTime) {
     const secondsAgo = Math.floor((Date.now() - relayState.networkStats.lastBlockTime) / 1000);
     $('#lastBlockTime').text(secondsAgo + 's');
+  }
+  const avgMs = relayState.networkStats.averageBlockTimeMs;
+  if (avgMs != null && !isNaN(avgMs) && chain.length > 1) {
+    const avgSec = avgMs / 1000;
+    $('#avgBlockTime').text(avgSec >= 10 ? avgSec.toFixed(0) + 's' : avgSec.toFixed(1) + 's');
+  } else {
+    $('#avgBlockTime').text('—');
   }
 
   // Update participants table from relay state

@@ -80,6 +80,10 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
       joinedAt: msg.timestamp
     });
 
+    if (this.lab && typeof this.lab.addOrUpdateParticipant === 'function') {
+      this.lab.addOrUpdateParticipant(msg.from, role);
+    }
+
     // Prefer the new RelayBlockchainState API
     let state;
     if (this.lab && typeof this.lab.getSanitizedStateForNewPeer === 'function') {

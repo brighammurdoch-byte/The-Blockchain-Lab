@@ -1,5 +1,11 @@
 extends ../layout
 
+block config
+  - bodyClass = 'lab-app'
+
+block extra_css
+  link(rel='stylesheet', href='/stylesheets/lab-theme.css?v=labui1')
+
 block content
   .container-fluid
     .row

@@ -1,66 +1,62 @@
 extends ../layout
 
+block config
+  - bodyClass = 'lab-app'
+
+block extra_css
+  link(rel='stylesheet', href='/stylesheets/lab-theme.css?v=labui1')
+
 block content
-  .container
-    h1.text-center Blockchain Lab
-    p.text-center.lead A classroom blockchain network for learning
+  .container.lab-landing
+    .lab-landing__brand
+      span.lab-landing__eyebrow Classroom simulation
+      h1 The Blockchain Lab
+      p.lead
+        | Run a live Proof-of-Work network with your class — mine blocks, move coins,
+        | and watch consensus form in real time.
 
-    .row.mt-5
-      .col-md-6
-        .panel.panel-default
-          .panel-heading
-            h3.panel-title.text-center Instructor
-          .panel-body.text-center
-            p.lead Create and manage a classroom blockchain
-            button.btn.btn-primary.btn-lg#createSessionBtn Create Session
-            p.mt-3
-              small The admin's browser acts as the coordinator (no backend session required). No separate admin token is issued.
+    .lab-split
+      .lab-action.lab-action--instructor
+        h2 Instructor
+        p Create a session. Your browser becomes the hub — share the code or QR with students.
+        button.btn.btn-primary.btn-lg.btn-block#createSessionBtn Create Session
+        p(style="margin-top:14px;margin-bottom:0;")
+          small.text-muted Keep the admin tab open for the whole class period.
 
-      .col-md-6
-        .panel.panel-default
-          .panel-heading
-            h3.panel-title.text-center Student
-          .panel-body
-            p.lead Join a classroom blockchain with a code
-            form#joinForm
-              .form-group
-                label(for="joinCode") Session Code:
-                input.form-control(type="text", id="joinCode", name="joinCode", placeholder="e.g., ABC123", required, maxlength="6")
-              .form-group
-                label(for="roleSelect") Select your role:
-                select.form-control#roleSelect(name="role")
-                  option(value="participant" selected) Participant (Mine blocks)
-                  option(value="observer") Observer (Watch the network)
-              button.btn.btn-success.btn-lg(type="submit") Join
+      .lab-action.lab-action--student
+        h2 Student
+        p Join with a session code (or a shared link / QR). Choose miner or wallet.
+        form#joinForm
+          .form-group
+            label(for="joinCode") Session code
+            input.form-control(type="text", id="joinCode", name="joinCode", placeholder="ABC123", required, maxlength="6", autocomplete="off")
+          .form-group
+            label(for="roleSelect") Role
+            select.form-control#roleSelect(name="role")
+              option(value="participant" selected) Miner — find blocks
+              option(value="observer") Wallet — watch &amp; send
+          button.btn.btn-success.btn-lg.btn-block(type="submit") Join as Miner
 
-    .row.mt-5
-      .col-md-12
-        .panel.panel-info
-          .panel-heading
-            h3.panel-title About Blockchain Lab
-          .panel-body
-            p
-              | This interactive demonstration shows how blockchains work in a peer-to-peer network.
-              | As an instructor, you can create a session and give students a code to join.
-              | Students can observe the blockchain or participate in mining blocks.
-            p
-              strong Key concepts demonstrated:
-              ul
-                li Proof of Work (PoW) mining
-                li Block validation and chain integrity
-                li Network consensus
-                li 51% attack vulnerability
-                li Transaction processing
-            p
-              | Based on #{' '}
-              a(href="http://andersbrownworth.com/blockchain/") Anders Brownworth's Blockchain Demo
+    .lab-about
+      h3 What you’ll demonstrate
+      ul.lab-concept-tags
+        li Proof of Work
+        li Consensus
+        li Transactions
+        li 51% attacks
+        li Hard forks
+      p(style="margin-bottom:0;color:#5c7380;font-size:13px;")
+        | Based on
+        |
+        a(href="http://andersbrownworth.com/blockchain/") Anders Brownworth’s Blockchain Demo
+        | . No backend session server required — coordination runs in the browsers.
 
-  script(src="/javascripts/lib/p2pt.bundle.js?v=classroom")
-  script(src="/javascripts/lab/labPaths.js?v=classroom")
-  script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=classroom")
-  script(src="/javascripts/network/P2PAdminRelayTransport.js?v=classroom")
-  script(src="/javascripts/network/AdminRelayCoordinator.js?v=classroom")
-  script(src="/javascripts/network/Persistence.js?v=classroom")
-  script(src="/javascripts/network/RelayBlockchainState.js?v=classroom")
-  script(src="/javascripts/network/NetworkManager.js?v=classroom")
-  script(src="/javascripts/lab/landing.js?v=classroom")
+  script(src="/javascripts/lib/p2pt.bundle.js?v=fixrelay")
+  script(src="/javascripts/lab/labPaths.js?v=fixrelay")
+  script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=fixrelay")
+  script(src="/javascripts/network/P2PAdminRelayTransport.js?v=fixrelay")
+  script(src="/javascripts/network/AdminRelayCoordinator.js?v=fixrelay")
+  script(src="/javascripts/network/Persistence.js?v=fixrelay")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=fixrelay")
+  script(src="/javascripts/network/NetworkManager.js?v=fixrelay")
+  script(src="/javascripts/lab/landing.js?v=fixrelay")

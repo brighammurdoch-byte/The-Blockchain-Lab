@@ -41,6 +41,7 @@ function renderLabPage(viewRelative, locals) {
   const html = pug.renderFile(file, Object.assign({
     title: 'Blockchain Lab',
     sessionId: '',
+    bodyClass: 'lab-app',
     __: (s) => s,
     basedir: VIEWS
   }, locals));

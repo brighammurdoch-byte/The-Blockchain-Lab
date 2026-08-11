@@ -20,8 +20,8 @@ Use this for a live finance/classroom demo with **no Node server during class**.
 
 1. Open the lab URL on the **projector laptop** (Chrome or Edge).
 2. Click **Create Session**. Leave that tab open — it is the classroom hub.
-3. Write the **6-character code** on the board (or use the large Session Code on screen).
-4. Students open the same lab URL → enter the code → **Participant (Mine)** or **Observer (Wallet)**.
+3. Write the **6-character code** on the board, or project the **QR code** / copy the **share link** from the admin Session panel.
+4. Students scan the QR (phones) or open the link (laptops) → pick Miner or Wallet → Join.
 5. On the admin dashboard, set difficulty (start at **2–3** leading zeros so blocks appear quickly).
 6. Ask several miners to click **Start Mining**. Watch height / hashrate update live.
 7. Optional teaching switch: set **Network Mode → Full P2P**, click **Update Settings**. Explain: messages now gossip peer-to-peer instead of through the instructor hub.

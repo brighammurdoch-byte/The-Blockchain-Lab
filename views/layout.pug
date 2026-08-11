@@ -4,8 +4,8 @@ html
     meta(charset='utf-8')
     meta(http-equiv='X-UA-Compatible', content='IE=edge')
     meta(name='viewport', content='width=device-width, initial-scale=1')
-    meta(name='description', content='A live blockchain demo in a browser.')
-    meta(name='author', content='Anders Brownworth')
+    meta(name='description', content='A live classroom blockchain lab for learning Proof of Work, consensus, and attacks.')
+    meta(name='author', content='Anders Brownworth / Blockchain Lab')
     link(rel='icon', href='/favicon.ico')
 
     title Blockchain Demo
@@ -16,6 +16,7 @@ html
     link(rel='stylesheet', href='/stylesheets/lib/ladda-themeless.min.css')
     link(rel='stylesheet', href='/stylesheets/lib/ie10-viewport-bug-workaround.css')
     link(rel='stylesheet', href='/stylesheets/blockchain.css')
+    block extra_css
 
     script(src='/javascripts/lib/jquery.min.js')
     script(src='/javascripts/lib/bootstrap.min.js')
@@ -25,9 +26,9 @@ html
     script(src='/javascripts/lib/sha256.js')
     script(src='https://d3js.org/d3.v7.min.js')
     script(src='/javascripts/blockchain.js')
-    // lab/networkVisualization.js is included per-page (admin) with cache-buster for client-relay lab only; not global
 
-  body
+  block config
+  body(class=bodyClass || '')
     nav.navbar.navbar-inverse.navbar-fixed-top
       .container
         .navbar-header
@@ -57,8 +58,7 @@ html
                 li(class={active: page === 'coinbase'})
                   a(href='/coinbase') #{__('Coinbase')}
             li(class={active: page === 'lab'})
-              a(href='/lab') 
-                i.glyphicon.glyphicon-play
-                |  #{__('Full Simulation')}
+              a(href='/lab')
+                | #{__('Full Simulation')}
 
     block content
