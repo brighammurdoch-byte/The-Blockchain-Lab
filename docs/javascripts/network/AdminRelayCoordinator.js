@@ -121,6 +121,10 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
           ? Array.from(this.lab.participants.values())
           : []);
 
+      // Compact MQTT payloads: full chain only on reorg/orphan — tip extensions send the new block only.
+      // Flooding the full chain on every block kills public MQTT brokers in fast classroom demos.
+      const needFullChain = !!(result.reorg || result.isFork || !result.tipChanged);
+
       this.net.send('block-accepted', {
         block,
         minerId: from,
@@ -128,8 +132,8 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
         reorg: !!result.reorg,
         tipChanged: !!result.tipChanged,
         newHeight: result.newHeight,
-        chain: chain,
-        orphans: snap.orphans || [],
+        chain: needFullChain ? chain : undefined,
+        orphans: needFullChain ? (snap.orphans || []) : undefined,
         participants: participants,
         pendingTransactions: snap.pendingTransactions || [],
         networkStats: snap.networkStats || (this.lab && this.lab.networkStats ? { ...this.lab.networkStats } : undefined)

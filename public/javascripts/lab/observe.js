@@ -219,7 +219,6 @@ function initClientSideNetworkingForObserver(mode) {
     const state = msg.payload || msg;
     if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
     if (state.chain) window._observerChain = state.chain.slice();
-    debugLog('Received initial state from admin relay for observer', state);
     populateObserverUIFromState(state);
   });
 
@@ -318,7 +317,6 @@ function populateObserverUIFromState(state) {
 
 function loadBlockchainState() {
   // no-op in client-relay mode; population handled via net messages in populateObserverUIFromState
-  debugLog && debugLog('loadBlockchainState no-op for observer in relay mode');
 }
 
 function updateBlockchainView(mainChain, orphans, participants) {

@@ -499,7 +499,7 @@ function initClientSideNetworkingForParticipant(mode) {
       return;
     }
 
-    // Legacy single-block payload
+    // Legacy / compact single-block payload (tip extension without full chain)
     if (block) {
       if (block.hash) seenBlocks.add(block.hash);
       try { handleGossipBlock(block, minerId || 'relay-admin'); } catch (e) {}
@@ -514,10 +514,33 @@ function initClientSideNetworkingForParticipant(mode) {
         // Stale/orphan without chain snapshot — ask hub for canonical state
         net.send('request-state', { from: userId });
       }
+      if (Array.isArray(payload.pendingTransactions)) {
+        localPendingTxs = payload.pendingTransactions.slice();
+        try {
+          updatePendingTransactions({
+            pendingTransactions: localPendingTxs,
+            participants: payload.participants || []
+          });
+        } catch (e) {}
+      }
+      if (payload.participants && payload.participants.length) {
+        try { updateParticipantList({ participants: payload.participants }); } catch (e) {}
+      }
+      if (payload.networkStats) {
+        try {
+          updateNetworkStats({
+            networkStats: payload.networkStats,
+            participants: payload.participants || []
+          });
+        } catch (e) {}
+      }
       try {
-        updateParticipantBlockchainView({ chain: window.lastRelayedChain }, []);
-        updateNetworkBlockchainView(window.lastRelayedChain, [], []);
+        updateParticipantBlockchainView({ chain: window.lastRelayedChain }, payload.participants || []);
+        updateNetworkBlockchainView(window.lastRelayedChain, [], payload.participants || []);
       } catch (e) {}
+      if (payload.newHeight != null) {
+        $('#blockHeight').text(payload.newHeight);
+      }
     }
   });
 
@@ -552,6 +575,10 @@ function initClientSideNetworkingForParticipant(mode) {
       participants: []
     });
     showToastNotification('Transaction added to mempool', 'success');
+    // Fold new mempool txs into the block currently being mined
+    if (isMining && !isColluding) {
+      remineOnCanonicalTip();
+    }
   });
 
   net.on('initial-state', (msg) => {
