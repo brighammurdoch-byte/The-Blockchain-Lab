@@ -58,11 +58,26 @@ async function waitMs(ms) { return new Promise((r) => setTimeout(r, ms)); }
     await admin.fill('#joinCode', 'NOPE12');
     await admin.selectOption('#roleSelect', 'participant');
     await admin.click('#joinForm button[type="submit"]');
-    await waitMs(16000);
-    const badErr = await admin.locator('#joinError').textContent().catch(() => '');
-    if (/could not reach|no active|instructor/i.test(badErr || '')) pass('Invalid/inactive join blocked', badErr.slice(0, 120));
-    else fail('Invalid/inactive join blocked', badErr || admin.url());
-    await shot(admin, '02-invalid-join');
+    let badErr = '';
+    for (let i = 0; i < 30; i++) {
+      await waitMs(1000);
+      badErr = await admin.locator('#joinError').textContent().catch(() => '');
+      if (/could not reach|no active|did not answer|not answer/i.test(badErr || '') &&
+          !/Searching/i.test(badErr || '')) {
+        break;
+      }
+      // Still on landing = good; if navigated away, fail
+      if (/participate|observe|admin/i.test(admin.url()) && !/index|lab\/?(\?|$)/i.test(admin.url())) {
+        break;
+      }
+    }
+    if (/could not reach|no active|did not answer|not answer/i.test(badErr || '') &&
+        !/Searching/i.test(badErr || '') &&
+        !/participate|observe|admin/i.test(admin.url().replace(/.*\/lab\/?/, ''))) {
+      pass('Invalid/inactive join blocked', badErr.slice(0, 120));
+    } else {
+      fail('Invalid/inactive join blocked', (badErr || admin.url()).slice(0, 160));
+    }    await shot(admin, '02-invalid-join');
 
     // Create session
     await admin.click('#createSessionBtn');
