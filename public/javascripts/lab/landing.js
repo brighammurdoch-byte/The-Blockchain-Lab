@@ -22,11 +22,22 @@ $(document).ready(function () {
       );
       $err = $('#joinError');
     }
-    $err.text(message).show();
+    $err.removeClass('alert-info').addClass('alert-danger').text(message).show();
+  }
+
+  function showJoinProgress(message) {
+    var $err = $('#joinError');
+    if (!$err.length) {
+      $('#joinForm').prepend(
+        '<div id="joinError" class="alert alert-info" style="display:none; margin-bottom:12px;"></div>'
+      );
+      $err = $('#joinError');
+    }
+    $err.removeClass('alert-danger').addClass('alert-info').text(message).show();
   }
 
   function hideJoinError() {
-    $('#joinError').hide().text('');
+    $('#joinError').hide().text('').removeClass('alert-info').addClass('alert-danger');
   }
 
   $('#createSessionBtn').click(function () {
@@ -74,9 +85,14 @@ $(document).ready(function () {
       return;
     }
 
-    $btn.prop('disabled', true).text('Checking session…');
+    $btn.prop('disabled', true).text('Finding instructor…');
 
-    LabSessionProbe.probeActiveSession(joinCode).then(function (code) {
+    LabSessionProbe.probeActiveSession(joinCode, {
+      onProgress: function (msg) {
+        showJoinProgress(msg);
+        $btn.text('Finding instructor…');
+      }
+    }).then(function (code) {
       localStorage.setItem('joinCode_' + code, code);
       localStorage.setItem('userId_' + code, 'user-' + Date.now().toString(36));
       localStorage.setItem('networkingMode_' + code, 'admin-relay');

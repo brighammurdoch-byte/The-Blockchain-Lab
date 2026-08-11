@@ -127,6 +127,9 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
         tipChanged: !!result.tipChanged,
         newHeight: result.newHeight,
         chain: chain,
+        orphans: (this.lab && typeof this.lab.getSanitizedStateForNewPeer === 'function')
+          ? (this.lab.getSanitizedStateForNewPeer().orphans || [])
+          : [],
         participants: participants,
         networkStats: this.lab && this.lab.networkStats ? { ...this.lab.networkStats } : undefined
       });

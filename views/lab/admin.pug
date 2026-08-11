@@ -26,7 +26,7 @@ block content
                     input.form-control#joinShareLink(type="text", readonly, value="", style="font-size: 12px;")
                     span.input-group-btn
                       button.btn.btn-default#copyJoinLinkBtn(type="button") Copy
-                small.text-muted Students open the link, pick Miner or Wallet, then Join. <strong>Keep this admin tab open</strong> — it is the classroom hub.
+                small.text-muted Students open the link, pick Miner or Wallet, then Join. <strong>Keep this admin tab open</strong> — it is the classroom hub. For phones, create the session on the <strong>GitHub Pages</strong> URL (not localhost).
               .col-sm-5.text-center
                 strong#joinQrLabel Scan to join (phones)
                 br
@@ -94,9 +94,21 @@ block content
             h3.panel-title Network Topology & Block Propagation
           .panel-body
             svg#networkVisualizationSvg(width="100%", height="500", style="border: 1px solid #ddd; border-radius: 4px; background: #f9f9f9;")
-            .mt-2.text-center
-              small
-                span.legend-item
+            .mt-2.text-center#networkTopologyLegend
+              div(style="margin-bottom: 8px;")
+                strong(style="font-size: 12px;") Role shapes
+                span.legend-item.ml-3
+                  span(style="display: inline-block; width: 14px; height: 14px; background: #9E9E9E; border: 2px solid #333; transform: rotate(45deg); margin-right: 8px; vertical-align: -2px;")
+                  | Admin
+                span.legend-item.ml-3
+                  span(style="display: inline-block; width: 14px; height: 14px; background: #9E9E9E; border: 2px solid #333; border-radius: 50%; margin-right: 6px; vertical-align: -2px;")
+                  | Miner
+                span.legend-item.ml-3
+                  span(style="display: inline-block; width: 14px; height: 14px; background: #9E9E9E; border: 2px solid #333; margin-right: 6px; vertical-align: -2px;")
+                  | Wallet
+              div
+                strong(style="font-size: 12px;") Status colors
+                span.legend-item.ml-3
                   span(style="background: #4CAF50; display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px;")
                   | Mining
                 span.legend-item.ml-3
@@ -107,7 +119,7 @@ block content
                   | Receiving
                 span.legend-item.ml-3
                   span(style="background: #f0f0f0; border: 2px solid #999; display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px;")
-                  | Offline
+                  | Idle / Offline
 
         .panel.panel-default
           .panel-heading
@@ -192,11 +204,11 @@ block content
   script(src="/javascripts/lib/p2pt.bundle.js?v=fixrelay")
   script(src="/javascripts/lab/labPaths.js?v=fixrelay")
   script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=fixrelay")
-  script(src="/javascripts/network/P2PAdminRelayTransport.js?v=fixrelay")
-  script(src="/javascripts/network/AdminRelayCoordinator.js?v=chsyn1")
+  script(src="/javascripts/network/P2PAdminRelayTransport.js?v=mobjoin1")
+  script(src="/javascripts/network/AdminRelayCoordinator.js?v=chainfix1")
   script(src="/javascripts/network/Persistence.js?v=fixrelay")
-  script(src="/javascripts/network/RelayBlockchainState.js?v=chsyn1")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=chainfix1")
   script(src="/javascripts/network/NetworkManager.js?v=fixrelay")
   script(src="/javascripts/lab/chainDisplay.js?v=fixrelay")
-  script(src="/javascripts/lab/networkVisualization.js?v=chsyn2")
-  script(src="/javascripts/lab/admin.js?v=chsyn2")
+  script(src="/javascripts/lab/networkVisualization.js?v=topo2")
+  script(src="/javascripts/lab/admin.js?v=topo2")

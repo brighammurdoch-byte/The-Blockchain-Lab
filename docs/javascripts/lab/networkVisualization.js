@@ -25,7 +25,7 @@ class NetworkVisualization {
       .force('link', d3.forceLink().id(d => d.id).distance(120))
       .force('charge', d3.forceManyBody().strength(-500))
       .force('center', d3.forceCenter(this.width / 2, this.height / 2))
-      .force('collision', d3.forceCollide().radius(35));
+      .force('collision', d3.forceCollide().radius(48));
     
     this.setupSVG();
     this.setupTooltip();
@@ -73,9 +73,10 @@ class NetworkVisualization {
     
     if (!node) return;
     
-    let tooltipHTML = `<strong style="color: #333; font-size: 13px;">${node.displayName || 'Unnamed Node'}</strong><br/>`;
+    let tooltipHTML = `<strong style="color: #333; font-size: 13px;">${node.displayName || node.label || 'Unnamed Node'}</strong><br/>`;
     
     if (nodeInfo) {
+      tooltipHTML += `<small><strong>Role:</strong> ${this._roleLabel(nodeInfo.role || node.role)}</small><br/>`;
       if (nodeInfo.address) {
         tooltipHTML += `<small><strong>Address:</strong> <code style="color: #666; font-size: 10px;">${nodeInfo.address.substring(0, 16)}...</code></small><br/>`;
       }
@@ -181,6 +182,7 @@ class NetworkVisualization {
 
     // Update existing nodes and find new ones
     miners.forEach(miner => {
+      const role = this._normalizeRole(miner.role);
       const existing = existingNodes.get(miner.userId);
       if (existing) {
         // Update properties but keep the object reference and its x/y
@@ -191,6 +193,7 @@ class NetworkVisualization {
         existing.hashrate = miner.hashrate || 0;
         existing.forkChoice = miner.forkChoice || 'classic';
         existing.isColluding = miner.isColluding || false;
+        existing.role = role;
       } else {
         // This is a new node
         this.nodes.push({
@@ -202,7 +205,8 @@ class NetworkVisualization {
           chainHeight: miner.chainHeight || 0,
           hashrate: miner.hashrate || 0,
           forkChoice: miner.forkChoice || 'classic',
-          isColluding: miner.isColluding || false
+          isColluding: miner.isColluding || false,
+          role: role
         });
         nodesChanged = true;
       }
@@ -225,7 +229,8 @@ class NetworkVisualization {
         hashrate: miner.hashrate || 0,
         status: miner.status || 'idle',
         forkChoice: miner.forkChoice || 'classic',
-        isColluding: miner.isColluding || false
+        isColluding: miner.isColluding || false,
+        role: this._normalizeRole(miner.role)
       });
       if (miner.name) {
         this.nodeNames.set(miner.userId, miner.name);
@@ -337,64 +342,63 @@ class NetworkVisualization {
         })
       );
     
-    // Add circle to node
-    nodesEnter.append('circle')
-      .attr('r', 22)
-      .attr('class', 'node-circle')
+    // Role shape (admin diamond / miner circle / wallet square)
+    nodesEnter.append('path')
+      .attr('class', 'node-shape')
       .style('cursor', 'pointer')
       .on('mouseenter', (event, d) => {
         this.showNodeTooltip(event, d.id);
-        // Slightly enlarge on hover
-        d3.select(event.target).transition().duration(200).attr('r', 26);
+        d3.select(event.target).transition().duration(200).attr('transform', 'scale(1.12)');
       })
       .on('mouseleave', (event, d) => {
         this.hideNodeTooltip();
-        // Reset size
-        d3.select(event.target).transition().duration(200).attr('r', 22);
+        d3.select(event.target).transition().duration(200).attr('transform', 'scale(1)');
       });
     
-    // Add name label to node (positioned above)
+    // Name above the shape
     nodesEnter.append('text')
       .attr('text-anchor', 'middle')
-      .attr('dy', '-8px')
+      .attr('dy', '-28px')
       .attr('font-size', '12px')
       .attr('font-weight', 'bold')
-      .attr('fill', '#333')
+      .attr('fill', '#1a1a1a')
       .attr('class', 'node-label-name')
       .attr('pointer-events', 'none');
     
-    // Add ID label to node (positioned below)
+    // Role + short id below
     nodesEnter.append('text')
       .attr('text-anchor', 'middle')
-      .attr('dy', '8px')
+      .attr('dy', '34px')
       .attr('font-size', '10px')
-      .attr('fill', '#666')
+      .attr('fill', '#555')
       .attr('class', 'node-label-id')
       .attr('pointer-events', 'none');
     
-    // Update all nodes
-    this.nodeLayer.selectAll('g.node')
-      .attr('transform', d => `translate(${d.x},${d.y})`)
-      .select('.node-circle')
+    const allNodes = nodes.merge(nodesEnter);
+
+    allNodes
+      .attr('transform', d => `translate(${d.x || 0},${d.y || 0})`);
+
+    allNodes.select('.node-shape')
+      .attr('d', d => this.getRoleShapePath(d.role))
       .attr('fill', d => this.getNodeColor(d.status))
       .attr('stroke', d => this.getNodeStroke(d.status))
       .attr('stroke-width', 2)
-      .attr('opacity', 0.85);
+      .attr('opacity', 0.9);
     
-    // Update name labels with better text
-    this.nodeLayer.selectAll('g.node')
-      .select('.node-label-name')
+    allNodes.select('.node-label-name')
       .text(d => {
-        const name = d.displayName || d.label;
-        return name.length > 15 ? name.substring(0, 12) + '...' : name;
+        const name = (d.displayName || d.label || '').trim();
+        if (!name) return 'Unnamed';
+        return name.length > 16 ? name.substring(0, 14) + '…' : name;
       });
     
-    // Update ID labels
-    this.nodeLayer.selectAll('g.node')
-      .select('.node-label-id')
-      .text(d => `#${d.idShort}`);
+    allNodes.select('.node-label-id')
+      .text(d => {
+        const roleLabel = this._roleLabel(d.role);
+        return roleLabel + ' · ' + (d.idShort || String(d.id || '').substring(0, 6));
+      });
     
-    // Update simulation tick
     this.simulation.on('tick', () => {
       links
         .attr('x1', d => d.source.x)
@@ -402,11 +406,40 @@ class NetworkVisualization {
         .attr('x2', d => d.target.x)
         .attr('y2', d => d.target.y);
       
-      nodes.merge(nodesEnter)
-        .attr('transform', d => `translate(${d.x},${d.y})`);
+      allNodes.attr('transform', d => `translate(${d.x},${d.y})`);
     });
     
     nodes.exit().remove();
+  }
+
+  _normalizeRole(role) {
+    const r = String(role || 'miner').toLowerCase();
+    if (r === 'admin' || r === 'hub') return 'admin';
+    if (r === 'wallet' || r === 'observer' || r === 'observe') return 'wallet';
+    return 'miner';
+  }
+
+  _roleLabel(role) {
+    const r = this._normalizeRole(role);
+    if (r === 'admin') return 'Admin';
+    if (r === 'wallet') return 'Wallet';
+    return 'Miner';
+  }
+
+  /** SVG path centered at 0,0 — diamond / circle / square by role */
+  getRoleShapePath(role) {
+    const r = this._normalizeRole(role);
+    if (r === 'admin') {
+      // Diamond
+      return 'M 0,-22 L 22,0 L 0,22 L -22,0 Z';
+    }
+    if (r === 'wallet') {
+      // Rounded square approximated as square
+      return 'M -18,-18 H 18 V 18 H -18 Z';
+    }
+    // Miner circle
+    const rad = 20;
+    return 'M ' + rad + ',0 A ' + rad + ',' + rad + ' 0 1,0 ' + (-rad) + ',0 A ' + rad + ',' + rad + ' 0 1,0 ' + rad + ',0';
   }
   
   getNodeColor(status) {
@@ -581,7 +614,7 @@ class NetworkVisualization {
       d3.select(this.svgSelector)
         .selectAll('g.node')
         .filter(d => d.id === nodeId)
-        .select('.node-circle')
+        .select('.node-shape')
         .attr('fill', this.getNodeColor(status));
     }
   }

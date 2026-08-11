@@ -11,10 +11,10 @@
 
 (function (global) {
   var DEFAULT_TRACKERS = [
-    'wss://tracker.btorrent.xyz',
-    'wss://tracker.openwebtorrent.com',
-    'wss://tracker.webtorrent.dev',
-    'wss://tracker.files.fm:7073/announce'
+    'wss://tracker.openwebtorrent.com:443',
+    'wss://tracker.webtorrent.dev:443',
+    'wss://tracker.btorrent.xyz:443',
+    'wss://open.ftorrent.com:443'
   ];
 
   function P2PAdminRelayTransport(options) {
@@ -160,12 +160,26 @@
 
     await this.p2pt.start();
     this._started = true;
-    // Periodically refresh peer discovery
-    this._announceTimer = setInterval(function () {
-      if (self.p2pt && typeof self.p2pt.requestMorePeers === 'function') {
-        self.p2pt.requestMorePeers().catch(function () {});
+    // Aggressive discovery at first (mobile WebRTC often needs several announce rounds)
+    var discoverAttempts = 0;
+    var selfDiscover = this;
+    function discoverPeers() {
+      if (!selfDiscover.p2pt || typeof selfDiscover.p2pt.requestMorePeers !== 'function') return;
+      selfDiscover.p2pt.requestMorePeers().catch(function () {});
+      if (selfDiscover.isAdmin) {
+        selfDiscover._announcePresence();
       }
-    }, 15000);
+    }
+    discoverPeers();
+    this._announceTimer = setInterval(function () {
+      discoverAttempts += 1;
+      discoverPeers();
+      // After ~60s, slow down to every 12s
+      if (discoverAttempts === 12 && selfDiscover._announceTimer) {
+        clearInterval(selfDiscover._announceTimer);
+        selfDiscover._announceTimer = setInterval(discoverPeers, 12000);
+      }
+    }, 4000);
   };
 
   P2PAdminRelayTransport.prototype._announcePresence = function () {

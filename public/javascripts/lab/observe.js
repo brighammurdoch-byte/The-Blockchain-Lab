@@ -139,16 +139,12 @@ function setupEventHandlers() {
       showToastNotification('Display name must be 50 characters or less', 'error');
       return;
     }
-    if (!socket || !socket.connected) {
+    if (net) {
+      net.send('node-name-changed', { userId: userId, name: nodeName });
+      showToastNotification(nodeName ? 'Display name saved!' : 'Display name cleared', 'success');
+    } else {
       showToastNotification('Not connected yet — try again in a moment', 'error');
-      return;
     }
-    socket.emit('node-name-changed', {
-      sessionId: sessionId,
-      userId: userId,
-      name: nodeName
-    });
-    showToastNotification(nodeName ? 'Display name saved!' : 'Display name cleared', 'success');
   });
 
   $('#nodeName').on('keypress', function(e) {
@@ -186,6 +182,7 @@ function initClientSideNetworkingForObserver(mode) {
       window._observerChain = state.chain.slice();
       populateObserverUIFromState({
         chain: window._observerChain,
+        orphans: state.orphans || [],
         participants: state.participants || [],
         networkStats: state.networkStats
       });
@@ -250,7 +247,7 @@ function populateObserverUIFromState(state) {
   try {
     const chain = state.chain || [];
     const participants = state.participants || [];
-    const orphans = []; // no forks info for now
+    const orphans = state.orphans || [];
 
     if (state.adminSettings && typeof updateAdminSettings === 'function') {
       updateAdminSettings(state.adminSettings);

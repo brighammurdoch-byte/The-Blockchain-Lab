@@ -77,8 +77,9 @@ function applyCanonicalChain(chain, opts) {
 
   try {
     const parts = opts.participants || [];
+    const orphans = opts.orphans || [];
     updateParticipantBlockchainView({ chain: window.lastRelayedChain }, parts);
-    updateNetworkBlockchainView(window.lastRelayedChain, [], parts);
+    updateNetworkBlockchainView(window.lastRelayedChain, orphans, parts);
     if (opts.networkStats || parts.length) {
       updateNetworkStats({
         networkStats: opts.networkStats || {},
@@ -99,11 +100,6 @@ function applyCanonicalChain(chain, opts) {
   }
 
   if (newTip) {
-    $('#blockchainView').html(
-      '<div class="alert alert-success">Chain tip #' + newTip.index +
-      ' (' + String(newTip.hash).substring(0, 16) + '…) miner=' +
-      (newTip.miner || '?') + '</div>'
-    );
     $('#blockHeight').text(newTip.index);
   }
 
@@ -469,6 +465,7 @@ function initClientSideNetworkingForParticipant(mode) {
       applyCanonicalChain(payload.chain, {
         participants: payload.participants || [],
         networkStats: payload.networkStats,
+        orphans: payload.orphans || [],
         remine: true
       });
       if (payload.reorg) {
@@ -545,6 +542,7 @@ function initClientSideNetworkingForParticipant(mode) {
       applyCanonicalChain(state.chain, {
         participants: state.participants || [],
         networkStats: state.networkStats,
+        orphans: state.orphans || [],
         remine: true
       });
       debugLog('Relayed chain length:', state.chain.length);

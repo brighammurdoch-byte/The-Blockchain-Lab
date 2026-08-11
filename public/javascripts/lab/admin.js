@@ -121,6 +121,24 @@ function renderJoinShareCard(roomCode) {
 
   $('#joinShareLink').val(url);
 
+  // Phones cannot join a localhost / private-IP hub — QR must point at the public Pages URL
+  var host = '';
+  try { host = new URL(url).hostname; } catch (e) { host = window.location.hostname || ''; }
+  var isLocalHub = /^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/i.test(host) ||
+    /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(host);
+  $('#joinLocalhostWarn').remove();
+  if (isLocalHub) {
+    $('#joinShareLink').closest('p, .form-group, .input-group').first().parent().append(
+      '<div id="joinLocalhostWarn" class="alert alert-danger" style="margin-top:12px; text-align:left;">' +
+      '<strong>Phones cannot use this QR.</strong> This admin page is on <code>' + host + '</code>. ' +
+      'Open the lab on <strong>GitHub Pages</strong> first, create the session there, then scan that QR. ' +
+      'Keep that Pages admin tab open.</div>'
+    );
+    $('#joinQrLabel').text('QR is localhost — phones will fail');
+  } else {
+    $('#joinQrLabel').text('Scan to join (phones)');
+  }
+
   $('#copyJoinLinkBtn').off('click').on('click', function () {
     const link = $('#joinShareLink').val();
     const done = function () {
@@ -224,6 +242,20 @@ function initClientSideNetworking(mode, roomCode) {
   if (net.transport && typeof net.transport.initAsAdmin === 'function') {
     net.transport.initAsAdmin(roomCode, adminUserId).then(() => {
       console.log('[ClientNet] Admin relay transport initialized for room:', roomCode, 'mode:', mode);
+
+      // Only announce after WebRTC/BroadcastChannel are actually up (critical for phone QR joins)
+      net.send('admin-presence', { roomCode: roomCode, adminUserId: adminUserId });
+      if (relayState) {
+        const state = relayState.getSanitizedStateForNewPeer();
+        net.send('initial-state', state);
+        console.log('[ClientNet] Broadcast initial state after transport ready');
+      }
+      if (typeof renderClientRelayChain === 'function') {
+        renderClientRelayChain();
+      }
+    }).catch((err) => {
+      console.error('[ClientNet] initAsAdmin failed', err);
+      showToastNotification('Network hub failed to start — refresh the admin tab', 'error');
     });
   } else {
     console.warn('[ClientNet] Transport does not support initAsAdmin; messages may not flow.');
@@ -272,13 +304,6 @@ function initClientSideNetworking(mode, roomCode) {
     if (typeof renderClientRelayChain === 'function') {
       renderClientRelayChain();
     }
-
-    // Broadcast initial state so any already-joined peers (or late joiners) get the chain immediately
-    if (net) {
-      const state = relayState.getSanitizedStateForNewPeer();
-      net.send('initial-state', state);
-      console.log('[ClientNet] Broadcast initial state on admin init');
-    }
   }
 
   // Wire up coordinator with the real state object
@@ -304,8 +329,7 @@ function initClientSideNetworking(mode, roomCode) {
     console.log('[ClientNet] AdminRelayCoordinator + RelayBlockchainState attached (with strong persistence)');
   }
 
-  // Announce admin presence on the channel
-  net.send('admin-presence', { roomCode, adminUserId });
+  // Presence + initial-state are sent after initAsAdmin resolves (see above)
 
   // Listen for high-level events (coordinator handles most now)
   net.on('peer-joined', (msg) => {
@@ -360,6 +384,39 @@ function initClientSideNetworking(mode, roomCode) {
     if (relayState && uid) {
       relayState.updateHashrate(uid, hashrate);
       if (typeof renderClientParticipants === 'function') renderClientParticipants();
+    }
+  });
+
+  // Student display-name changes → topology + participant lists
+  net.on('node-name-changed', (msg) => {
+    const payload = msg.payload || msg;
+    const uid = payload.userId || msg.from;
+    const name = (payload.name != null ? String(payload.name) : '').trim();
+    if (!uid || !relayState) return;
+
+    const existing = relayState.participants.get(uid);
+    const role = (existing && existing.role) || 'miner';
+    relayState.addOrUpdateParticipant(uid, role, {
+      name: name || null,
+      displayName: name || null
+    });
+
+    const viz = window.networkViz || networkViz;
+    if (viz && typeof viz.setNodeName === 'function' && name) {
+      viz.setNodeName(uid, name);
+    }
+    if (typeof renderClientParticipants === 'function') renderClientParticipants();
+    if (typeof renderClientRelayChain === 'function') renderClientRelayChain();
+
+    // Echo so other peers' UIs can refresh names from initial-state / lists
+    if (net && net.isAdmin) {
+      try {
+        net.send('participant-updated', {
+          userId: uid,
+          name: name,
+          role: role
+        });
+      } catch (e) {}
     }
   });
 
@@ -792,7 +849,7 @@ function playBlockMinedAnimation() {
   $view.fadeOut(100).fadeIn(100);
 }
 
-// === NEW: Render the blockchain from relayState (client-relay mode only) ===
+// === Render the blockchain from relayState (canonical + competing miner forks) ===
 function renderClientRelayChain() {
   if (!relayState || !relayState.chain || relayState.chain.length === 0) {
     $('#blockchainView').html('<p class="text-muted">Waiting for first blocks...</p>');
@@ -801,51 +858,20 @@ function renderClientRelayChain() {
 
   const chain = relayState.chain;
   const participants = Array.from(relayState.participants.values());
+  const mainHashes = new Set(chain.map(function (b) { return b.hash; }));
+  const orphans = [];
+  if (relayState.allBlocks && typeof relayState.allBlocks.forEach === 'function') {
+    relayState.allBlocks.forEach(function (block, hash) {
+      if (hash && !mainHashes.has(hash) && block && block.miner !== 'genesis') {
+        orphans.push(block);
+      }
+    });
+  }
 
-  const CD = window.ChainDisplay;
-  const nameLookup = CD ? CD.buildParticipantNameLookup(participants) : {};
-  const fmtAddr = (addr) => (CD ? CD.formatChainParticipantHtml(addr, nameLookup) : `<code>${addr || ''}</code>`);
-
-  let html = '<div style="display: flex; flex-direction: column; width: 100%;">';
-
-  chain.forEach((block, idx) => {
-    const isTip = idx === chain.length - 1;
-    const panelClass = isTip ? 'panel-success' : 'panel-primary';
-
-    let txHtml = `${block.transactions ? block.transactions.length : 0}`;
-    if (block.transactions && block.transactions.length > 0) {
-      const txId = `tx_${block.hash}`;
-      const displayStyle = openTxPanels.has(txId) ? 'block' : 'none';
-      txHtml += ` <button class="btn btn-xs btn-default" onclick="toggleTransactions('${txId}')">View Details</button>`;
-      txHtml += `<div id="txDetails_${txId}" style="display:${displayStyle}; margin-top: 10px; max-height: 150px; overflow-y: auto;">`;
-      txHtml += `<table class="table table-condensed"><thead><tr><th>From</th><th>To</th><th>Amt</th></tr></thead><tbody>`;
-      block.transactions.forEach(tx => {
-        txHtml += `<tr><td>${fmtAddr(tx.from)}</td><td>${fmtAddr(tx.to)}</td><td>${tx.amount}</td></tr>`;
-      });
-      txHtml += `</tbody></table></div>`;
-    }
-
-    const minerId = block.miner || '';
-    html += `
-      <div style="display: flex; justify-content: center; margin-bottom: 8px;">
-        <div class="panel ${panelClass}" style="width: 100%; max-width: 520px; margin-bottom: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-          <div class="panel-heading" style="padding: 6px 12px;">
-            <strong>Block #${block.index}</strong>
-            <div class="pull-right text-muted small">${new Date(block.timestamp).toLocaleTimeString()}</div>
-          </div>
-          <div class="panel-body" style="padding: 8px 12px; font-size: 12px;">
-            <div><strong>Hash:</strong> <code style="font-size: 10px;">${(block.hash || '').substring(0, 24)}...</code></div>
-            <div><strong>Prev:</strong> <code style="font-size: 10px;">${(block.previousHash || '').substring(0, 24)}...</code></div>
-            <div><strong>Miner:</strong> ${fmtAddr(minerId)}</div>
-            <div><strong>Nonce:</strong> ${block.nonce || 0} &nbsp;&nbsp; <strong>Txs:</strong> ${txHtml}</div>
-          </div>
-        </div>
-      </div>
-    `;
-  });
-
-  html += '</div>';
-  $('#blockchainView').html(html);
+  // Side-by-side main chain + each miner's competing / orphaned blocks
+  if (typeof updateBlockchainView === 'function') {
+    updateBlockchainView(chain, orphans, participants);
+  }
 
   // Also update stats
   $('#blockHeight').text(relayState.networkStats.blockHeight || chain.length - 1);

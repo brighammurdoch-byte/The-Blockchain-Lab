@@ -262,8 +262,16 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
   // What we send to a newly joined peer
   getSanitizedStateForNewPeer() {
+    const mainHashes = new Set(this.chain.map((b) => b.hash));
+    const orphans = [];
+    this.allBlocks.forEach((block, hash) => {
+      if (hash && !mainHashes.has(hash) && block && block.miner !== 'genesis') {
+        orphans.push(block);
+      }
+    });
     return {
       chain: this.chain,
+      orphans: orphans,
       participants: Array.from(this.participants.values()),
       adminSettings: { ...this.settings },
       networkStats: { ...this.networkStats },
