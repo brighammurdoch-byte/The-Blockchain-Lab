@@ -313,15 +313,43 @@ if (!$('#toastStyles').length) {
   $('<style id="toastStyles">@keyframes slideIn { from { transform: translateX(450px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }</style>').appendTo('head');
 }
 
+/**
+ * Resolve this tab's miner identity.
+ * Prefer ?uid= (Open Test Miner Tab) so each test tab is unique; keep that
+ * id in sessionStorage so refresh of THIS tab keeps it without clobbering
+ * other tabs that share localStorage.
+ */
+function resolveParticipantUserId(sessionId) {
+  let fromQuery = '';
+  try {
+    const params = new URLSearchParams(window.location.search || '');
+    fromQuery = (params.get('uid') || params.get('userId') || '').trim();
+  } catch (e) {}
+
+  if (fromQuery) {
+    try { sessionStorage.setItem('labUserId_' + sessionId, fromQuery); } catch (e) {}
+    return fromQuery;
+  }
+
+  try {
+    const fromTab = sessionStorage.getItem('labUserId_' + sessionId);
+    if (fromTab) return fromTab;
+  } catch (e) {}
+
+  let fromLocal = localStorage.getItem('userId_' + sessionId);
+  if (!fromLocal) {
+    fromLocal = 'user_' + Math.random().toString(36).substr(2, 9);
+    localStorage.setItem('userId_' + sessionId, fromLocal);
+  }
+  try { sessionStorage.setItem('labUserId_' + sessionId, fromLocal); } catch (e) {}
+  return fromLocal;
+}
+
 $(document).ready(function() {
   sessionId = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || window.location.pathname.split('/').pop();
   
   // Set address and session code as early as possible from localStorage or URL to avoid "Loading..." flash/stuck
-  let earlyUserId = localStorage.getItem('userId_' + sessionId);
-  if (!earlyUserId) {
-    earlyUserId = 'user_' + Math.random().toString(36).substr(2, 9);
-    localStorage.setItem('userId_' + sessionId, earlyUserId);
-  }
+  const earlyUserId = resolveParticipantUserId(sessionId);
   userId = earlyUserId;
   $('#yourAddress').text(userId);
 

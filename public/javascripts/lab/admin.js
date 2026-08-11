@@ -763,22 +763,25 @@ function setupEventHandlers() {
       $netPanel.append(`
         <div style="margin-top:14px; padding-top:10px; border-top:1px solid #eee;">
           <button id="openTestPeerBtn" class="btn btn-info btn-sm btn-block">Open Test Miner Tab</button>
-          <small class="text-muted">Opens a miner page for this room. Use a second browser or phone for a true classroom test.</small>
+          <small class="text-muted">Opens a <strong>new</strong> miner identity in a new tab each click. Use a second browser or phone for a true classroom test.</small>
         </div>
       `);
 
       $('#openTestPeerBtn').on('click', function() {
         const rc = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || (window.location.pathname.split('/').pop() || '');
         const code = String(rc).toUpperCase();
+        // Always mint a brand-new miner identity. Do NOT write userId into the
+        // shared localStorage key — that would steal identity from other open tabs.
+        const freshId = 'test-miner-' + Date.now().toString(36) + '-' +
+          Math.random().toString(36).substr(2, 6);
         localStorage.setItem('joinCode_' + code, code);
-        if (!localStorage.getItem('userId_' + code)) {
-          localStorage.setItem('userId_' + code, 'test-miner-' + Date.now().toString(36));
-        }
         localStorage.setItem('networkingMode_' + code, networkMode || 'admin-relay');
-        const url = (window.LabPaths && LabPaths.labUrl)
+        let url = (window.LabPaths && LabPaths.labUrl)
           ? LabPaths.labUrl('participate', code)
           : ('/lab/participate/' + code);
-        window.open(url, '_blank');
+        url += (url.indexOf('?') >= 0 ? '&' : '?') + 'uid=' + encodeURIComponent(freshId);
+        // Unique window name so the browser doesn't reuse an existing miner tab
+        window.open(url, 'lab-test-miner-' + freshId);
       });
     }
 }
