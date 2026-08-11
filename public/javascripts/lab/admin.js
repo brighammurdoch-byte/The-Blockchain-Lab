@@ -548,6 +548,7 @@ function initClientSideNetworking(mode, roomCode) {
   // Expose for easy console-based multi-tab testing (open another tab, run similar code in console)
   window.BlockchainLabNet = net;
   window.BlockchainLabCoordinator = coordinator;
+  window.relayState = relayState;
 }
 
 function setupEventHandlers() {

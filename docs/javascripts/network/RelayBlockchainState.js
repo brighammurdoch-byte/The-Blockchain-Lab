@@ -178,6 +178,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       p.balance = 0;
     });
 
+    const seenTx = new Set();
     this.chain.forEach((block) => {
       if (!block) return;
 
@@ -198,6 +199,10 @@ if (typeof window.RelayBlockchainState === 'undefined') {
         const to = tx.to;
         const amount = Number(tx.amount);
         if (!from || !to || !(amount > 0)) return;
+        const id = tx.id || (String(from) + ':' + String(to) + ':' + String(tx.timestamp));
+        // Same tx can race into two blocks before mempool clears — credit once
+        if (seenTx.has(id)) return;
+        seenTx.add(id);
 
         if (!this.participants.has(from)) {
           this.addOrUpdateParticipant(from, 'wallet');

@@ -1194,6 +1194,21 @@ function mineBlock(block, adminSettings) {
         // Create a copy to submit
         const minedBlock = JSON.parse(JSON.stringify(block));
         seenBlocks.add(hash); // Add to our own cache
+
+        // Drop included txs from local mempool BEFORE starting the next block,
+        // otherwise the same transfer can be mined twice under load.
+        if (Array.isArray(minedBlock.transactions) && minedBlock.transactions.length) {
+          const included = new Set(
+            minedBlock.transactions.map(function (t) {
+              return t.id || (String(t.from) + ':' + String(t.to) + ':' + String(t.timestamp));
+            })
+          );
+          localPendingTxs = localPendingTxs.filter(function (t) {
+            const key = t.id || (String(t.from) + ':' + String(t.to) + ':' + String(t.timestamp));
+            return !included.has(key);
+          });
+        }
+
         submitMinedBlock(minedBlock, startTime, totalIterations);
         
         // Optimistically start mining the next block immediately!
