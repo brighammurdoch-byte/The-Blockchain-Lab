@@ -226,12 +226,18 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       return { accepted: false, reason: 'Malformed block' };
     }
 
+    // Idempotent: MQTT/BroadcastChannel can deliver the same block twice.
+    // Treat as a quiet success so miners don't get "Block rejected: Duplicate block" toasts.
     if (this.allBlocks.has(block.hash)) {
+      const tip = this.chain[this.chain.length - 1] || null;
       return {
-        accepted: false,
-        reason: 'Duplicate block',
-        chain: this.chain.slice(),
-        newHeight: Math.max(0, this.chain.length - 1)
+        accepted: true,
+        duplicate: true,
+        tipChanged: false,
+        isFork: !(tip && tip.hash === block.hash) && !this.chain.some((b) => b.hash === block.hash),
+        reorg: false,
+        newHeight: Math.max(0, this.chain.length - 1),
+        chain: this.chain.slice()
       };
     }
 

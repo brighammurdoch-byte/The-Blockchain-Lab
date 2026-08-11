@@ -522,7 +522,7 @@ function initClientSideNetworking(mode, roomCode) {
     const minerId = (msg.payload && msg.payload.minerId) || msg.from;
     if (!block || !relayState) return;
     const result = relayState.tryAddBlock(block, minerId);
-    if (result && result.accepted) {
+    if (result && result.accepted && !result.duplicate) {
       net.send('block-accepted', {
         block,
         minerId,

@@ -20,7 +20,9 @@ let lastKnownAdminSettings = null;
 let myForkChoice = 'classic';
 let pendingForkHeight = null;
 let seenBlocks = new Set(); // Prevent infinite gossip loops
+let submittedBlockHashes = new Set(); // Avoid double-submit of the same PoW solution
 let localPendingTxs = []; // Mempool mirror from hub
+let remineTxTimer = null; // Debounce remine when mempool updates
 let rtcPeerConnections = {}; // WebRTC connections
 let rtcDataChannels = {}; // WebRTC data channels
 let pendingDemoCode = null; // Store admin-triggered demo code
@@ -69,6 +71,26 @@ function remineOnCanonicalTip() {
     miningWorker = null;
   }
   fetchDataAndMine();
+}
+
+/** Soft remine after mempool updates — debounced so a tx doesn't thrash mid-submit. */
+function scheduleRemineForMempool() {
+  if (!isMining || isColluding || networkPaused) return;
+  if (remineTxTimer) clearTimeout(remineTxTimer);
+  remineTxTimer = setTimeout(function () {
+    remineTxTimer = null;
+    remineOnCanonicalTip();
+  }, 350);
+}
+
+function pushOptimisticTip(block) {
+  if (!block || !block.hash) return;
+  if (!window.lastRelayedChain) window.lastRelayedChain = [];
+  const tip = window.lastRelayedChain[window.lastRelayedChain.length - 1];
+  if (tip && tip.hash === block.hash) return;
+  if (!tip || tip.hash === block.previousHash) {
+    window.lastRelayedChain.push(block);
+  }
 }
 
 /**
@@ -559,15 +581,21 @@ function initClientSideNetworkingForParticipant(mode) {
 
   net.on('block-rejected', (msg) => {
     const payload = msg.payload || msg;
-    debugWarn('Block rejected by hub', payload && payload.reason);
+    const reason = (payload && payload.reason) || '';
+    // Duplicates are benign (relay redelivery); never toast or thrash remine for them
+    if (/duplicate/i.test(reason)) {
+      debugWarn('Ignoring duplicate-block reject from hub', reason);
+      return;
+    }
+    debugWarn('Block rejected by hub', reason);
     if (payload && payload.chain && payload.chain.length) {
       applyCanonicalChain(payload.chain, { remine: true });
     } else {
       remineOnCanonicalTip();
       net.send('request-state', { from: userId });
     }
-    showToastNotification(payload && payload.reason
-      ? ('Block rejected: ' + payload.reason)
+    showToastNotification(reason
+      ? ('Block rejected: ' + reason)
       : 'Block rejected — remine on hub tip', 'warning');
   });
 
@@ -588,10 +616,8 @@ function initClientSideNetworkingForParticipant(mode) {
       participants: []
     });
     showToastNotification('Transaction added to mempool', 'success');
-    // Fold new mempool txs into the block currently being mined
-    if (isMining && !isColluding) {
-      remineOnCanonicalTip();
-    }
+    // Fold new mempool txs into the next block — debounced to avoid mid-submit races
+    scheduleRemineForMempool();
   });
 
   net.on('participants-roster', (msg) => {
@@ -1318,10 +1344,23 @@ function getMineCpuDelay() {
 function submitMinedBlock(block, startTime, totalIterations) {
   const totalTime = Date.now() - startTime;
   const hashrate = Math.floor(totalIterations / (totalTime / 1000));
+
+  if (!block || !block.hash) return;
+  if (submittedBlockHashes.has(block.hash)) {
+    debugLog('Skip re-submit of already submitted block', block.hash.substring(0, 16));
+    return;
+  }
+  submittedBlockHashes.add(block.hash);
+  if (submittedBlockHashes.size > 500) {
+    submittedBlockHashes = new Set(Array.from(submittedBlockHashes).slice(-200));
+  }
   
   // In pure client-relay mode, we bypass the old /lab/mine server POST
   // and directly submit to the admin hub via the relay.
   showToastNotification(`⏳ Block found! Broadcasting to peers via relay...`, 'info');
+
+  // Optimistic tip so mempool remines don't restart on a stale parent and re-race submits
+  pushOptimisticTip(block);
   
   if (net) {
     debugLog('Broadcasting mined block via client relay');
@@ -1330,8 +1369,6 @@ function submitMinedBlock(block, startTime, totalIterations) {
       net.send('block-gossip', { block, minerId: userId });
       // Also emit locally as accepted for immediate UI feedback
       try { handleGossipBlock(block, userId); } catch (e) {}
-      if (!window.lastRelayedChain) window.lastRelayedChain = [];
-      window.lastRelayedChain.push(block);
     } else {
       net.send('block-submitted', { block, minerId: userId });
     }

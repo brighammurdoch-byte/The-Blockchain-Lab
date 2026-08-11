@@ -120,6 +120,9 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
     }
 
     if (result.accepted) {
+      // Duplicate delivery — already on chain; don't rebroadcast or reject
+      if (result.duplicate) return;
+
       const snap = (this.lab && typeof this.lab.getSanitizedStateForNewPeer === 'function')
         ? this.lab.getSanitizedStateForNewPeer()
         : {};
