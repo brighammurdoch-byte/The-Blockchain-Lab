@@ -6,6 +6,7 @@
 let sessionId = null;
 let userId = null;
 let openTxPanels = new Set();
+let networkPaused = false;
 
 // Client-relay networking (only mode)
 let networkMode = null;
@@ -107,6 +108,10 @@ function setupEventHandlers() {
     }
     
     if (net) {
+      if (networkPaused) {
+        showToastNotification('Network is paused by admin — transactions blocked', 'warning');
+        return;
+      }
       const tx = {
         from: userId,
         to: toUserId,
@@ -227,7 +232,21 @@ function initClientSideNetworkingForObserver(mode) {
     const state = msg.payload || msg;
     if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
     if (state.chain) window._observerChain = state.chain.slice();
+    if (typeof state.networkPaused === 'boolean') networkPaused = state.networkPaused;
     populateObserverUIFromState(state);
+  });
+
+  net.on('network-toggled', function (msg) {
+    const { paused } = msg.payload || msg;
+    networkPaused = !!paused;
+    showToastNotification(
+      networkPaused ? 'Network paused by admin — transactions blocked' : 'Network resumed by admin',
+      networkPaused ? 'warning' : 'success'
+    );
+  });
+  net.on('toggle-network', function (msg) {
+    const { paused } = msg.payload || msg;
+    networkPaused = !!paused;
   });
 
   net.on('admin-presence', function () {

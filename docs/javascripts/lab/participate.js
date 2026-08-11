@@ -6,6 +6,7 @@
 let sessionId = null;
 let userId = null;
 let isMining = false;
+let networkPaused = false;
 let cpuLimitPercent = 20;
 let miningWorker = null;
 let openTxPanels = new Set();
@@ -61,7 +62,7 @@ function applyMyBalanceFromParticipants(participants) {
 
 /** Restart the mining loop on the current hub tip without flipping isMining off. */
 function remineOnCanonicalTip() {
-  if (!isMining || isColluding) return;
+  if (!isMining || isColluding || networkPaused) return;
   if (miningWorker) {
     try { miningWorker.postMessage({ command: 'stop' }); } catch (e) {}
     try { miningWorker.terminate(); } catch (e) {}
@@ -479,13 +480,9 @@ function initClientSideNetworkingForParticipant(mode) {
     showToastNotification('Team 51% attack simulation active on network', 'warning');
   });
 
-  net.on('network-toggled', (msg) => {
-    const { paused } = msg.payload || msg;
-    if (paused && isMining) {
-      stopMining();
-      showToastNotification('Network paused by admin (via relay)', 'warning');
-    }
-  });
+  net.on('network-toggled', handleNetworkToggled);
+  // Legacy event name (admin used to send this; keep for any old tabs)
+  net.on('toggle-network', handleNetworkToggled);
 
   net.on('block-accepted', (msg) => {
     const payload = msg.payload || msg;
@@ -658,6 +655,10 @@ function initClientSideNetworkingForParticipant(mode) {
       } catch (e) {
         console.error('Error updating participant UI from initial relayed state', e);
       }
+    }
+
+    if (typeof state.networkPaused === 'boolean') {
+      handleNetworkToggled({ payload: { paused: state.networkPaused } });
     }
 
     // loadBlockchainState(); // no-op in relay
@@ -990,10 +991,32 @@ executeDoubleSpendAttack(target1, target2, amount);
   });
 }
 
+function handleNetworkToggled(msg) {
+  const { paused } = msg.payload || msg;
+  const willPause = !!paused;
+  networkPaused = willPause;
+  if (willPause) {
+    if (isMining) {
+      stopMining({ preserveIntent: true });
+    }
+    showToastNotification('Network paused by admin — mining halted', 'warning');
+  } else {
+    showToastNotification('Network resumed by admin', 'success');
+    if (window.lastMiningIntent && !isMining && !isColluding) {
+      setTimeout(startMining, 100);
+    }
+  }
+}
+
 function startMining() {
   if (isMining) return;
-  
+  if (networkPaused) {
+    showToastNotification('Network is paused by admin', 'warning');
+    return;
+  }
+
   isMining = true;
+  window.lastMiningIntent = true;
   $('#mineBtn').hide();
   $('#stopMineBtn').show();
   
@@ -1320,12 +1343,17 @@ function submitMinedBlock(block, startTime, totalIterations) {
   // (the admin will confirm via block-accepted and we may reorg if needed)
 }
 
-function stopMining() {
+function stopMining(opts) {
+  const preserveIntent = !!(opts && opts.preserveIntent);
   isMining = false;
-  window.lastMiningIntent = false;
+  if (!preserveIntent) window.lastMiningIntent = false;
   $('#mineBtn').show();
   $('#stopMineBtn').hide();
-  $('#miningActivity').html('<p class="text-muted">Mining stopped</p>');
+  $('#miningActivity').html(
+    preserveIntent
+      ? '<p class="text-warning">Mining paused by admin (will resume automatically)</p>'
+      : '<p class="text-muted">Mining stopped</p>'
+  );
   $('#yourHashrate').text('0 H/s');
   
   if (miningWorker) {
@@ -1349,6 +1377,10 @@ function stopMining() {
 }
 
 function sendTransaction(recipientAddress, amount) {
+  if (networkPaused) {
+    showToastNotification('Network is paused by admin — transactions blocked', 'warning');
+    return;
+  }
   if (net) {
     const tx = {
       from: userId,

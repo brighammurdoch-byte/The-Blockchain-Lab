@@ -142,13 +142,19 @@ async function waitMs(ms) { return new Promise((r) => setTimeout(r, ms)); }
     await admin.click('#toggleNetworkBtn');
     await waitMs(500);
     let toggleTxt = await admin.locator('#toggleNetworkBtn').textContent();
-    if (/resume/i.test(toggleTxt || '')) pass('Pause network', toggleTxt.trim());
-    else fail('Pause network', toggleTxt);
+    if (/resume/i.test(toggleTxt || '')) pass('Pause network label', toggleTxt.trim());
+    else fail('Pause network label', toggleTxt);
+    const pausedFlag = await admin.evaluate(() => !!(window.relayState && window.relayState.networkPaused));
+    if (pausedFlag) pass('Hub networkPaused flag set', 'true');
+    else fail('Hub networkPaused flag set', 'false');
     await admin.click('#toggleNetworkBtn');
     await waitMs(500);
     toggleTxt = await admin.locator('#toggleNetworkBtn').textContent();
-    if (/pause/i.test(toggleTxt || '')) pass('Resume network', toggleTxt.trim());
-    else fail('Resume network', toggleTxt);
+    if (/pause/i.test(toggleTxt || '')) pass('Resume network label', toggleTxt.trim());
+    else fail('Resume network label', toggleTxt);
+    const resumedFlag = await admin.evaluate(() => !(window.relayState && window.relayState.networkPaused));
+    if (resumedFlag) pass('Hub networkPaused cleared', 'false');
+    else fail('Hub networkPaused cleared', 'still true');
 
     // Attack / fork injected controls
     const teamVisible = await admin.locator('#startTeamAttackBtn').isVisible().catch(() => false);

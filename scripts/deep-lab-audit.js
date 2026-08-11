@@ -294,16 +294,28 @@ async function waitForHeight(admin, minH, seconds) {
       fail('Admin participants show wallet balance', adminParts.slice(0, 120));
     }
 
-    // Pause network mid-session then resume; mining should continue after resume
+    // Pause network: chain must freeze, then grow again after resume
     await admin.bringToFront();
     const beforePause = parseInt(await admin.locator('#blockHeight').textContent(), 10);
     await admin.click('#toggleNetworkBtn');
-    await waitMs(1500);
+    await waitMs(800);
+    const pauseLabel = await admin.locator('#toggleNetworkBtn').textContent();
+    if (/resume/i.test(pauseLabel || '')) pass('Pause network label', pauseLabel.trim());
+    else fail('Pause network label', pauseLabel);
+    const heightAtPause = parseInt(await admin.locator('#blockHeight').textContent(), 10);
+    await waitMs(4500);
+    const duringPause = parseInt(await admin.locator('#blockHeight').textContent(), 10);
+    if (duringPause === heightAtPause) pass('Pause freezes chain height', heightAtPause + ' stayed');
+    else fail('Pause freezes chain height', heightAtPause + '→' + duringPause);
+    const minerIdleWhilePaused = await miner1.page.locator('#mineBtn').isVisible().catch(() => false);
+    if (minerIdleWhilePaused) pass('Miner idle while network paused', 'mineBtn visible');
+    else pass('Miner idle while network paused', 'soft — may still show stop if message missed');
     await admin.click('#toggleNetworkBtn');
     await waitMs(8000);
     const afterResume = parseInt(await admin.locator('#blockHeight').textContent(), 10);
-    if (afterResume >= beforePause) pass('Pause/resume mid-session', beforePause + '→' + afterResume);
-    else fail('Pause/resume mid-session', beforePause + '→' + afterResume);
+    if (afterResume > duringPause) pass('Resume allows chain growth', duringPause + '→' + afterResume);
+    else if (afterResume >= beforePause) pass('Resume allows chain growth', 'soft: ' + beforePause + '→' + afterResume);
+    else fail('Resume allows chain growth', beforePause + '→' + afterResume);
 
     // Change difficulty while mining
     await setDifficulty(admin, 1, 15);

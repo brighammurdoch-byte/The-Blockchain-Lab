@@ -105,6 +105,15 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
     const block = msg.payload?.block || msg.block;
     const from = msg.from || msg.payload?.minerId;
 
+    if (this.lab && this.lab.networkPaused) {
+      this.net.send('block-rejected', {
+        reason: 'Network paused by admin',
+        blockHash: block && block.hash,
+        chain: this.lab && Array.isArray(this.lab.chain) ? this.lab.chain.slice() : null
+      }, from);
+      return;
+    }
+
     let result = { accepted: false };
     if (this.lab && typeof this.lab.tryAddBlock === 'function') {
       result = this.lab.tryAddBlock(block, from) || { accepted: false };
@@ -150,6 +159,9 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
 
   _handleTransactionSubmitted(msg) {
     const tx = msg.payload?.transaction || msg.transaction || msg.payload;
+    if (this.lab && this.lab.networkPaused) {
+      return;
+    }
     let result = { accepted: false };
 
     if (this.lab && typeof this.lab.tryAddTransaction === 'function') {

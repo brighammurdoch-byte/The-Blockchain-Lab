@@ -283,6 +283,9 @@ function initClientSideNetworking(mode, roomCode) {
           updateDifficultyDisplay();
           updateSettingsDisplay(restored.settings);
         }
+        if (relayState.networkPaused) {
+          $('#toggleNetworkBtn').text('Resume Network').data('paused', true);
+        }
       }
     }
 
@@ -604,15 +607,22 @@ function setupEventHandlers() {
     updateSettingsDisplay(newSettings);
   });
   
-  // Network toggle
+  // Network toggle — peers listen for 'network-toggled'; hub also rejects blocks/txs while paused
   $('#toggleNetworkBtn').click(function() {
     const isPaused = $(this).data('paused') || false;
     const willPause = !isPaused;
     $(this).text(willPause ? 'Resume Network' : 'Pause Network');
     $(this).data('paused', willPause);
-    if (net) {
-      net.send('toggle-network', { paused: willPause });
+    if (typeof relayState !== 'undefined' && relayState) {
+      relayState.networkPaused = willPause;
     }
+    if (net) {
+      net.send('network-toggled', { paused: willPause });
+    }
+    showToastNotification(
+      willPause ? 'Network paused — mining and transactions halted' : 'Network resumed',
+      willPause ? 'warning' : 'success'
+    );
   });
 
   // Copy address button
