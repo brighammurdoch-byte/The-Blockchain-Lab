@@ -219,7 +219,7 @@
   };
 
   MqttAdminRelayTransport.prototype._announcePresence = function () {
-    this.send({
+    var msg = {
       type: this.isAdmin ? 'admin-presence' : 'peer-hello',
       roomCode: this.roomCode,
       from: this.userId,
@@ -227,7 +227,14 @@
       role: this.role,
       isAdmin: this.isAdmin,
       timestamp: Date.now()
-    });
+    };
+    // Hub re-broadcasts pause state on every presence tick so phones that
+    // missed the original network-toggled still stop within a few seconds.
+    if (this.isAdmin && typeof this.networkPaused === 'boolean') {
+      msg.networkPaused = this.networkPaused;
+      msg.payload = { networkPaused: this.networkPaused, paused: this.networkPaused };
+    }
+    this.send(msg);
   };
 
   MqttAdminRelayTransport.prototype._emitPeerCount = function () {

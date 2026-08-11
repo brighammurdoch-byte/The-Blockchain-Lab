@@ -690,6 +690,11 @@ function initClientSideNetworkingForParticipant(mode) {
       debugWarn('Ignoring duplicate-block reject from hub', reason);
       return;
     }
+    // Hub rejects while paused — treat as authoritative pause (missed toggle recovery)
+    if (/network paused|paused by admin/i.test(reason)) {
+      applyNetworkPaused(true, { silent: false });
+      return;
+    }
     debugWarn('Block rejected by hub', reason);
     if (payload && payload.chain && payload.chain.length) {
       applyCanonicalChain(payload.chain, { remine: true });
@@ -787,7 +792,7 @@ function initClientSideNetworkingForParticipant(mode) {
     }
 
     if (typeof state.networkPaused === 'boolean') {
-      handleNetworkToggled({ payload: { paused: state.networkPaused } });
+      applyNetworkPaused(state.networkPaused, { silent: !state.networkPaused });
     }
 
     // loadBlockchainState(); // no-op in relay
@@ -795,7 +800,18 @@ function initClientSideNetworkingForParticipant(mode) {
 
   net.on('admin-presence', (msg) => {
     if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
-    debugLog('Admin is present via relay:', msg.adminUserId);
+    debugLog('Admin is present via relay:', msg.adminUserId || (msg.payload && msg.payload.adminUserId));
+    // Resync pause from hub heartbeats (phones often miss one-shot toggles)
+    const p = msg.payload || msg;
+    if (typeof p.networkPaused === 'boolean' || typeof p.paused === 'boolean') {
+      const want = typeof p.networkPaused === 'boolean' ? p.networkPaused : p.paused;
+      if (want !== networkPaused) {
+        applyNetworkPaused(want, { silent: false });
+      } else if (want && isMining) {
+        // Stuck mining while paused — force stop
+        applyNetworkPaused(true, { silent: true });
+      }
+    }
   });
 
   net.on('peer-hello', (msg) => {
@@ -1120,21 +1136,61 @@ executeDoubleSpendAttack(target1, target2, amount);
   });
 }
 
-function handleNetworkToggled(msg) {
-  const { paused } = msg.payload || msg;
-  const willPause = !!paused;
-  networkPaused = willPause;
-  if (willPause) {
+/**
+ * Apply admin pause/resume. Defensive payload parsing for MQTT/presence shapes.
+ * @param {object|boolean} msgOrPaused - event msg or boolean
+ * @param {{silent?: boolean}} [opts]
+ */
+function applyNetworkPaused(msgOrPaused, opts) {
+  opts = opts || {};
+  let willPause;
+  if (typeof msgOrPaused === 'boolean') {
+    willPause = msgOrPaused;
+  } else {
+    const p = (msgOrPaused && (msgOrPaused.payload || msgOrPaused)) || {};
+    if (typeof p.paused === 'boolean') willPause = p.paused;
+    else if (typeof p.networkPaused === 'boolean') willPause = p.networkPaused;
+    else if (typeof msgOrPaused.paused === 'boolean') willPause = msgOrPaused.paused;
+    else if (typeof msgOrPaused.networkPaused === 'boolean') willPause = msgOrPaused.networkPaused;
+    else return; // no usable flag
+  }
+
+  const prev = networkPaused;
+  networkPaused = !!willPause;
+
+  if (networkPaused) {
     if (isMining) {
       stopMining({ preserveIntent: true });
     }
-    showToastNotification('Network paused by admin — mining halted', 'warning');
+    // Kill any in-flight worker even if isMining was already false
+    if (miningWorker) {
+      try {
+        miningWorker.postMessage({ command: 'stop' });
+        miningWorker.terminate();
+      } catch (e) {}
+      miningWorker = null;
+    }
+    if (!opts.silent || !prev) {
+      showToastNotification('Network paused by admin — mining halted', 'warning');
+    }
+    $('#stopMineBtn').hide();
+    if (window.lastMiningIntent) {
+      $('#mineBtn').show().prop('disabled', true)
+        .text('Network Paused');
+    }
   } else {
-    showToastNotification('Network resumed by admin', 'success');
+    $('#mineBtn').prop('disabled', false).text('Start Mining');
+    if (!opts.silent || prev) {
+      showToastNotification('Network resumed by admin', 'success');
+    }
     if (window.lastMiningIntent && !isMining && !isColluding) {
       setTimeout(startMining, 100);
     }
   }
+}
+
+function handleNetworkToggled(msg) {
+  applyNetworkPaused(msg, { silent: false });
 }
 
 /** Show hard-fork modal + persistent fork control panel. */
@@ -1312,7 +1368,11 @@ function getMiningDifficulty() {
 
 function fetchDataAndMine() {
   if (!isMining) return;
-  
+  if (networkPaused) {
+    stopMining({ preserveIntent: true });
+    return;
+  }
+
   // If we are colluding, we mine on our secret fork instead of the main tip
   if (isColluding && collusionTipHash) {
     const newBlock = {
@@ -1410,11 +1470,14 @@ function mineBlock(block, adminSettings) {
   miningWorker = new Worker(URL.createObjectURL(blob));
 
   miningWorker.onmessage = function() {
-    if (!isMining) {
-      miningWorker.postMessage({ command: 'stop' });
+    if (!isMining || networkPaused) {
+      if (networkPaused && isMining) {
+        stopMining({ preserveIntent: true });
+      }
+      try { if (miningWorker) miningWorker.postMessage({ command: 'stop' }); } catch (e) {}
       return;
     }
-    
+
     // Mine in batches (every iteration tries 1000 nonces)
     const batchSize = 1000;
     for (let i = 0; i < batchSize; i++) {

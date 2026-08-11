@@ -277,8 +277,11 @@ function initClientSideNetworkingForObserver(mode) {
     networkPaused = !!paused;
   });
 
-  net.on('admin-presence', function () {
+  net.on('admin-presence', function (msg) {
     if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
+    const p = (msg && (msg.payload || msg)) || {};
+    if (typeof p.networkPaused === 'boolean') networkPaused = p.networkPaused;
+    else if (typeof p.paused === 'boolean') networkPaused = p.paused;
   });
 
   net.on('peer-hello', function (msg) {

@@ -91,13 +91,18 @@ async function heightOf(page) {
   if (hDuring === hAtPause) pass('Chain height frozen while paused', hAtPause + ' stayed ' + hDuring);
   else fail('Chain height frozen while paused', hAtPause + ' → ' + hDuring + ' (grew while paused)');
 
-  // Attempt start mining while paused — should stay idle or toast and not grow
+  // Attempt start mining while paused — button should be disabled / stay idle
   await miner.bringToFront();
-  if (await miner.locator('#mineBtn').isVisible().catch(() => false)) {
-    await miner.click('#mineBtn');
+  const mineDisabled = await miner.locator('#mineBtn').isDisabled().catch(() => false);
+  const mineVisible = await miner.locator('#mineBtn').isVisible().catch(() => false);
+  if (mineDisabled || (mineVisible && /paused/i.test(await miner.locator('#mineBtn').textContent().catch(() => '')))) {
+    pass('Cannot start mining while paused', 'mineBtn disabled/paused label');
+  } else if (mineVisible) {
+    await miner.click('#mineBtn', { force: true }).catch(() => {});
     await waitMs(2000);
     const stillIdle = await miner.locator('#mineBtn').isVisible().catch(() => false);
-    if (stillIdle) pass('Cannot start mining while paused', 'mineBtn still visible');
+    const stillNotMining = !(await miner.locator('#stopMineBtn').isVisible().catch(() => false));
+    if (stillIdle && stillNotMining) pass('Cannot start mining while paused', 'mineBtn still visible');
     else fail('Cannot start mining while paused', 'mining restarted under pause');
   } else {
     pass('Cannot start mining while paused', 'already blocked');

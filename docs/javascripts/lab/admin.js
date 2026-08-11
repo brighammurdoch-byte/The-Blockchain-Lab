@@ -286,6 +286,7 @@ function initClientSideNetworking(mode, roomCode) {
         }
         if (relayState.networkPaused) {
           $('#toggleNetworkBtn').text('Resume Network').data('paused', true);
+          if (net && net.transport) net.transport.networkPaused = true;
         }
         if (restored.settings) {
           applyParameterLockUI(!!restored.settings.parametersLocked);
@@ -479,10 +480,22 @@ function initClientSideNetworking(mode, roomCode) {
   });
 
   // Basic hashrate reporting (from test peers or future real participants)
+  function nackMinerIfPaused(uid) {
+    if (!relayState || !relayState.networkPaused || !net || !uid) return false;
+    net.send('network-toggled', {
+      paused: true,
+      networkPaused: true,
+      reason: 'hub-sync',
+      seq: Date.now()
+    }, uid);
+    return true;
+  }
+
   net.on('hashrate-report', (msg) => {
     const payload = msg.payload || msg;
     const uid = payload.userId || msg.from;
     const hashrate = payload.hashrate;
+    if (nackMinerIfPaused(uid) && hashrate > 0) return;
     if (relayState && uid) {
       relayState.updateHashrate(uid, hashrate);
       if (typeof renderClientParticipants === 'function') renderClientParticipants();
@@ -497,6 +510,7 @@ function initClientSideNetworking(mode, roomCode) {
     const payload = msg.payload || msg;
     const uid = payload.userId || msg.from;
     const hashrate = payload.hashrate;
+    if (nackMinerIfPaused(uid) && hashrate > 0) return;
     if (relayState && uid) {
       relayState.updateHashrate(uid, hashrate);
       if (typeof renderClientParticipants === 'function') renderClientParticipants();
@@ -513,6 +527,29 @@ function initClientSideNetworking(mode, roomCode) {
     const payload = msg.payload || msg;
     const uid = payload.minerAddress || payload.userId || msg.from;
     if (!uid || !relayState) return;
+
+    // Phone missed the pause signal but is still hashing — force a pause nack
+    if (relayState.networkPaused) {
+      if (net) {
+        net.send('network-toggled', {
+          paused: true,
+          networkPaused: true,
+          reason: 'hub-sync',
+          seq: Date.now()
+        }, uid);
+        // Also broadcast so all stragglers catch up
+        net.send('network-toggled', {
+          paused: true,
+          networkPaused: true,
+          reason: 'hub-sync-broadcast',
+          seq: Date.now() + 1
+        });
+      }
+      relayState.setParticipantStatus(uid, 'idle');
+      if (typeof renderClientParticipants === 'function') renderClientParticipants();
+      return;
+    }
+
     relayState.addOrUpdateParticipant(uid, 'miner');
     relayState.setParticipantStatus(uid, 'mining');
     const viz = window.networkViz || networkViz;
@@ -699,7 +736,8 @@ function setupEventHandlers() {
     updateTopologyModeCaption(selectedMode);
   });
   
-  // Network toggle — peers listen for 'network-toggled'; hub also rejects blocks/txs while paused
+  // Network toggle — peers listen for 'network-toggled'; hub also rejects blocks/txs while paused.
+  // Mobile MQTT is lossy (QoS 0) so we re-broadcast + embed pause in admin-presence ticks.
   $('#toggleNetworkBtn').click(function() {
     const isPaused = $(this).data('paused') || false;
     const willPause = !isPaused;
@@ -708,13 +746,14 @@ function setupEventHandlers() {
     if (typeof relayState !== 'undefined' && relayState) {
       relayState.networkPaused = willPause;
     }
-    if (net) {
-      net.send('network-toggled', { paused: willPause });
-    }
+    broadcastNetworkPausedState(willPause, { burst: true });
     showToastNotification(
       willPause ? 'Network paused — mining and transactions halted' : 'Network resumed',
       willPause ? 'warning' : 'success'
     );
+    if (relayState && net && net.roomCode && window.Persistence) {
+      try { Persistence.saveAdminState(net.roomCode, relayState.getFullState()); } catch (e) {}
+    }
   });
 
   // Copy address button
@@ -858,6 +897,44 @@ function applyParameterLockUI(locked) {
     $('#lockParameters').closest('.checkbox').addClass('text-danger');
   } else {
     $('#lockParameters').closest('.checkbox').removeClass('text-danger');
+  }
+}
+
+/**
+ * Broadcast pause/resume to all peers.
+ * Mobile MQTT (QoS 0) drops packets — send a short burst + stamp transport presence.
+ */
+function broadcastNetworkPausedState(paused, opts) {
+  opts = opts || {};
+  const willPause = !!paused;
+  if (typeof relayState !== 'undefined' && relayState) {
+    relayState.networkPaused = willPause;
+  }
+  // So periodic admin-presence ticks carry the flag
+  if (net && net.transport) {
+    net.transport.networkPaused = willPause;
+  }
+  if (!net) return;
+
+  const sendOnce = function (seq) {
+    const payload = {
+      paused: willPause,
+      networkPaused: willPause,
+      seq: seq || Date.now(),
+      reason: opts.reason || 'admin-toggle'
+    };
+    // Primary event miners listen for
+    net.send('network-toggled', payload);
+    // Legacy alias
+    net.send('toggle-network', payload);
+  };
+
+  sendOnce(Date.now());
+  if (opts.burst) {
+    // Extra deliveries for phones that reconnect / miss the first publish
+    setTimeout(function () { sendOnce(Date.now()); }, 350);
+    setTimeout(function () { sendOnce(Date.now()); }, 1200);
+    setTimeout(function () { sendOnce(Date.now()); }, 2800);
   }
 }
 
