@@ -19,6 +19,7 @@ let lastKnownAdminSettings = null;
 let myForkChoice = 'classic';
 let pendingForkHeight = null;
 let seenBlocks = new Set(); // Prevent infinite gossip loops
+let localPendingTxs = []; // Mempool mirror from hub
 let rtcPeerConnections = {}; // WebRTC connections
 let rtcDataChannels = {}; // WebRTC data channels
 let pendingDemoCode = null; // Store admin-triggered demo code
@@ -80,6 +81,13 @@ function applyCanonicalChain(chain, opts) {
     const orphans = opts.orphans || [];
     updateParticipantBlockchainView({ chain: window.lastRelayedChain }, parts);
     updateNetworkBlockchainView(window.lastRelayedChain, orphans, parts);
+    if (opts.pendingTransactions) {
+      localPendingTxs = opts.pendingTransactions.slice();
+      updatePendingTransactions({
+        pendingTransactions: localPendingTxs,
+        participants: parts
+      });
+    }
     if (opts.networkStats || parts.length) {
       updateNetworkStats({
         networkStats: opts.networkStats || {},
@@ -140,8 +148,22 @@ window.sha256 = function(data) {
 
 // Apply participant's custom validator code to their local node
 function applyCustomValidator(code) {
-  if (code.includes('WALLET DOUBLE SPEND SCRIPT')) return true; // Ignore wallet attack scripts
-  
+  // Defensive: corrupt JSON / jQuery oddities have delivered objects here before
+  if (code && typeof code === 'object' && typeof code.value === 'string') {
+    code = code.value;
+  }
+  if (typeof code !== 'string') {
+    return 'Validator code must be a string';
+  }
+  if (code.includes('WALLET DOUBLE SPEND SCRIPT')) {
+    // Wallet attack scripts are not validators — leave mining rules alone
+    return true;
+  }
+  if (!code.trim()) {
+    try { delete window.customValidator; } catch (e) { window.customValidator = null; }
+    return true;
+  }
+
   try {
     let browserCode = code
       .replace(/const crypto = require\(['"]crypto['"]\);/g, `
@@ -399,11 +421,11 @@ function initClientSideNetworkingForParticipant(mode) {
     // Update UI elements that the old 'settingsUpdated' handler touched
     if (settings.difficultyLeading !== undefined) {
       // Many places read from lastKnownAdminSettings or update displays
-      $('#difficultyLevel').text(settings.difficultyLeading + ' + 0x' + (settings.difficultySecondary || 15).toString(16));
+      $('#difficultyLevel').text(settings.difficultyLeading + ' + 0x' + (settings.difficultySecondary != null ? settings.difficultySecondary : 8).toString(16));
     }
     // Re-apply any mining parameter changes if mining
-    if (isMining && miningWorker) {
-      miningWorker.postMessage({ type: 'updateSettings', settings });
+    if (isMining) {
+      remineOnCanonicalTip();
     }
   });
 
@@ -466,6 +488,7 @@ function initClientSideNetworkingForParticipant(mode) {
         participants: payload.participants || [],
         networkStats: payload.networkStats,
         orphans: payload.orphans || [],
+        pendingTransactions: payload.pendingTransactions,
         remine: true
       });
       if (payload.reorg) {
@@ -512,6 +535,25 @@ function initClientSideNetworkingForParticipant(mode) {
       : 'Block rejected — remine on hub tip', 'warning');
   });
 
+  net.on('transaction-accepted', (msg) => {
+    const payload = msg.payload || msg;
+    const list = payload.pendingTransactions;
+    const tx = payload.transaction || payload;
+    if (Array.isArray(list)) {
+      localPendingTxs = list.slice();
+    } else if (tx && tx.from && tx.to) {
+      const id = tx.id || (tx.from + ':' + tx.to + ':' + tx.timestamp);
+      if (!localPendingTxs.some((t) => (t.id || (t.from + ':' + t.to + ':' + t.timestamp)) === id)) {
+        localPendingTxs.push(Object.assign({ id: id }, tx));
+      }
+    }
+    updatePendingTransactions({
+      pendingTransactions: localPendingTxs,
+      participants: []
+    });
+    showToastNotification('Transaction added to mempool', 'success');
+  });
+
   net.on('initial-state', (msg) => {
     const state = msg.payload || msg;
     if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
@@ -527,13 +569,13 @@ function initClientSideNetworkingForParticipant(mode) {
       lastKnownAdminSettings = normalizeAdminSettings(state.adminSettings);
 
       $('#difficultyLevel').text(
-        (state.adminSettings.difficultyLeading || 3) + ' + 0x' +
-        (state.adminSettings.difficultySecondary || 15).toString(16)
+        (state.adminSettings.difficultyLeading || 4) + ' + 0x' +
+        (state.adminSettings.difficultySecondary != null ? state.adminSettings.difficultySecondary : 8).toString(16)
       );
 
-      // Push latest difficulty to mining worker if running
-      if (isMining && miningWorker && lastKnownAdminSettings) {
-        miningWorker.postMessage({ type: 'updateSettings', settings: lastKnownAdminSettings });
+      // Push latest difficulty by restarting the mine loop on the hub tip
+      if (isMining && lastKnownAdminSettings) {
+        remineOnCanonicalTip();
       }
     }
 
@@ -543,6 +585,7 @@ function initClientSideNetworkingForParticipant(mode) {
         participants: state.participants || [],
         networkStats: state.networkStats,
         orphans: state.orphans || [],
+        pendingTransactions: state.pendingTransactions || [],
         remine: true
       });
       debugLog('Relayed chain length:', state.chain.length);
@@ -762,7 +805,11 @@ function setupEventHandlers() {
   // Validator Code Editor Handlers
   $('#submitValidatorCodeBtn').click(function() {
     const modifiedCode = $('#validatorCodeEditor').val();
-    
+    if (typeof modifiedCode === 'string' && modifiedCode.includes('WALLET DOUBLE SPEND SCRIPT')) {
+      showToastNotification('This is a wallet attack script — use Execute Double Spend, not Submit.', 'warning');
+      return;
+    }
+
     // Apply to local node immediately
     const compileResult = applyCustomValidator(modifiedCode);
     if (compileResult !== true) {
@@ -771,16 +818,21 @@ function setupEventHandlers() {
     } else {
       showToastNotification('Custom validator rules applied to your node!', 'success');
     }
-    
   });
   
   $('#resetValidatorCodeBtn').click(function() {
     if (confirm('Are you sure you want to reset to the original validation code?')) {
-      $('#validatorCodeEditor').val(originalValidatorCode);
-      applyCustomValidator(originalValidatorCode);
+      try { delete window.customValidator; } catch (e) { window.customValidator = null; }
+      const src = (typeof originalValidatorCode === 'string') ? originalValidatorCode : '';
+      $('#validatorCodeEditor').val(src);
+      const resetResult = applyCustomValidator(src);
       $('#executeDoubleSpendBtn').hide();
       $('#submitValidatorCodeBtn').show();
-      showToastNotification('Validator reset to original code!', 'success');
+      if (resetResult === true) {
+        showToastNotification('Validator reset to original code!', 'success');
+      } else {
+        showToastNotification('Validator reset (built-in rules). Reload note: ' + resetResult, 'warning');
+      }
     }
   });
   
@@ -900,8 +952,8 @@ function seedLocalGenesisChain() {
   window.lastRelayedChain = [genesis];
   seenBlocks.add(genesis.hash);
   lastKnownAdminSettings = normalizeAdminSettings({
-    difficultyLeading: 3,
-    difficultySecondary: 15,
+    difficultyLeading: 4,
+    difficultySecondary: 8,
     miningRewardCoins: 10
   });
   $('#difficultyLevel').text('3 + 0xF');
@@ -913,9 +965,9 @@ function seedLocalGenesisChain() {
 function normalizeAdminSettings(settings) {
   const s = Object.assign({}, settings || {});
   const leading = parseInt(s.difficultyLeading, 10);
-  const secondary = s.difficultySecondary !== undefined ? parseInt(s.difficultySecondary, 10) : 15;
-  s.difficultyLeading = isNaN(leading) ? 3 : leading;
-  s.difficultySecondary = isNaN(secondary) ? 15 : secondary;
+  const secondary = s.difficultySecondary !== undefined ? parseInt(s.difficultySecondary, 10) : 8;
+  s.difficultyLeading = isNaN(leading) ? 4 : leading;
+  s.difficultySecondary = isNaN(secondary) ? 8 : secondary;
   if (!s.currentDifficulty || typeof s.currentDifficulty !== 'object') {
     s.currentDifficulty = {
       leadingZeros: s.difficultyLeading,
@@ -966,7 +1018,7 @@ function fetchDataAndMine() {
       timestamp: Date.now(),
       nonce: 0,
       previousHash: tipBlock.hash,
-      transactions: [], // pending txs come via relay updates
+      transactions: localPendingTxs.slice(0, 20),
       miner: userId,
       difficulty: getMiningDifficulty(),
       hash: '',
@@ -1086,7 +1138,7 @@ function mineBlock(block, adminSettings) {
         block.previousHash = block.hash;
         block.nonce = 0;
         block.hash = '';
-        block.transactions = []; // Empty transactions for now (avoids double spending already mined txs)
+        block.transactions = localPendingTxs.slice(0, 20);
         block.timestamp = Date.now();
         block.forkId = myForkChoice;
         nonce = 0;
@@ -1234,29 +1286,33 @@ function sendTransaction(recipientAddress, amount) {
   }
 }
 
+function normalizeValidatorSource(code) {
+  if (typeof code === 'string') return code;
+  if (code && typeof code === 'object' && typeof code.value === 'string') return code.value;
+  return '';
+}
+
 function loadValidatorCode() {
   var url = (window.LabPaths && LabPaths.assetUrl)
     ? LabPaths.assetUrl('/data/validator-code.json')
     : '/data/validator-code.json';
   // Prefer static asset; fall back to Express route for local npm start
   $.getJSON(url).done(function(data) {
-    if (data && data.code) {
-      originalValidatorCode = data.code;
-      $('#validatorCodeEditor').val(data.code);
-      applyCustomValidator(data.code);
-    } else if (data && data.success && data.code) {
-      originalValidatorCode = data.code;
-      $('#validatorCodeEditor').val(data.code);
-      applyCustomValidator(data.code);
+    const src = normalizeValidatorSource(data && data.code);
+    if (src) {
+      originalValidatorCode = src;
+      $('#validatorCodeEditor').val(src);
+      applyCustomValidator(src);
     }
   }).fail(function() {
     $.get('/lab/validator-code', function(data) {
-      if (data.success) {
-        originalValidatorCode = data.code;
-        $('#validatorCodeEditor').val(data.code);
-        applyCustomValidator(data.code);
+      const src = normalizeValidatorSource(data && data.code);
+      if (data && data.success && src) {
+        originalValidatorCode = src;
+        $('#validatorCodeEditor').val(src);
+        applyCustomValidator(src);
       } else {
-        $('#validatorCodeEditor').val('// Error loading code: ' + data.error);
+        $('#validatorCodeEditor').val('// Error loading code: ' + ((data && data.error) || 'unknown'));
       }
     }).fail(function() {
       $('#validatorCodeEditor').val('// Failed to load validator code.');
@@ -1466,14 +1522,23 @@ function updateParticipantList(blockchain) {
   let html = '';
   
   participants.forEach(p => {
-    const roleLabel = p.role === 'wallet' ? '<span class="label label-info">Wallet</span>' : '<span class="label label-success">Miner</span>';
-    const nameHtml = p.name ? `<strong style="display: block; margin-top: 4px;">${p.name}</strong>` : '';
+    const addr = p.userId || p.address || p.id || '';
+    const mined = p.blocksMined != null ? p.blocksMined : (p.minedBlocks || 0);
+    const bal = p.balance != null ? p.balance : 0;
+    const roleLabel = (p.role === 'wallet' || p.role === 'observer')
+      ? '<span class="label label-info">Wallet</span>'
+      : (p.role === 'admin'
+        ? '<span class="label label-warning">Admin</span>'
+        : '<span class="label label-success">Miner</span>');
+    const nameHtml = (p.displayName || p.name)
+      ? `<strong style="display: block; margin-top: 4px;">${p.displayName || p.name}</strong>`
+      : '';
     html += `<li class="list-group-item">
       ${roleLabel}
-      <button class="btn btn-xs btn-default pull-right copy-btn" data-clipboard-text="${p.address}" title="Copy Address" style="margin-top: -2px;"><i class="glyphicon glyphicon-copy"></i></button>
+      <button class="btn btn-xs btn-default pull-right copy-btn" data-clipboard-text="${addr}" title="Copy Address" style="margin-top: -2px;"><i class="glyphicon glyphicon-copy"></i></button>
       ${nameHtml}
-      <div style="margin-top: 4px;"><code style="font-size: 10px; word-break: break-all;">${p.address}</code></div>
-      <span class="text-muted small" style="margin-top: 4px; display: inline-block;">${p.minedBlocks || 0} blocks, ${p.balance || 0} coins</span>
+      <div style="margin-top: 4px;"><code style="font-size: 10px; word-break: break-all;">${addr}</code></div>
+      <span class="text-muted small" style="margin-top: 4px; display: inline-block;">${mined} blocks, ${bal} coins</span>
     </li>`;
   });
   

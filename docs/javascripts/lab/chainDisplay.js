@@ -17,52 +17,61 @@
     return escapeHtml(s).replace(/'/g, '&#39;');
   }
 
+  function participantDisplayName(p) {
+    if (!p) return '';
+    var nm = p.displayName || p.name || '';
+    return nm ? String(nm).trim() : '';
+  }
+
   function buildParticipantNameLookup(participants) {
     var map = Object.create(null);
     if (!participants || !participants.length) return map;
     for (var i = 0; i < participants.length; i++) {
       var p = participants[i];
-      if (p && p.address) {
-        map[p.address] = p.name ? String(p.name).trim() : '';
-      }
+      if (!p) continue;
+      var nm = participantDisplayName(p);
+      if (!nm) continue;
+      if (p.userId) map[String(p.userId)] = nm;
+      if (p.address) map[String(p.address)] = nm;
+      if (p.id) map[String(p.id)] = nm;
     }
     return map;
   }
 
   /**
-   * Renders optional display name, full address (wraps when narrow), and copy control.
+   * Renders address with optional node name beside it, plus copy control.
    * @param {string} address miner or wallet id
-   * @param {Record<string,string>} nameLookup address -> display name
+   * @param {Record<string,string>} nameLookup address/userId -> display name
    */
   function formatChainParticipantHtml(address, nameLookup) {
     var addr = address == null ? '' : String(address);
     if (!addr) return '<span class="text-muted">—</span>';
-    var isSystem = addr === 'system';
+    var isSystem = addr === 'system' || addr === 'genesis';
     var nm = !isSystem && nameLookup && nameLookup[addr] ? String(nameLookup[addr]).trim() : '';
-    var bits = [];
-    if (nm) {
-      bits.push(
-        '<div class="chain-node-name text-muted" style="font-size:12px;line-height:1.25;margin-bottom:4px;"><strong>' +
-          escapeHtml(nm) +
-          '</strong></div>'
-      );
-    }
+
     var copyBtn = '';
     if (!isSystem) {
       copyBtn =
         '<button type="button" class="btn btn-xs btn-default copy-btn" data-clipboard-text="' +
         escapeAttr(addr) +
-        '" title="Copy address" aria-label="Copy address"><i class="glyphicon glyphicon-copy"></i></button>';
+        '" title="Copy address" aria-label="Copy address" style="flex-shrink:0;"><i class="glyphicon glyphicon-copy"></i></button>';
     }
-    bits.push(
-      '<div class="chain-id-row" style="display:flex;align-items:flex-start;gap:6px;justify-content:space-between;">' +
-        '<code class="chain-address-full" style="font-size:11px;word-break:break-all;flex:1;min-width:0;margin:0;">' +
-        escapeHtml(addr) +
-        '</code>' +
-        copyBtn +
-        '</div>'
+
+    var nameBit = nm
+      ? '<strong class="chain-node-name" style="margin-right:6px;white-space:nowrap;">' +
+        escapeHtml(nm) +
+        '</strong>'
+      : '';
+
+    return (
+      '<div class="chain-id-row" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
+      nameBit +
+      '<code class="chain-address-full" style="font-size:11px;word-break:break-all;flex:1;min-width:0;margin:0;">' +
+      escapeHtml(addr) +
+      '</code>' +
+      copyBtn +
+      '</div>'
     );
-    return bits.join('');
   }
 
   window.ChainDisplay = {

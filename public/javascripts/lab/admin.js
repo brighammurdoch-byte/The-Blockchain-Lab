@@ -68,7 +68,7 @@ $(document).ready(function() {
   // Client-relay badge
   $('#sessionCode').after(
     `<span style="display:block; margin-top:6px; text-align:center;">
-       <span class="label label-success" style="font-size:0.9em;" id="networkModeBadge">Admin-hosted (WebRTC Hub)</span>
+       <span class="label label-success" style="font-size:0.9em;" id="networkModeBadge">Admin-hosted (cloud relay)</span>
      </span>`
   );
   console.log('[BlockchainLab] Client-relay mode active for room:', sessionId);
@@ -243,7 +243,7 @@ function initClientSideNetworking(mode, roomCode) {
     net.transport.initAsAdmin(roomCode, adminUserId).then(() => {
       console.log('[ClientNet] Admin relay transport initialized for room:', roomCode, 'mode:', mode);
 
-      // Only announce after WebRTC/BroadcastChannel are actually up (critical for phone QR joins)
+      // Only announce after MQTT/BroadcastChannel are actually up (critical for phone QR joins)
       net.send('admin-presence', { roomCode: roomCode, adminUserId: adminUserId });
       if (relayState) {
         const state = relayState.getSanitizedStateForNewPeer();
@@ -276,8 +276,8 @@ function initClientSideNetworking(mode, roomCode) {
 
         // Re-apply restored settings to the UI sliders
         if (restored.settings) {
-          $('#difficultyLeading').val(restored.settings.difficultyLeading || 3);
-          $('#difficultySecondary').val(restored.settings.difficultySecondary || 15);
+          $('#difficultyLeading').val(restored.settings.difficultyLeading || 4);
+          $('#difficultySecondary').val(restored.settings.difficultySecondary != null ? restored.settings.difficultySecondary : 8);
           $('#miningReward').val(restored.settings.miningRewardCoins || 10);
           $('#lockParameters').prop('checked', !!restored.settings.parametersLocked);
           updateDifficultyDisplay();
@@ -288,8 +288,11 @@ function initClientSideNetworking(mode, roomCode) {
 
     // Apply any current slider values as initial settings (if no restore)
     const initialSettings = {
-      difficultyLeading: parseInt($('#difficultyLeading').val()) || 3,
-      difficultySecondary: parseInt($('#difficultySecondary').val()) || 15,
+      difficultyLeading: parseInt($('#difficultyLeading').val()) || 4,
+      difficultySecondary: (function () {
+        var s = parseInt($('#difficultySecondary').val(), 10);
+        return isNaN(s) ? 8 : s;
+      })(),
       miningRewardCoins: parseInt($('#miningReward').val()) || 10,
       parametersLocked: $('#lockParameters').is(':checked')
     };
@@ -365,6 +368,16 @@ function initClientSideNetworking(mode, roomCode) {
     if (relayState && net && net.roomCode) {
       Persistence.saveAdminState(net.roomCode, relayState.getFullState());
     }
+  });
+
+  net.on('transaction-accepted', (msg) => {
+    const payload = msg.payload || msg;
+    // Ensure hub state is current (coordinator already added); refresh projector lists
+    if (typeof renderClientParticipants === 'function') renderClientParticipants();
+    if (typeof renderClientRelayChain === 'function') renderClientRelayChain();
+    const n = (payload && payload.pendingTransactions && payload.pendingTransactions.length) ||
+      (relayState && relayState.pendingTransactions && relayState.pendingTransactions.length) || 0;
+    showToastNotification('Transaction in mempool (' + n + ' pending)', 'info');
   });
 
   // Basic hashrate reporting (from test peers or future real participants)
@@ -490,7 +503,7 @@ function setupEventHandlers() {
     }
     const badgeText = selectedMode === 'p2p'
       ? 'Full P2P (mesh gossip)'
-      : 'Admin-hosted (WebRTC Hub)';
+      : 'Admin-hosted (cloud relay)';
     $('#networkModeBadge').text(badgeText);
 
     // Client-relay only
@@ -944,22 +957,30 @@ function renderClientRelayChain() {
 function renderClientParticipants() {
   if (!relayState) return;
 
-  const participants = Array.from(relayState.participants.values());
+  const participants = Array.from(relayState.participants.values())
+    .filter(function (p) {
+      const id = p.userId || '';
+      return id && String(id).indexOf('probe-') !== 0;
+    });
   let html = '';
 
   if (participants.length === 0) {
     html = '<tr><td colspan="5" class="text-center text-muted">No miners or wallets yet</td></tr>';
   } else {
     participants.forEach(p => {
-      const roleClass = p.role === 'wallet' ? 'label-info' : 'label-success';
-      const roleText = p.role === 'wallet' ? 'Wallet' : 'Miner';
+      const roleClass = p.role === 'wallet' ? 'label-info' : (p.role === 'admin' ? 'label-warning' : 'label-success');
+      const roleText = p.role === 'wallet' ? 'Wallet' : (p.role === 'admin' ? 'Admin' : 'Miner');
+      const mined = p.blocksMined != null ? p.blocksMined : (p.minedBlocks || 0);
+      const name = p.displayName || p.name || '';
+      const nameHtml = name ? `<strong style="display:block;margin-bottom:2px;">${name}</strong>` : '';
       html += `
         <tr>
           <td>
+            ${nameHtml}
             <code style="font-size: 11px; word-break: break-all;">${p.userId}</code>
           </td>
           <td><span class="label ${roleClass}">${roleText}</span></td>
-          <td><strong>${p.blocksMined || 0}</strong></td>
+          <td><strong>${mined}</strong></td>
           <td>${p.balance || 0} coins</td>
           <td><span class="text-success">${p.status || 'idle'}</span> <small>(${(p.hashrate || 0).toFixed(0)} H/s)</small></td>
         </tr>
@@ -968,4 +989,22 @@ function renderClientParticipants() {
   }
 
   $('#participantsList').html(html);
+
+  // Keep Node Names table in sync too
+  let namesHtml = '';
+  if (participants.length === 0) {
+    namesHtml = '<tr><td colspan="3" class="text-center text-muted">Waiting for miners to join...</td></tr>';
+  } else {
+    participants.forEach(function (p) {
+      const name = p.displayName || p.name || '';
+      namesHtml += `
+        <tr>
+          <td><code style="font-size: 11px; word-break: break-all;">${p.userId}</code></td>
+          <td>${name ? name : '<span style="color:#999;">Unnamed</span>'}</td>
+          <td><span class="label ${(p.status === 'mining') ? 'label-success' : 'label-default'}">${p.status || 'idle'}</span>
+            <small class="text-muted"> · ${p.blocksMined || 0} blocks</small></td>
+        </tr>`;
+    });
+  }
+  $('#nodeNamesList').html(namesHtml);
 }

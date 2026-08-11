@@ -20,8 +20,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     this.participants = new Map(); // userId -> { userId, role, name, hashrate, blocksMined, balance, joinedAt }
     this.pendingTransactions = [];
     this.settings = {
-      difficultyLeading: 3,
-      difficultySecondary: 15,
+      difficultyLeading: 4,
+      difficultySecondary: 8,
       miningRewardCoins: 10,
       parametersLocked: false,
       networkMode: 'admin-relay'
@@ -65,8 +65,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
   updateSettings(newSettings) {
     this.settings = { ...this.settings, ...newSettings };
     // Always expose a miner-friendly difficulty object
-    const leading = this.settings.difficultyLeading || 3;
-    const secondary = this.settings.difficultySecondary !== undefined ? this.settings.difficultySecondary : 15;
+    const leading = this.settings.difficultyLeading || 4;
+    const secondary = this.settings.difficultySecondary !== undefined ? this.settings.difficultySecondary : 8;
     this.settings.currentDifficulty = {
       leadingZeros: leading,
       secondaryHex: Number(secondary).toString(16).toUpperCase()
@@ -203,7 +203,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     }
 
     // Basic PoW check using current settings
-    const leading = (this.settings.difficultyLeading != null) ? this.settings.difficultyLeading : 3;
+    const leading = (this.settings.difficultyLeading != null) ? this.settings.difficultyLeading : 4;
     const requiredPrefix = leading > 0 ? '0'.repeat(leading) : '';
 
     if (requiredPrefix && !block.hash.startsWith(requiredPrefix)) {
@@ -244,6 +244,11 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
     this._recomputeMiningRewards();
 
+    // Drop included mempool txs when this block lands on the canonical chain
+    if (onBest && typeof this.clearIncludedTransactions === 'function') {
+      this.clearIncludedTransactions(block);
+    }
+
     return {
       accepted: true,
       newHeight: Math.max(0, this.chain.length - 1),
@@ -255,9 +260,40 @@ if (typeof window.RelayBlockchainState === 'undefined') {
   }
   tryAddTransaction(tx) {
     if (!tx) return { accepted: false, reason: 'Empty transaction' };
-    this.pendingTransactions.push(tx);
+    // Normalize shape
+    const normalized = {
+      from: tx.from,
+      to: tx.to,
+      amount: Number(tx.amount),
+      timestamp: tx.timestamp || Date.now(),
+      id: tx.id || (String(tx.from || '') + ':' + String(tx.to || '') + ':' + String(tx.timestamp || Date.now()))
+    };
+    if (!normalized.from || !normalized.to || !(normalized.amount > 0)) {
+      return { accepted: false, reason: 'Invalid transaction' };
+    }
+    // Dedupe
+    if (this.pendingTransactions.some((t) => t.id === normalized.id)) {
+      return { accepted: true, duplicate: true };
+    }
+    this.pendingTransactions.push(normalized);
     this.networkStats.totalTransactions = (this.networkStats.totalTransactions || 0) + 1;
-    return { accepted: true };
+    return { accepted: true, transaction: normalized };
+  }
+
+  /** Remove mempool txs that were included in a newly accepted block */
+  clearIncludedTransactions(block) {
+    if (!block || !Array.isArray(block.transactions) || block.transactions.length === 0) {
+      return;
+    }
+    const keys = new Set(
+      block.transactions.map((t) =>
+        (t.id) || (String(t.from) + ':' + String(t.to) + ':' + String(t.timestamp))
+      )
+    );
+    this.pendingTransactions = this.pendingTransactions.filter((t) => {
+      const key = t.id || (String(t.from) + ':' + String(t.to) + ':' + String(t.timestamp));
+      return !keys.has(key);
+    });
   }
 
   // What we send to a newly joined peer

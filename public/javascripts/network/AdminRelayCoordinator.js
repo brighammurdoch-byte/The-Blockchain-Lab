@@ -111,12 +111,14 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
     }
 
     if (result.accepted) {
-      const chain = result.chain ||
+      const snap = (this.lab && typeof this.lab.getSanitizedStateForNewPeer === 'function')
+        ? this.lab.getSanitizedStateForNewPeer()
+        : {};
+      const chain = result.chain || snap.chain ||
         (this.lab && Array.isArray(this.lab.chain) ? this.lab.chain.slice() : null);
-      const participants = (this.lab && this.lab.participants instanceof Map)
-        ? Array.from(this.lab.participants.values())
-        : (this.lab && typeof this.lab.getSanitizedStateForNewPeer === 'function'
-          ? (this.lab.getSanitizedStateForNewPeer().participants || [])
+      const participants = snap.participants ||
+        ((this.lab && this.lab.participants instanceof Map)
+          ? Array.from(this.lab.participants.values())
           : []);
 
       this.net.send('block-accepted', {
@@ -127,14 +129,12 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
         tipChanged: !!result.tipChanged,
         newHeight: result.newHeight,
         chain: chain,
-        orphans: (this.lab && typeof this.lab.getSanitizedStateForNewPeer === 'function')
-          ? (this.lab.getSanitizedStateForNewPeer().orphans || [])
-          : [],
+        orphans: snap.orphans || [],
         participants: participants,
-        networkStats: this.lab && this.lab.networkStats ? { ...this.lab.networkStats } : undefined
+        pendingTransactions: snap.pendingTransactions || [],
+        networkStats: snap.networkStats || (this.lab && this.lab.networkStats ? { ...this.lab.networkStats } : undefined)
       });
     } else {
-      // Still send canonical tip so the miner can remine on the real chain
       const chain = this.lab && Array.isArray(this.lab.chain) ? this.lab.chain.slice() : null;
       this.net.send('block-rejected', {
         reason: result.reason || 'Rejected by hub',
@@ -145,7 +145,7 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
   }
 
   _handleTransactionSubmitted(msg) {
-    const tx = msg.payload?.transaction || msg.transaction;
+    const tx = msg.payload?.transaction || msg.transaction || msg.payload;
     let result = { accepted: false };
 
     if (this.lab && typeof this.lab.tryAddTransaction === 'function') {
@@ -153,7 +153,13 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
     }
 
     if (result.accepted) {
-      this.net.send('transaction-accepted', tx);
+      const pending = (this.lab && Array.isArray(this.lab.pendingTransactions))
+        ? this.lab.pendingTransactions.slice()
+        : [];
+      this.net.send('transaction-accepted', {
+        transaction: result.transaction || tx,
+        pendingTransactions: pending
+      });
     }
   }
 }

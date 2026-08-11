@@ -5,7 +5,7 @@
  *
  * Modes:
  *   'simulated'   → BroadcastChannel only (same-browser multi-tab testing)
- *   'admin-relay' → WebRTC Admin-hosted hub (+ BroadcastChannel mirror) — classroom default
+ *   'admin-relay' → MQTT classroom hub (+ BroadcastChannel) — default, works on phones
  *   'p2p'         → WebRTC full mesh gossip — teachable decentralized mode
  */
 
@@ -33,18 +33,23 @@ class NetworkManager {
       this.transport = new SimulatedAdminRelayTransport();
     } else if (this.mode === 'p2p') {
       if (typeof P2PAdminRelayTransport === 'undefined') {
-        console.warn('P2P transport missing; falling back to BroadcastChannel simulated mode');
-        this.transport = new SimulatedAdminRelayTransport();
-        this.mode = 'simulated';
+        console.warn('P2P transport missing; falling back to MQTT/BroadcastChannel');
+        this.transport = typeof MqttAdminRelayTransport !== 'undefined'
+          ? new MqttAdminRelayTransport()
+          : new SimulatedAdminRelayTransport();
+        this.mode = 'admin-relay';
       } else {
         this.transport = new P2PAdminRelayTransport({ routingMode: 'mesh' });
       }
     } else {
-      // admin-relay (default)
-      if (typeof P2PAdminRelayTransport !== 'undefined') {
+      // admin-relay (default): MQTT for reliable phone ↔ instructor joins
+      if (typeof MqttAdminRelayTransport !== 'undefined') {
+        this.transport = new MqttAdminRelayTransport();
+      } else if (typeof P2PAdminRelayTransport !== 'undefined') {
+        console.warn('MQTT transport missing; using WebRTC admin-relay (mobile may fail)');
         this.transport = new P2PAdminRelayTransport({ routingMode: 'hub' });
       } else if (typeof SimulatedAdminRelayTransport !== 'undefined') {
-        console.warn('P2P transport missing; using BroadcastChannel admin-relay');
+        console.warn('Using BroadcastChannel-only admin-relay');
         this.transport = new SimulatedAdminRelayTransport();
       } else {
         throw new Error('No networking transport available');
@@ -54,9 +59,7 @@ class NetworkManager {
     var self = this;
     this.transport.onMessage = function (msg) {
       if (!msg) return;
-      // Honor targeted messages when present
       if (msg.to && self.userId && msg.to !== self.userId && !self.isAdmin) return;
-      // Normalize room codes (join codes are case-insensitive)
       var msgRoom = msg.roomCode ? String(msg.roomCode).toUpperCase() : '';
       var myRoom = self.roomCode ? String(self.roomCode).toUpperCase() : '';
       if (msgRoom && myRoom && msgRoom !== myRoom) return;
@@ -71,7 +74,6 @@ class NetworkManager {
     }
   }
 
-  /** Switch hub vs mesh routing without tearing down WebRTC when possible */
   setRoutingMode(mode) {
     var routing = mode === 'p2p' || mode === 'mesh' ? 'mesh' : 'hub';
     this.mode = routing === 'mesh' ? 'p2p' : 'admin-relay';
@@ -124,7 +126,6 @@ class NetworkManager {
     };
     if (target) msg.to = target;
 
-    // Flatten common fields for handlers that read top-level props
     if (payload && typeof payload === 'object') {
       if (payload.role && !msg.role) msg.role = payload.role;
       if (payload.block) msg.block = payload.block;
@@ -132,7 +133,6 @@ class NetworkManager {
     }
 
     this.transport.send(msg);
-    // Local echo so the sender's UI/handlers update (BroadcastChannel does not deliver to self)
     this._emit(type, msg);
   }
 

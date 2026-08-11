@@ -41,15 +41,15 @@ block content
           .panel-body
             .form-group
               label Difficulty (Leading Zeros):
-              input.form-control#difficultyLeading(type="range", min="1", max="6", value="3")
+              input.form-control#difficultyLeading(type="range", min="1", max="6", value="4")
               small.form-text.text-muted Current: 
-              strong#difficultyLeadingValue 3
+              strong#difficultyLeadingValue 4
 
             .form-group
               label Difficulty (Secondary):
-              input.form-control#difficultySecondary(type="range", min="0", max="15", value="15")
+              input.form-control#difficultySecondary(type="range", min="0", max="15", value="8")
               small.form-text.text-muted Current: 0x
-              strong#difficultySecondaryValue F
+              strong#difficultySecondaryValue 8
 
             .form-group
               label Mining Reward (coins):
@@ -202,13 +202,15 @@ block content
 
   script(src="/javascripts/lib/qrcode.min.js?v=labqr2")
   script(src="/javascripts/lib/p2pt.bundle.js?v=fixrelay")
+  script(src="/javascripts/lib/mqtt.min.js?v=mqtt1")
   script(src="/javascripts/lab/labPaths.js?v=fixrelay")
   script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=fixrelay")
+  script(src="/javascripts/network/MqttAdminRelayTransport.js?v=mqtt1")
   script(src="/javascripts/network/P2PAdminRelayTransport.js?v=mobjoin1")
-  script(src="/javascripts/network/AdminRelayCoordinator.js?v=chainfix1")
+  script(src="/javascripts/network/AdminRelayCoordinator.js?v=txfix1")
   script(src="/javascripts/network/Persistence.js?v=fixrelay")
-  script(src="/javascripts/network/RelayBlockchainState.js?v=chainfix1")
-  script(src="/javascripts/network/NetworkManager.js?v=fixrelay")
-  script(src="/javascripts/lab/chainDisplay.js?v=fixrelay")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=txfix1")
+  script(src="/javascripts/network/NetworkManager.js?v=mqtt1")
+  script(src="/javascripts/lab/chainDisplay.js?v=name1")
   script(src="/javascripts/lab/networkVisualization.js?v=topo2")
-  script(src="/javascripts/lab/admin.js?v=topo2")
+  script(src="/javascripts/lab/admin.js?v=txfix1")

@@ -231,6 +231,28 @@ function initClientSideNetworkingForObserver(mode) {
     if (msg && msg.isAdmin && window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
   });
 
+  net.on('transaction-accepted', function (msg) {
+    const payload = msg.payload || msg;
+    const pending = payload.pendingTransactions;
+    if (Array.isArray(pending)) {
+      populateObserverUIFromState({
+        chain: window._observerChain || [],
+        pendingTransactions: pending,
+        participants: payload.participants || []
+      });
+    } else if (payload.transaction || (payload.from && payload.to)) {
+      const tx = payload.transaction || payload;
+      const current = (window._observerPending || []).slice();
+      current.push(tx);
+      window._observerPending = current;
+      populateObserverUIFromState({
+        chain: window._observerChain || [],
+        pendingTransactions: current,
+        participants: []
+      });
+    }
+  });
+
   const joinCode = localStorage.getItem('joinCode_' + sessionId) || sessionId;
   net.joinRoom(joinCode, userId, 'wallet').then(() => {
     console.log('[ObserveNet] Joined relay room as observer');
@@ -248,6 +270,9 @@ function populateObserverUIFromState(state) {
     const chain = state.chain || [];
     const participants = state.participants || [];
     const orphans = state.orphans || [];
+    if (Array.isArray(state.pendingTransactions)) {
+      window._observerPending = state.pendingTransactions.slice();
+    }
 
     if (state.adminSettings && typeof updateAdminSettings === 'function') {
       updateAdminSettings(state.adminSettings);
@@ -262,7 +287,10 @@ function populateObserverUIFromState(state) {
     }
 
     if (typeof updatePendingTransactions === 'function') {
-      updatePendingTransactions({ pendingTransactions: state.pendingTransactions || [], participants: participants });
+      updatePendingTransactions({
+        pendingTransactions: state.pendingTransactions || window._observerPending || [],
+        participants: participants
+      });
     }
 
     if (typeof updateBlockchainView === 'function') {
@@ -273,13 +301,13 @@ function populateObserverUIFromState(state) {
       const tip = state.chain[state.chain.length-1];
       // optional: update your balance if observer has one, but for wallet it might
       if (userId) {
-        const me = participants.find(p => p.address === userId);
+        const me = participants.find(p => p.address === userId || p.userId === userId);
         if (me && me.balance !== undefined) {
           $('#yourBalance').text(me.balance);
         }
         const $nodeName = $('#nodeName');
-        if ($nodeName.length && !$nodeName.is(':focus') && me && me.name) {
-          $nodeName.val(me.name);
+        if ($nodeName.length && !$nodeName.is(':focus') && me && (me.name || me.displayName)) {
+          $nodeName.val(me.displayName || me.name);
         }
       }
     }
@@ -435,14 +463,23 @@ function updateParticipantList(blockchain) {
   let html = '';
   
   participants.forEach(p => {
-    const roleLabel = p.role === 'wallet' ? '<span class="label label-info">Wallet</span>' : '<span class="label label-success">Miner</span>';
-    const nameHtml = p.name ? `<strong style="display: block; margin-top: 4px;">${p.name}</strong>` : '';
+    const addr = p.userId || p.address || p.id || '';
+    const mined = p.blocksMined != null ? p.blocksMined : (p.minedBlocks || 0);
+    const bal = p.balance != null ? p.balance : 0;
+    const roleLabel = (p.role === 'wallet' || p.role === 'observer')
+      ? '<span class="label label-info">Wallet</span>'
+      : (p.role === 'admin'
+        ? '<span class="label label-warning">Admin</span>'
+        : '<span class="label label-success">Miner</span>');
+    const nameHtml = (p.displayName || p.name)
+      ? `<strong style="display: block; margin-top: 4px;">${p.displayName || p.name}</strong>`
+      : '';
     html += `<li style="margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 8px;">
       ${roleLabel} 
-      <button class="btn btn-xs btn-default pull-right copy-btn" data-clipboard-text="${p.address}" title="Copy Address"><i class="glyphicon glyphicon-copy"></i></button>
+      <button class="btn btn-xs btn-default pull-right copy-btn" data-clipboard-text="${addr}" title="Copy Address"><i class="glyphicon glyphicon-copy"></i></button>
       ${nameHtml}
-      <div style="margin-top: 4px;"><code style="font-size: 10px; word-break: break-all;">${p.address}</code></div>
-      <br><span class="text-muted small" style="margin-top: 4px; display: inline-block;">${p.minedBlocks || 0} blocks, ${p.balance || 0} coins</span>
+      <div style="margin-top: 4px;"><code style="font-size: 10px; word-break: break-all;">${addr}</code></div>
+      <br><span class="text-muted small" style="margin-top: 4px; display: inline-block;">${mined} blocks, ${bal} coins</span>
     </li>`;
   });
   

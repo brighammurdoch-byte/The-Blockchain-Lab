@@ -3,7 +3,7 @@
  * Cross-device (phone QR) requires WebRTC via public trackers — allow a long wait.
  */
 (function (global) {
-  var JOIN_PROBE_MS = 25000;
+  var JOIN_PROBE_MS = 15000;
   var VERIFIED_PREFIX = 'sessionVerified_';
 
   function markVerified(code) {
@@ -46,8 +46,8 @@
   function unreachableMessage(code) {
     return (
       'Could not reach the instructor hub for code ' + code + '. ' +
-      'Phones need the instructor on the public lab URL (GitHub Pages), not localhost, with the admin tab left open. ' +
-      'Same Wi‑Fi helps. Then tap Join again.'
+      'Make sure the instructor created the session on the GitHub Pages lab URL (not localhost), ' +
+      'left the admin tab open, and that you are using the same session code. Then tap Join again.'
     );
   }
 
