@@ -32,6 +32,9 @@ let lastKnownAdminSettings = null;
 let myForkChoice = 'classic';
 let pendingForkHeight = null;
 let pendingForkName = null;
+/** Prevent hard-fork modal from re-opening on MQTT redelivery / initial-state resync. */
+let shownForkProposalKey = null;
+let forkChoiceLockedKey = null;
 let lastKnownOrphans = []; // Competing / hard-fork tips from hub
 /** Cached roster so chain re-renders keep miner names (mobile often re-renders without a payload). */
 let lastKnownParticipants = [];
@@ -1306,7 +1309,8 @@ function resolveParticipantUserId(sessionId) {
 
 $(document).ready(function() {
   sessionId = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || window.location.pathname.split('/').pop();
-  
+  restoreForkChoiceFromSession();
+
   // Set address and session code as early as possible from localStorage or URL to avoid "Loading..." flash/stuck
   const earlyUserId = resolveParticipantUserId(sessionId);
   userId = earlyUserId;
@@ -1549,16 +1553,17 @@ function initClientSideNetworkingForParticipant(mode) {
     const name = data.name || 'Hard Fork';
     pendingForkHeight = height != null ? Number(height) : null;
     pendingForkName = name;
-    showForkProposalModal(name, height);
+    // Live admin proposal — show modal once (deduped inside)
+    showForkProposalModal(name, height, { source: 'propose' });
     // Stay on classic until activation — remine so templates drop early 'new' forkIds
     if (isMining) remineOnCanonicalTip();
   });
-  // Legacy alias (older admin builds)
+  // Legacy alias (older admin builds) — same proposal, same dedupe key
   net.on('propose-hard-fork', (msg) => {
     const data = msg.payload || msg;
     pendingForkHeight = data.height != null ? Number(data.height) : null;
     pendingForkName = data.name || 'Hard Fork';
-    showForkProposalModal(pendingForkName, pendingForkHeight);
+    showForkProposalModal(pendingForkName, pendingForkHeight, { source: 'propose' });
     if (isMining) remineOnCanonicalTip();
   });
 
@@ -1848,7 +1853,8 @@ function initClientSideNetworkingForParticipant(mode) {
     if (state.pendingFork && state.pendingFork.height != null) {
       pendingForkHeight = Number(state.pendingFork.height);
       pendingForkName = state.pendingFork.name || 'Hard Fork';
-      showForkProposalModal(pendingForkName, pendingForkHeight);
+      // Resync only — never re-popup if student already saw/chose this fork
+      showForkProposalModal(pendingForkName, pendingForkHeight, { source: 'resync' });
     }
     if (Array.isArray(state.orphans)) {
       mergeKnownOrphans(state.orphans);
@@ -2209,8 +2215,9 @@ executeDoubleSpendAttack(target1, target2, amount);
   $('#btnRejectFork').click(function() {
     myForkChoice = 'classic';
     localNewForkTip = null;
+    lockForkChoice('classic');
     if (net) net.send('hard-fork-vote', { choice: 'classic' });
-    $('#forkChoiceModal').modal('hide');
+    try { $('#forkChoiceModal').modal('hide'); } catch (e) {}
     showToastNotification(
       'You chose Classic. Blocks stay classic until activation' +
       (pendingForkHeight != null ? ' at #' + pendingForkHeight : '') + '.',
@@ -2222,8 +2229,9 @@ executeDoubleSpendAttack(target1, target2, amount);
   $('#btnAcceptFork').click(function() {
     myForkChoice = 'new';
     localClassicForkTip = null;
+    lockForkChoice('new');
     if (net) net.send('hard-fork-vote', { choice: 'new' });
-    $('#forkChoiceModal').modal('hide');
+    try { $('#forkChoiceModal').modal('hide'); } catch (e) {}
     showToastNotification(
       'You chose New Chain. You still mine classic until block ' +
       (pendingForkHeight != null ? pendingForkHeight : '?') +
@@ -2237,6 +2245,7 @@ executeDoubleSpendAttack(target1, target2, amount);
   $('#forkControlPanel').on('click', '#btnFollowClassic', function() {
     myForkChoice = 'classic';
     localNewForkTip = null;
+    lockForkChoice('classic');
     if (net) net.send('hard-fork-vote', { choice: 'classic' });
     showToastNotification('Switched to Classic Chain.', 'info');
     if (isMining) remineOnCanonicalTip();
@@ -2244,6 +2253,7 @@ executeDoubleSpendAttack(target1, target2, amount);
   $('#forkControlPanel').on('click', '#btnFollowNew', function() {
     myForkChoice = 'new';
     localClassicForkTip = null;
+    lockForkChoice('new');
     if (net) net.send('hard-fork-vote', { choice: 'new' });
     showToastNotification(
       'Switched to New Chain (active at block ' +
@@ -2403,13 +2413,70 @@ function updateMiningControlsUI() {
   }
 }
 
-/** Show hard-fork modal + persistent fork control panel. */
-function showForkProposalModal(name, height) {
+function forkProposalKey(name, height) {
+  const h = height != null ? Number(height) : '';
+  const n = (name != null ? String(name) : '').trim() || 'Hard Fork';
+  return h + '::' + n;
+}
+
+function lockForkChoice(choice) {
+  myForkChoice = choice === 'new' ? 'new' : 'classic';
+  const key = forkProposalKey(pendingForkName, pendingForkHeight);
+  if (pendingForkHeight != null) {
+    forkChoiceLockedKey = key;
+    shownForkProposalKey = key;
+  }
+  try {
+    if (sessionId && pendingForkHeight != null) {
+      sessionStorage.setItem(
+        'forkChoice_' + sessionId,
+        JSON.stringify({
+          key: key,
+          choice: myForkChoice,
+          height: pendingForkHeight,
+          name: pendingForkName
+        })
+      );
+    }
+  } catch (e) {}
+}
+
+function restoreForkChoiceFromSession() {
+  if (!sessionId) return;
+  try {
+    const raw = sessionStorage.getItem('forkChoice_' + sessionId);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (!saved || saved.height == null) return;
+    pendingForkHeight = Number(saved.height);
+    pendingForkName = saved.name || 'Hard Fork';
+    const key = saved.key || forkProposalKey(pendingForkName, pendingForkHeight);
+    shownForkProposalKey = key;
+    forkChoiceLockedKey = key;
+    myForkChoice = saved.choice === 'new' ? 'new' : 'classic';
+  } catch (e) {}
+}
+
+/**
+ * Show hard-fork modal + persistent fork control panel.
+ * @param {string} name
+ * @param {number|string} height
+ * @param {{ source?: 'propose'|'resync', force?: boolean }} [opts]
+ *   - propose: admin just proposed (show modal once)
+ *   - resync: initial-state / MQTT catch-up (never re-popup if already shown/chosen)
+ */
+function showForkProposalModal(name, height, opts) {
+  opts = opts || {};
+  const source = opts.source || 'propose';
+  const force = !!opts.force;
+
   pendingForkHeight = height != null ? Number(height) : pendingForkHeight;
   pendingForkName = name || pendingForkName || 'Hard Fork';
   const n = pendingForkName;
   const h = pendingForkHeight != null ? pendingForkHeight : '?';
+  const key = forkProposalKey(n, pendingForkHeight);
 
+  // Always keep panel + labels in sync
   $('#forkProposalName').text(n);
   $('#forkProposalHeight').text(h);
   $('#forkControlPanel').show();
@@ -2428,6 +2495,25 @@ function showForkProposalModal(name, height) {
       (h !== '?' ? (Number(h) - 1) : 'N-1') + '.'
     );
   }
+
+  // Already chose this proposal — keep panel, never re-open modal/toast
+  if (!force && forkChoiceLockedKey === key) {
+    try { $('#forkChoiceModal').modal('hide'); } catch (e) {}
+    return;
+  }
+
+  // Already shown this proposal (MQTT redelivery, dual event names, or resync)
+  if (!force && shownForkProposalKey === key) {
+    // Resync after dismiss without choosing: leave panel up, no modal spam
+    if (source === 'resync') {
+      try { $('#forkChoiceModal').modal('hide'); } catch (e) {}
+    }
+    return;
+  }
+
+  // First time we learn about this proposal on a pure resync (tab refreshed mid-fork):
+  // show modal once so they can still pick a side.
+  shownForkProposalKey = key;
 
   try {
     if (typeof $('#forkChoiceModal').modal === 'function') {
