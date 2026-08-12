@@ -276,19 +276,59 @@ if (typeof window.RelayBlockchainState === 'undefined') {
   }
 
   /**
+   * True if path is valid as the classroom "main" (classic) chain during a hard fork.
+   * After activation height, main must not include NEW-tagged blocks — those stay as
+   * permanent orphans so the demo shows two parallel chains instead of a reorg.
+   */
+  _isClassicMainPath(path) {
+    if (!path || !path.length) return false;
+    if (!this.pendingFork || this.pendingFork.height == null) return true;
+    const act = Number(this.pendingFork.height);
+    for (let i = 0; i < path.length; i++) {
+      const b = path[i];
+      if (!b || b.index == null) continue;
+      if (Number(b.index) < act) continue;
+      const fid = b.forkId || 'classic';
+      if (fid === 'new' || fid === 'NEW') return false;
+    }
+    return true;
+  }
+
+  /**
    * Longest-chain fork choice. Equal height → keep the current tip (first-seen wins).
+   *
+   * During a hard-fork simulation, main is restricted to classic-compatible paths so
+   * the NEW side never "wins" via pure length and erases the permanent split.
    */
   _selectBestChain() {
-    let best = this.chain && this.chain.length ? this.chain.slice() : [];
+    const hardFork = !!(this.pendingFork && this.pendingFork.height != null);
+    let best = [];
+
+    // Seed with current chain only if it still qualifies (don't lock onto a NEW tip)
+    if (this.chain && this.chain.length) {
+      if (!hardFork || this._isClassicMainPath(this.chain)) {
+        best = this.chain.slice();
+      }
+    }
 
     this.allBlocks.forEach((_block, hash) => {
       const path = this._pathToGenesis(hash);
       if (!path || path.length === 0) return;
+      if (hardFork && !this._isClassicMainPath(path)) return;
       if (path.length > best.length) {
         best = path;
       }
       // Equal length: keep existing tip (stable / first-seen)
     });
+
+    // Fallback if hard-fork filter left us empty (e.g. only NEW blocks exist yet)
+    if (!best.length) {
+      this.allBlocks.forEach((_block, hash) => {
+        const path = this._pathToGenesis(hash);
+        if (!path || path.length === 0) return;
+        if (path.length > best.length) best = path;
+      });
+    }
 
     return best;
   }
@@ -305,6 +345,51 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const ids = new Set();
     (this.chain || []).forEach((block) => {
       const txs = (block && Array.isArray(block.transactions)) ? block.transactions : [];
+      txs.forEach((tx) => {
+        const k = this._txKey(tx);
+        if (k) ids.add(k);
+      });
+    });
+    return ids;
+  }
+
+  /**
+   * Confirmed tx keys relevant to validating `block`.
+   * Same-side only after hard-fork activation so the two chains stay independent.
+   */
+  _confirmedTxIdsForBlock(block) {
+    const act =
+      this.pendingFork && this.pendingFork.height != null
+        ? Number(this.pendingFork.height)
+        : null;
+    const fid = (block && block.forkId) || 'classic';
+    const isNew = fid === 'new' || fid === 'NEW';
+    const bIndex = block && block.index != null ? Number(block.index) : null;
+
+    // Pre-fork or no fork: whole canonical chain
+    if (act == null || bIndex == null || bIndex < act) {
+      return this._confirmedTxIds();
+    }
+
+    const ids = new Set();
+    // Shared history below activation is common to both sides
+    (this.chain || []).forEach((b) => {
+      if (!b) return;
+      if (b.index != null && Number(b.index) >= act) return; // skip post-act main (classic)
+      const txs = Array.isArray(b.transactions) ? b.transactions : [];
+      txs.forEach((tx) => {
+        const k = this._txKey(tx);
+        if (k) ids.add(k);
+      });
+    });
+
+    // Same-side post-activation blocks only
+    this.allBlocks.forEach((b) => {
+      if (!b || b.index == null || Number(b.index) < act) return;
+      const bf = b.forkId || 'classic';
+      const bNew = bf === 'new' || bf === 'NEW';
+      if (bNew !== isNew) return;
+      const txs = Array.isArray(b.transactions) ? b.transactions : [];
       txs.forEach((tx) => {
         const k = this._txKey(tx);
         if (k) ids.add(k);
@@ -474,9 +559,10 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       }
     }
 
-    // Reject blocks that re-include transfers already on the canonical chain.
-    // (Common race: two miners both hash the same mempool snapshot.)
-    const confirmed = this._confirmedTxIds();
+    // Reject blocks that re-include transfers already confirmed on the *same fork side*.
+    // During a hard fork, classic and NEW are permanent parallel histories — a transfer
+    // on classic must not block the same transfer on NEW (and vice versa).
+    const confirmed = this._confirmedTxIdsForBlock(block);
     const blockTxs = Array.isArray(block.transactions) ? block.transactions : [];
     const seenInBlock = new Set();
     for (let i = 0; i < blockTxs.length; i++) {
