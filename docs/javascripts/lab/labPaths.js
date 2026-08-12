@@ -22,18 +22,39 @@
     return '';
   }
 
+  var RESERVED_SEGMENTS = {
+    '': true,
+    lab: true,
+    admin: true,
+    participate: true,
+    observe: true,
+    demos: true,
+    code: true,
+    index: true,
+    hash: true,
+    block: true,
+    blockchain: true,
+    distributed: true,
+    tokens: true,
+    coinbase: true
+  };
+
+  function isSessionCode(value) {
+    var s = String(value || '').trim().toUpperCase();
+    if (!/^[A-Z0-9]{4,8}$/.test(s)) return false;
+    return !RESERVED_SEGMENTS[s.toLowerCase()];
+  }
+
   function getSessionIdFromLocation() {
     var params = new URLSearchParams((global.location && global.location.search) || '');
     var q = params.get('join') || params.get('session') || params.get('code');
-    if (q) return q.trim().toUpperCase();
+    if (isSessionCode(q)) return String(q).trim().toUpperCase();
 
     var path = (global.location && global.location.pathname) || '';
-    // /lab/admin/ABC123 or /lab/admin.html
+    // /lab/admin/ABC123 (Express) — never treat /lab/admin or /lab/admin.html as a code
     var parts = path.split('/').filter(Boolean);
-    var last = parts[parts.length - 1] || '';
-    if (last && !/\.html?$/i.test(last) && last.toLowerCase() !== 'lab') {
-      return last.toUpperCase();
-    }
+    var last = (parts[parts.length - 1] || '').replace(/\.html?$/i, '');
+    if (isSessionCode(last)) return last.toUpperCase();
     return '';
   }
 
@@ -93,6 +114,7 @@
   global.LabPaths = {
     getBasePath: getBasePath,
     getSessionIdFromLocation: getSessionIdFromLocation,
+    isSessionCode: isSessionCode,
     labUrl: labUrl,
     joinUrl: joinUrl,
     absoluteJoinUrl: absoluteJoinUrl,

@@ -1308,7 +1308,7 @@ function resolveParticipantUserId(sessionId) {
 }
 
 $(document).ready(function() {
-  sessionId = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || window.location.pathname.split('/').pop();
+  sessionId = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || '';
   restoreForkChoiceFromSession();
 
   // Set address and session code as early as possible from localStorage or URL to avoid "Loading..." flash/stuck

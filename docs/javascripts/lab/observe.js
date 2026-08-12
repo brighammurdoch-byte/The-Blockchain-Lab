@@ -53,7 +53,7 @@ if (!$('#toastStyles').length) {
 }
 
 $(document).ready(function() {
-  sessionId = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || window.location.pathname.split('/').pop();
+  sessionId = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || '';
   
   // Get userId from localStorage (set by landing.js when joining)
   userId = localStorage.getItem('userId_' + sessionId);

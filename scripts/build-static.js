@@ -8,12 +8,14 @@
 const fs = require('fs');
 const path = require('path');
 const pug = require('pug');
+const GuidedDemoSystem = require('../lib/guidedDemos');
 
 const ROOT = path.join(__dirname, '..');
 const VIEWS = path.join(ROOT, 'views');
 const PUBLIC = path.join(ROOT, 'public');
 const OUT = path.join(ROOT, 'docs');
 const BASE = (process.env.LAB_BASE_PATH || '/The-Blockchain-Lab').replace(/\/$/, '');
+const LEARNING_PAGES = ['hash', 'block', 'blockchain', 'distributed', 'tokens', 'coinbase'];
 
 function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
@@ -36,22 +38,44 @@ function rewriteAssetPaths(html) {
     .replace(/url\(['"]?\/(?!\/)/g, `url('${BASE}/`);
 }
 
+function injectStaticBoot(html) {
+  const boot = `<script>window.LAB_STATIC_MODE=true;window.LAB_BASE_PATH=${JSON.stringify(BASE)};document.documentElement.setAttribute('data-lab-static','true');</script>`;
+  const meta = `<meta name="lab-base-path" content="${BASE}">`;
+  let out = html.replace('<head>', `<head>\n    ${meta}\n    ${boot}`);
+  out = rewriteAssetPaths(out);
+  // Navbar brand / Full Simulation should point at lab index
+  out = out.replace(new RegExp(`href="${BASE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/lab"`, 'g'), `href="${BASE}/lab/index.html"`);
+  return out;
+}
+
 function renderLabPage(viewRelative, locals) {
   const file = path.join(VIEWS, viewRelative);
   const html = pug.renderFile(file, Object.assign({
     title: 'Blockchain Lab',
     sessionId: '',
     bodyClass: 'lab-app',
+    page: 'lab',
     __: (s) => s,
     basedir: VIEWS
   }, locals));
-  const boot = `<script>window.LAB_STATIC_MODE=true;window.LAB_BASE_PATH=${JSON.stringify(BASE)};document.documentElement.setAttribute('data-lab-static','true');</script>`;
-  const meta = `<meta name="lab-base-path" content="${BASE}">`;
-  let out = html.replace('<head>', `<head>\n    ${meta}\n    ${boot}`);
-  out = rewriteAssetPaths(out);
-  // Navbar brand should point at lab index
-  out = out.replace(`href="${BASE}/lab"`, `href="${BASE}/lab/index.html"`);
-  return out;
+  return injectStaticBoot(html);
+}
+
+function renderLearningPage(pageName) {
+  const file = path.join(VIEWS, pageName + '.pug');
+  const html = pug.renderFile(file, {
+    title: 'Blockchain Demo',
+    page: pageName,
+    __: (s) => s,
+    basedir: VIEWS
+  });
+  return injectStaticBoot(html);
+}
+
+function buildDemoCatalog() {
+  const system = new GuidedDemoSystem();
+  const demos = Object.keys(system.demos).map((id) => Object.assign({ id }, system.demos[id]));
+  return { success: true, demos };
 }
 
 function writeFile(rel, content) {
@@ -84,15 +108,12 @@ function main() {
     description: 'Client-side validator for Blockchain Lab (static asset).'
   };
   writeFile('data/validator-code.json', JSON.stringify(validatorJson));
-  writeFile('data/demos.json', JSON.stringify({
-    success: true,
-    demos: [
-      { id: 'soft-fork', title: 'Soft Fork Demo', category: 'soft-fork', difficulty: 'intermediate' },
-      { id: 'hard-fork', title: 'Hard Fork Demo', category: 'hard-fork', difficulty: 'advanced' },
-      { id: '51-attack', title: '51% Attack Simulation', category: 'attack', difficulty: 'advanced' },
-      { id: 'double-spend', title: 'Double Spend via Fork', category: 'attack', difficulty: 'advanced' }
-    ]
-  }));
+  const demoCatalog = buildDemoCatalog();
+  const demoJson = JSON.stringify(demoCatalog);
+  writeFile('data/demos.json', demoJson);
+  ensureDir(path.join(PUBLIC, 'data'));
+  fs.writeFileSync(path.join(PUBLIC, 'data', 'demos.json'), demoJson);
+  fs.writeFileSync(path.join(PUBLIC, 'data', 'validator-code.json'), JSON.stringify(validatorJson));
 
   writeFile('lab/index.html', renderLabPage('lab/index.pug', { title: 'Blockchain Lab' }));
   writeFile('lab/admin.html', renderLabPage('lab/admin.pug', { title: 'Blockchain Lab - Admin', sessionId: '' }));
@@ -100,6 +121,11 @@ function main() {
   writeFile('lab/observe.html', renderLabPage('lab/observe.pug', { title: 'Blockchain Lab - Wallet', sessionId: '' }));
   writeFile('lab/demos.html', renderLabPage('lab/demos.pug', { title: 'Blockchain Lab - Guided Demos', sessionId: '' }));
   writeFile('lab/code.html', renderLabPage('lab/code-editor.pug', { title: 'Blockchain Lab - Code Editor', sessionId: '' }));
+
+  // Anders Brownworth learning demos — /hash, /block, … via directory index.html
+  LEARNING_PAGES.forEach((pageName) => {
+    writeFile(pageName + '/index.html', renderLearningPage(pageName));
+  });
 
   // Root redirect into the lab
   writeFile('index.html', `<!DOCTYPE html>

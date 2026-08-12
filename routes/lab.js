@@ -1,5 +1,13 @@
 var express = require('express');
 var router = express.Router();
+var GuidedDemoSystem = require('../lib/guidedDemos');
+var demoSystem = new GuidedDemoSystem();
+
+function demoCatalog() {
+  return Object.keys(demoSystem.demos).map(function (id) {
+    return Object.assign({ id: id }, demoSystem.demos[id]);
+  });
+}
 
 /**
  * Blockchain Lab Routes (pure client-relay / admin-hub mode only)
@@ -34,30 +42,16 @@ router.get('/code/:sessionId', function(req, res, next) {
 // Supports ?format=json for the demos browser page (client-relay has no dynamic list)
 router.get('/demos', function(req, res, next) {
   if (req.query.format === 'json' || (req.headers.accept || '').includes('application/json')) {
-    return res.json({
-      success: true,
-      demos: [
-        { id: 'soft-fork', title: 'Soft Fork Demo', category: 'soft-fork', difficulty: 'intermediate' },
-        { id: 'hard-fork', title: 'Hard Fork Demo', category: 'hard-fork', difficulty: 'advanced' },
-        { id: '51-attack', title: '51% Attack Simulation', category: 'attack', difficulty: 'advanced' },
-        { id: 'double-spend', title: 'Double Spend via Fork', category: 'attack', difficulty: 'advanced' }
-      ]
-    });
+    return res.json({ success: true, demos: demoCatalog() });
   }
   res.render('lab/demos', { title: 'Blockchain Lab - Guided Demos' });
 });
 router.get('/demos/:sessionId', function(req, res, next) {
   const sessionId = req.params.sessionId;
   if (req.query.format === 'json' || (req.headers.accept || '').includes('application/json')) {
-    return res.json({
-      success: true,
-      demos: [
-        { id: 'soft-fork', title: 'Soft Fork Demo', category: 'soft-fork', difficulty: 'intermediate' },
-        { id: 'hard-fork', title: 'Hard Fork Demo', category: 'hard-fork', difficulty: 'advanced' },
-        { id: '51-attack', title: '51% Attack Simulation', category: 'attack', difficulty: 'advanced' },
-        { id: 'double-spend', title: 'Double Spend via Fork', category: 'attack', difficulty: 'advanced' }
-      ]
-    });
+    const found = demoSystem.getDemo(sessionId);
+    if (found) return res.json({ success: true, demo: Object.assign({ id: sessionId }, found) });
+    return res.json({ success: true, demos: demoCatalog() });
   }
   res.render('lab/demos', { sessionId, title: 'Blockchain Lab - Guided Demos' });
 });

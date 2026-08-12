@@ -77,17 +77,29 @@ block content
     var sessionId = "#{sessionId}";
     var allDemos = [];
 
-    // Load all demos
+    function demoCatalogUrl() {
+      if (window.LabPaths && LabPaths.assetUrl) return LabPaths.assetUrl('/data/demos.json');
+      return '/data/demos.json';
+    }
+
+    // Load all demos (static JSON on GitHub Pages; same file locally)
     function loadDemos() {
-      fetch('/lab/demos')
+      fetch(demoCatalogUrl())
         .then(res => res.json())
         .then(data => {
-          if (data.success) {
+          if (data && data.success && Array.isArray(data.demos)) {
             allDemos = data.demos;
             showAllDemos();
+          } else {
+            document.getElementById('demosContainer').innerHTML =
+              '<p class="text-warning">Could not load the demo catalog.</p>';
           }
         })
-        .catch(err => console.error('Error loading demos:', err));
+        .catch(err => {
+          console.error('Error loading demos:', err);
+          document.getElementById('demosContainer').innerHTML =
+            '<p class="text-warning">Could not load the demo catalog.</p>';
+        });
     }
 
     function showAllDemos() {
@@ -124,19 +136,21 @@ block content
           html += '<div class="row">';
           
           byCategory[cat].forEach(d => {
-            var difficultyColor = d.difficulty === 'Beginner' ? 'success' : 
-                                  d.difficulty === 'Intermediate' ? 'warning' : 'danger';
+            var difficultyLabel = d.difficulty || 'Normal';
+            var difficultyColor = /^beginner$/i.test(difficultyLabel) ? 'success' :
+                                  /^intermediate$/i.test(difficultyLabel) ? 'warning' : 'danger';
+            var demoName = d.name || d.title || d.id;
             
             html += `
               <div class="col-md-6 demo-card" style="margin-bottom: 20px;">
                 <div class="panel panel-default">
                   <div class="panel-body">
                     <h5 onclick="viewDemo('${d.id}')" style="cursor: pointer; color: #0066cc;">
-                      <i class="glyphicon glyphicon-play"></i> ${d.name}
+                      <i class="glyphicon glyphicon-play"></i> ${demoName}
                     </h5>
                     <p class="text-muted small">${d.category}</p>
                     <p class="small">
-                      <span class="label label-${difficultyColor}">${d.difficulty}</span>
+                      <span class="label label-${difficultyColor}">${difficultyLabel}</span>
                     </p>
                     <button class="btn btn-sm btn-primary" onclick="viewDemo('${d.id}')">
                       View Details →
@@ -164,17 +178,18 @@ block content
       return names[cat] || cat;
     }
 
+    function findDemo(demoId) {
+      return allDemos.filter(function(d) { return d.id === demoId; })[0] || null;
+    }
+
     function viewDemo(demoId) {
-      fetch('/lab/demos/' + demoId)
-        .then(res => res.json())
-        .then(data => {
-          if (data.success) {
-            var demo = data.demo;
-            renderDemoModal(demo, demoId);
-            $('#demoModal').modal('show');
-          }
-        })
-        .catch(err => alert('Error loading demo: ' + err.message));
+      var demo = findDemo(demoId);
+      if (!demo) {
+        alert('Demo not found: ' + demoId);
+        return;
+      }
+      renderDemoModal(demo, demoId);
+      $('#demoModal').modal('show');
     }
 
     function renderDemoModal(demo, demoId) {
@@ -279,26 +294,17 @@ block content
     }
 
     function startDemo(demoId) {
-      // Switch to code editor with demo instructions
-      console.log('Starting demo:', demoId);
-      
-      // Get the demo details
-      fetch('/lab/demos/' + demoId)
-        .then(res => res.json())
-        .then(data => {
-          if (data.success) {
-            var demo = data.demo;
-            alert(
-              'Demo: ' + demo.name + '\n\n' +
-              'Instructions:\n' +
-              (demo.setup && demo.setup.description ? demo.setup.description + '\n' : '') +
-              '\nNow switch to the "Code Editor" tab to make modifications.\n' +
-              'Follow the code change instructions in the demo details.'
-            );
-            
-            // Could navigate to code editor: window.location = '/lab/code/' + sessionId;
-          }
-        });
+      var demo = findDemo(demoId);
+      if (!demo) {
+        alert('Demo not found: ' + demoId);
+        return;
+      }
+      var sid = sessionId || (window.LabPaths && LabPaths.getSessionIdFromLocation()) || '';
+      var codeUrl = (window.LabPaths && LabPaths.labUrl)
+        ? LabPaths.labUrl('code', sid)
+        : '/lab/code.html';
+      var join = codeUrl.indexOf('?') >= 0 ? '&' : '?';
+      window.location = codeUrl + join + 'demo=' + encodeURIComponent(demoId);
     }
 
     // Load demos on page load

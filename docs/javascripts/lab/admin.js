@@ -57,7 +57,7 @@ if (!$('#toastStyles').length) {
 
 $(document).ready(function() {
   // Extract sessionId from URL (path or ?session= for static hosting)
-  sessionId = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || window.location.pathname.split('/').pop();
+  sessionId = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || '';
 
   // Display session code (from storage or the one passed from server/URL)
   const joinCode = localStorage.getItem('joinCode_' + sessionId) || sessionId;
@@ -954,7 +954,7 @@ function setupEventHandlers() {
       `);
 
       $('#openTestPeerBtn').on('click', function() {
-        const rc = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || (window.location.pathname.split('/').pop() || '');
+        const rc = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || '';
         const code = String(rc).toUpperCase();
         // Always mint a brand-new miner identity. Do NOT write userId into the
         // shared localStorage key — that would steal identity from other open tabs.

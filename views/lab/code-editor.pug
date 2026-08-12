@@ -203,10 +203,15 @@ block content
   script(src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/theme-monokai.min.js")
 
   script.
-    // Initialize Ace Editor
+    // Initialize Ace Editor (pin CDN base so workers don't 404 under /lab/)
+    if (window.ace && ace.config) {
+      ace.config.set('basePath', 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/');
+      ace.config.set('workerPath', 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/');
+    }
     var editor = ace.edit("codeEditor");
     editor.setTheme("ace/theme/monokai");
     editor.session.setMode("ace/mode/javascript");
+    editor.session.setUseWorker(false);
     editor.setFontSize(14);
     editor.setWrapBehavioursEnabled(true);
 
@@ -214,31 +219,51 @@ block content
     var sessionId = "#{sessionId}";
     var userId = "#{userId || 'anonymous'}";
 
+    function validatorCatalogUrl() {
+      if (window.LabPaths && LabPaths.assetUrl) return LabPaths.assetUrl('/data/validator-code.json');
+      return '/data/validator-code.json';
+    }
+
+    function demoCatalogUrl() {
+      if (window.LabPaths && LabPaths.assetUrl) return LabPaths.assetUrl('/data/demos.json');
+      return '/data/demos.json';
+    }
+
     // Load validator code
     document.getElementById('loadCode').addEventListener('click', function() {
-      fetch('/lab/validator-code')
-        .then(res => res.json())
-        .then(data => {
-          if (data.success) {
-            originalCode = data.code;
+      fetch(validatorCatalogUrl())
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+          var code = data && data.code;
+          if (code) {
+            originalCode = code;
             editor.setValue(originalCode);
             document.getElementById('codeStatus').textContent = "Code loaded";
             updateStatus('original');
+            return;
           }
+          throw new Error('empty catalog');
         })
-        .catch(err => {
-          alert('Error loading code: ' + err.message);
-          // Load blockValidator.js for demo
-          fetch('/lib/blockValidator.js')
-            .then(res => res.text())
-            .then(code => {
-              originalCode = code;
-              editor.setValue(code);
+        .catch(function() {
+          return fetch('/lab/validator-code')
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+              if (data && data.success && data.code) {
+                originalCode = data.code;
+                editor.setValue(originalCode);
+                document.getElementById('codeStatus').textContent = "Code loaded";
+                updateStatus('original');
+              } else {
+                throw new Error((data && data.error) || 'Could not load validator');
+              }
             });
+        })
+        .catch(function(err) {
+          alert('Error loading code: ' + (err && err.message ? err.message : err));
         });
     });
 
-    // Submit modified code
+    // Submit modified code (client-side sandbox — live miners use the Participate tab)
     document.getElementById('submitCode').addEventListener('click', function() {
       var modifiedCode = editor.getValue();
       
@@ -247,41 +272,15 @@ block content
         return;
       }
 
-      if (!confirm('Submit your modified validator code? This may cause your node to fork from the network!')) {
+      if (!confirm('Apply this validator in the sandbox? Live miners apply changes from the Participate page (Your Validator Code tab).')) {
         return;
       }
 
-      // Disable button during submission
-      this.disabled = true;
-
-      fetch('/lab/validator-code', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: sessionId,
-          userId: userId,
-          modifiedCode: modifiedCode
-        })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.success) {
-          updateStatus('modified');
-          document.getElementById('networkStatus').innerHTML = 
-            '<strong style="color: orange;">⚠ Your validator is now MODIFIED.</strong> ' +
-            'Other miners may reject or accept your blocks depending on their code.';
-          
-          // Re-enable button
-          this.disabled = false;
-        } else {
-          alert('Error: ' + data.error);
-          this.disabled = false;
-        }
-      })
-      .catch(err => {
-        alert('Error submitting code: ' + err.message);
-        this.disabled = false;
-      });
+      try { localStorage.setItem('labCustomValidator', modifiedCode); } catch (e) {}
+      updateStatus('modified');
+      document.getElementById('networkStatus').innerHTML = 
+        '<strong style="color: orange;">⚠ Sandbox validator is now MODIFIED.</strong> ' +
+        'To run this against the classroom chain, paste it into <em>Your Validator Code</em> on a miner tab.';
     });
 
     function resetCode() {
@@ -314,23 +313,47 @@ block content
     }
 
     function viewDemo(demoName) {
-      // Load demo into a modal
-      fetch('/lab/demos/' + demoName)
-        .then(res => res.json())
-        .then(data => {
-          if (data.success) {
-            var demo = data.demo;
-            var msg = demo.name + '\n\n' + 
-                      (demo.setup ? demo.setup.description + '\n' : '') +
-                      '\nClick the Guided Demos tab to see full details.';
-            alert(msg);
+      fetch(demoCatalogUrl())
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+          var list = (data && data.demos) || [];
+          var demo = list.filter(function(d) { return d.id === demoName; })[0];
+          if (!demo) {
+            alert('Demo not found: ' + demoName);
+            return;
           }
+          var msg = (demo.name || demo.title || demoName) + '\n\n' +
+                    (demo.setup && demo.setup.description ? demo.setup.description + '\n' : '') +
+                    '\nOpen Guided Demos for the full walkthrough.';
+          alert(msg);
+        })
+        .catch(function(err) {
+          alert('Error loading demo: ' + (err && err.message ? err.message : err));
         });
+    }
+
+    function applyDemoFromQuery() {
+      var params = new URLSearchParams(window.location.search || '');
+      var demoId = params.get('demo');
+      if (!demoId) return;
+      fetch(demoCatalogUrl())
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+          var list = (data && data.demos) || [];
+          var demo = list.filter(function(d) { return d.id === demoId; })[0];
+          if (!demo) return;
+          var box = document.getElementById('networkStatus');
+          if (!box) return;
+          box.innerHTML = '<strong>' + (demo.name || demo.title || demoId) + '</strong><br>' +
+            (demo.setup && demo.setup.description ? demo.setup.description : 'Follow the code changes in the demo details.');
+        })
+        .catch(function() {});
     }
 
     // Load code on page load
     window.addEventListener('load', function() {
       document.getElementById('loadCode').click();
+      applyDemoFromQuery();
     });
 
     // WebSocket listener for network changes
