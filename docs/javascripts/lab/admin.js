@@ -105,6 +105,19 @@ $(document).ready(function() {
 
   // Set up event handlers
   setupEventHandlers();
+
+  // Periodically rewire P2P gossip edges (Bitcoin-style peer churn)
+  setInterval(function () {
+    const mode = typeof resolveVizNetworkMode === 'function'
+      ? resolveVizNetworkMode()
+      : networkMode;
+    if (mode !== 'p2p' && mode !== 'mesh') return;
+    if (!relayState) return;
+    window.__forceGossipRewire = true;
+    if (typeof renderClientRelayChain === 'function') {
+      renderClientRelayChain({ forceTopologyRelayout: true, forceGossipRewire: true });
+    }
+  }, 16000);
 });
 
 /** Share link + QR for student join (phones scan; laptops copy URL). */
@@ -449,10 +462,17 @@ function initClientSideNetworking(mode, roomCode) {
       if (viz && minerId && minerId !== 'genesis') {
         if (typeof viz.animateBlockMined === 'function') viz.animateBlockMined(minerId);
         if (relayState && typeof viz.animateBlockPropagation === 'function') {
-          const recipients = Array.from(relayState.participants.keys())
-            .filter(function (id) {
-              return id && id !== minerId && String(id).indexOf('probe-') !== 0;
-            });
+          // Prefer live topology neighbors (gossip/star); fall back to all peers
+          let recipients = [];
+          if (typeof viz.getNeighborIds === 'function') {
+            recipients = viz.getNeighborIds(minerId);
+          }
+          if (!recipients.length) {
+            recipients = Array.from(relayState.participants.keys())
+              .filter(function (id) {
+                return id && id !== minerId && String(id).indexOf('probe-') !== 0;
+              });
+          }
           viz.animateBlockPropagation(minerId, recipients, block || { index: payload.newHeight });
         }
         if (relayState && typeof relayState.setParticipantStatus === 'function') {
@@ -1408,24 +1428,227 @@ function scheduleRenderClientRelayChain() {
 }
 
 /**
- * Build projector link map from the current networking mode.
- * Admin-hosted → star around the hub; Full P2P → mesh among all peers.
+ * Bitcoin-style sparse gossip topology for the projector (and packet paths).
+ * Each node keeps ~3–4 peers; the graph rewires every ~15–20s.
  */
-function buildVizPeerAssignments(vizMiners, mode) {
+var _gossipTopo = {
+  adj: new Map(), // userId -> Set(peerIds)
+  idKey: '',
+  lastRewire: 0,
+  rewireIntervalMs: 17000,
+  minDegree: 3,
+  maxDegree: 4
+};
+
+function _shuffleInPlace(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = arr[i];
+    arr[i] = arr[j];
+    arr[j] = t;
+  }
+  return arr;
+}
+
+/** Build an undirected sparse graph: degree roughly 3–4 (Bitcoin-ish). */
+function buildSparseGossipAdjacency(nodeIds) {
+  const adj = new Map();
+  const n = nodeIds.length;
+  if (n < 2) return adj;
+
+  nodeIds.forEach(function (id) { adj.set(id, new Set()); });
+
+  const maxDeg = Math.min(_gossipTopo.maxDegree, n - 1);
+  const minDeg = Math.min(_gossipTopo.minDegree, maxDeg);
+
+  // Each node tries to form minDeg..maxDeg random undirected links
+  nodeIds.forEach(function (id) {
+    const want = minDeg + Math.floor(Math.random() * (maxDeg - minDeg + 1));
+    const others = nodeIds.filter(function (x) { return x !== id; });
+    _shuffleInPlace(others);
+    let added = 0;
+    for (let i = 0; i < others.length && added < want; i++) {
+      const peer = others[i];
+      if (adj.get(id).has(peer)) {
+        added += 1;
+        continue;
+      }
+      // Soft cap: avoid hubs ballooning past maxDeg+1
+      if (adj.get(peer).size >= maxDeg + 1) continue;
+      adj.get(id).add(peer);
+      adj.get(peer).add(id);
+      added += 1;
+    }
+  });
+
+  // Guarantee minimum degree where possible
+  nodeIds.forEach(function (id) {
+    const neighbors = adj.get(id);
+    while (neighbors.size < minDeg) {
+      const candidates = nodeIds.filter(function (x) {
+        return x !== id && !neighbors.has(x);
+      });
+      if (!candidates.length) break;
+      const peer = candidates[Math.floor(Math.random() * candidates.length)];
+      neighbors.add(peer);
+      adj.get(peer).add(id);
+    }
+  });
+
+  // Ensure the graph is connected (single component) so gossip can reach everyone
+  const components = [];
+  const seen = new Set();
+  nodeIds.forEach(function (start) {
+    if (seen.has(start)) return;
+    const comp = [];
+    const q = [start];
+    seen.add(start);
+    while (q.length) {
+      const cur = q.shift();
+      comp.push(cur);
+      adj.get(cur).forEach(function (nb) {
+        if (!seen.has(nb)) {
+          seen.add(nb);
+          q.push(nb);
+        }
+      });
+    }
+    components.push(comp);
+  });
+  for (let c = 1; c < components.length; c++) {
+    const a = components[c - 1][0];
+    const b = components[c][0];
+    adj.get(a).add(b);
+    adj.get(b).add(a);
+  }
+
+  return adj;
+}
+
+/**
+ * Soft rewire: randomly replace ~25% of edges so the classroom sees churn
+ * without a full topology explosion.
+ */
+function rewireSparseGossipAdjacency(nodeIds, adj) {
+  if (!adj || nodeIds.length < 3) return adj;
+  const maxDeg = Math.min(_gossipTopo.maxDegree, nodeIds.length - 1);
+  const minDeg = Math.min(_gossipTopo.minDegree, maxDeg);
+
+  nodeIds.forEach(function (id) {
+    if (Math.random() > 0.35) return; // only some nodes churn each rewire
+    const neighbors = adj.get(id);
+    if (!neighbors || neighbors.size === 0) return;
+
+    // Drop one random peer
+    const list = Array.from(neighbors);
+    const drop = list[Math.floor(Math.random() * list.length)];
+    neighbors.delete(drop);
+    if (adj.get(drop)) adj.get(drop).delete(id);
+
+    // Add a new random peer (not self, not already linked)
+    const candidates = nodeIds.filter(function (x) {
+      return x !== id && !neighbors.has(x) && (adj.get(x) || new Set()).size < maxDeg + 1;
+    });
+    if (candidates.length) {
+      const peer = candidates[Math.floor(Math.random() * candidates.length)];
+      neighbors.add(peer);
+      adj.get(peer).add(id);
+    }
+
+    // Repair min degree if we dropped without a replacement
+    while (neighbors.size < minDeg) {
+      const fix = nodeIds.filter(function (x) {
+        return x !== id && !neighbors.has(x);
+      });
+      if (!fix.length) break;
+      const peer = fix[Math.floor(Math.random() * fix.length)];
+      neighbors.add(peer);
+      adj.get(peer).add(id);
+    }
+  });
+
+  return adj;
+}
+
+/**
+ * Maintain gossip adjacency across renders. Rebuilds when membership changes;
+ * soft-rewires on a timer (or when __forceGossipRewire is set).
+ */
+function ensureGossipTopology(nodeIds, opts) {
+  opts = opts || {};
+  const ids = (nodeIds || []).slice().filter(Boolean).sort();
+  const idKey = ids.join('\0');
+  const now = Date.now();
+  const membershipChanged = idKey !== _gossipTopo.idKey;
+  const forceRewire = !!(opts.forceRewire || window.__forceGossipRewire);
+  window.__forceGossipRewire = false;
+
+  if (ids.length < 2) {
+    _gossipTopo.adj = new Map();
+    _gossipTopo.idKey = idKey;
+    _gossipTopo.lastRewire = now;
+    return _gossipTopo.adj;
+  }
+
+  if (membershipChanged || !_gossipTopo.adj || _gossipTopo.adj.size === 0) {
+    _gossipTopo.adj = buildSparseGossipAdjacency(ids);
+    _gossipTopo.idKey = idKey;
+    _gossipTopo.lastRewire = now;
+    _gossipTopo.rewired = true;
+    return _gossipTopo.adj;
+  }
+
+  // Membership stable but IDs may have been reordered — keep graph, prune ghosts
+  const idSet = new Set(ids);
+  _gossipTopo.adj.forEach(function (peers, id) {
+    if (!idSet.has(id)) {
+      _gossipTopo.adj.delete(id);
+      return;
+    }
+    peers.forEach(function (p) {
+      if (!idSet.has(p)) peers.delete(p);
+    });
+  });
+  ids.forEach(function (id) {
+    if (!_gossipTopo.adj.has(id)) _gossipTopo.adj.set(id, new Set());
+  });
+
+  const due = (now - _gossipTopo.lastRewire) >= _gossipTopo.rewireIntervalMs;
+  if (forceRewire || due) {
+    rewireSparseGossipAdjacency(ids, _gossipTopo.adj);
+    _gossipTopo.lastRewire = now;
+    _gossipTopo.rewired = true;
+  } else {
+    _gossipTopo.rewired = false;
+  }
+  _gossipTopo.idKey = idKey;
+  return _gossipTopo.adj;
+}
+
+function gossipAdjToPeerAssignments(adj) {
+  const peerAssignments = new Map();
+  if (!adj) return peerAssignments;
+  adj.forEach(function (peers, id) {
+    peerAssignments.set(id, Array.from(peers));
+  });
+  return peerAssignments;
+}
+
+/**
+ * Build projector link map from the current networking mode.
+ * Admin-hosted → star around the hub;
+ * Full P2P → sparse gossip (~3–4 peers each, periodic rewiring).
+ */
+function buildVizPeerAssignments(vizMiners, mode, opts) {
+  opts = opts || {};
   const peerAssignments = new Map();
   if (!vizMiners || vizMiners.length < 2) return peerAssignments;
 
   const isP2p = mode === 'p2p' || mode === 'mesh';
   if (isP2p) {
-    // Full mesh (teachable “everyone gossips with everyone”)
-    for (let i = 0; i < vizMiners.length; i++) {
-      const peers = [];
-      for (let j = 0; j < vizMiners.length; j++) {
-        if (i !== j) peers.push(vizMiners[j].userId);
-      }
-      peerAssignments.set(vizMiners[i].userId, peers);
-    }
-    return peerAssignments;
+    const ids = vizMiners.map(function (m) { return m.userId; }).filter(Boolean);
+    const adj = ensureGossipTopology(ids, opts);
+    return gossipAdjToPeerAssignments(adj);
   }
 
   // Star around the instructor hub
@@ -1452,9 +1675,19 @@ function resolveVizNetworkMode() {
 
 function updateTopologyModeCaption(mode) {
   const isP2p = mode === 'p2p' || mode === 'mesh';
-  const text = isP2p
-    ? 'Layout: Full P2P mesh (peer ↔ peer gossip)'
-    : 'Layout: Admin-hosted star (hub in the center)';
+  let text = 'Layout: Admin-hosted star (hub in the center)';
+  if (isP2p) {
+    const n = _gossipTopo.adj ? _gossipTopo.adj.size : 0;
+    let avgDeg = 0;
+    if (n > 0) {
+      let edges = 0;
+      _gossipTopo.adj.forEach(function (peers) { edges += peers.size; });
+      avgDeg = edges / n;
+    }
+    text = 'Layout: P2P gossip (~3–4 peers each' +
+      (avgDeg ? ', avg ' + avgDeg.toFixed(1) : '') +
+      ') — rewires every ~15–20s';
+  }
   let $el = $('#topologyModeCaption');
   if (!$el.length) {
     $('#networkTopologyLegend').prepend(
@@ -1546,11 +1779,15 @@ function renderClientRelayChain(opts) {
         };
       });
       const mode = resolveVizNetworkMode();
-      const peerAssignments = buildVizPeerAssignments(vizMiners, mode);
-      const topoMode = (mode === 'p2p' || mode === 'mesh') ? 'mesh' : 'star';
+      const peerAssignments = buildVizPeerAssignments(vizMiners, mode, {
+        forceRewire: !!opts.forceGossipRewire
+      });
+      const isP2p = mode === 'p2p' || mode === 'mesh';
+      const topoMode = isP2p ? 'gossip' : 'star';
+      const rewired = !!_gossipTopo.rewired;
       viz.updateTopology(vizMiners, peerAssignments, {
         topologyMode: topoMode,
-        forceRelayout: !!opts.forceTopologyRelayout
+        forceRelayout: !!opts.forceTopologyRelayout || rewired
       });
       updateTopologyModeCaption(mode);
 

@@ -22,7 +22,8 @@ class NetworkVisualization {
     this._statusTimers = new Map();
     this._lastTipMiner = null;
     this._lastTipHash = null;
-    this.topologyMode = 'star'; // 'star' | 'mesh' — drives layout + packet paths
+    this.topologyMode = 'star'; // 'star' | 'gossip' — drives layout + packet paths
+    this.adjacency = new Map(); // userId -> [peerIds] for gossip animation
 
     this.simulation = d3.forceSimulation()
       .force('link', d3.forceLink().id(d => d.id).distance(120))
@@ -185,7 +186,7 @@ class NetworkVisualization {
   /**
    * @param {Array} miners - {userId, status, chainHeight, name, address, hashrate, role}
    * @param {Map} peerAssignments - userId -> [peer userIds]
-   * @param {Object} [opts] - { topologyMode: 'star'|'mesh', forceRelayout: boolean }
+   * @param {Object} [opts] - { topologyMode: 'star'|'gossip'|'mesh', forceRelayout: boolean }
    */
   updateTopology(miners, peerAssignments, opts) {
     opts = opts || {};
@@ -204,19 +205,28 @@ class NetworkVisualization {
     this.simulation.force('center', d3.forceCenter(this.width / 2, this.height / 2));
 
     const prevMode = this.topologyMode;
-    if (opts.topologyMode === 'mesh' || opts.topologyMode === 'star') {
-      this.topologyMode = opts.topologyMode;
+    if (opts.topologyMode === 'mesh' || opts.topologyMode === 'gossip' || opts.topologyMode === 'star') {
+      // Treat legacy 'mesh' as sparse gossip
+      this.topologyMode = opts.topologyMode === 'mesh' ? 'gossip' : opts.topologyMode;
     }
 
-    // Mesh needs slightly longer links / stronger repulsion so the graph opens up
-    const isMesh = this.topologyMode === 'mesh';
+    // Cache adjacency for gossip packet animation
+    this.adjacency = new Map();
+    if (peerAssignments && typeof peerAssignments.forEach === 'function') {
+      peerAssignments.forEach((peers, userId) => {
+        this.adjacency.set(userId, Array.isArray(peers) ? peers.slice() : []);
+      });
+    }
+
+    // Gossip is sparse — moderate link length; star is tighter
+    const isGossip = this.topologyMode === 'gossip';
     const linkForce = this.simulation.force('link');
     if (linkForce) {
-      linkForce.distance(isMesh ? 150 : 120);
+      linkForce.distance(isGossip ? 130 : 120);
     }
     const chargeForce = this.simulation.force('charge');
     if (chargeForce) {
-      chargeForce.strength(isMesh ? -650 : -500);
+      chargeForce.strength(isGossip ? -520 : -500);
     }
 
     const existingNodes = new Map(this.nodes.map(n => [n.id, n]));
@@ -640,9 +650,82 @@ class NetworkVisualization {
     this.flashNodeStatus(minerId, 'block-found', 1200, revert);
   }
 
+  /** Direct neighbors of a node in the current topology graph. */
+  getNeighborIds(nodeId) {
+    const list = this.adjacency && this.adjacency.get(nodeId);
+    if (list && list.length) return list.slice();
+    // Fallback: read from live links
+    const ids = [];
+    (this.links || []).forEach(l => {
+      const s = (l.source && l.source.id) || l.source;
+      const t = (l.target && l.target.id) || l.target;
+      if (s === nodeId) ids.push(t);
+      else if (t === nodeId) ids.push(s);
+    });
+    return ids;
+  }
+
+  /**
+   * BFS flood along sparse edges (Bitcoin-style gossip animation).
+   * Packets only travel existing links, hop by hop.
+   */
+  animateGossipFlood(fromId, packetOpts) {
+    packetOpts = packetOpts || {};
+    if (!fromId || !this.nodes.find(n => n.id === fromId)) return;
+
+    const hopMs = packetOpts.hopMs != null ? packetOpts.hopMs : 280;
+    const visited = new Set([fromId]);
+    const queue = [{ id: fromId, depth: 0 }];
+    let legIndex = 0;
+
+    while (queue.length) {
+      const cur = queue.shift();
+      const neighbors = this.getNeighborIds(cur.id);
+      neighbors.forEach(nb => {
+        if (visited.has(nb)) return;
+        visited.add(nb);
+        queue.push({ id: nb, depth: cur.depth + 1 });
+
+        const src = this.nodes.find(n => n.id === cur.id);
+        const dst = this.nodes.find(n => n.id === nb);
+        if (!src || !dst) return;
+        const delay = cur.depth * hopMs + (legIndex % 3) * 40;
+        legIndex += 1;
+        setTimeout(() => {
+          this.animatePacketTravel(src, dst, {
+            kind: packetOpts.kind || 'block',
+            label: packetOpts.label,
+            color: packetOpts.color,
+            linkClass: packetOpts.linkClass,
+            duration: packetOpts.duration || 650
+          });
+          if (packetOpts.flashReceive) {
+            this.flashNodeStatus(nb, 'receiving', 500, (this.nodes.find(n => n.id === nb) || {}).status || 'idle');
+          }
+        }, delay);
+      });
+    }
+  }
+
   animateBlockPropagation(minerId, recipientIds, block) {
     const minerNode = this.nodes.find(n => n.id === minerId);
     if (!minerNode) return;
+    const label = block && block.index != null ? '#' + block.index : 'blk';
+
+    // Sparse gossip: flood along topology edges only
+    if (this.topologyMode === 'gossip' || this.topologyMode === 'mesh') {
+      this.animateGossipFlood(minerId, {
+        kind: 'block',
+        label: label,
+        color: '#FFC107',
+        linkClass: 'nv-link-block',
+        hopMs: 260,
+        flashReceive: true
+      });
+      return;
+    }
+
+    // Star / fallback: direct legs to listed recipients
     const ids = (recipientIds || []).filter(id => id && id !== minerId);
     ids.forEach((recipientId, index) => {
       const recipientNode = this.nodes.find(n => n.id === recipientId);
@@ -650,7 +733,7 @@ class NetworkVisualization {
       setTimeout(() => {
         this.animatePacketTravel(minerNode, recipientNode, {
           kind: 'block',
-          label: block && block.index != null ? '#' + block.index : 'blk',
+          label: label,
           color: '#FFC107',
           linkClass: 'nv-link-block'
         });
@@ -661,7 +744,7 @@ class NetworkVisualization {
   /**
    * Fan-out transaction packets.
    * Star (admin-hosted): sender → hub → everyone else.
-   * Mesh (full P2P): sender → every other peer directly.
+   * Gossip (P2P): hop along ~3–4 peer links like Bitcoin inventory flood.
    */
   animateTransactionPropagation(fromId, tx) {
     const fromNode = this.nodes.find(n => n.id === fromId);
@@ -669,9 +752,20 @@ class NetworkVisualization {
 
     const amount = tx && tx.amount != null ? tx.amount : '';
     const label = amount !== '' ? String(amount) : 'tx';
-    const others = this.nodes.map(n => n.id).filter(id => id !== fromId);
 
     this.flashNodeStatus(fromId, 'sending', 700, fromNode._baselineStatus || fromNode.status || 'idle');
+
+    if (this.topologyMode === 'gossip' || this.topologyMode === 'mesh') {
+      this.animateGossipFlood(fromId, {
+        kind: 'tx',
+        label: label,
+        color: '#26A69A',
+        linkClass: 'nv-link-active',
+        hopMs: 220,
+        flashReceive: false
+      });
+      return;
+    }
 
     const runLeg = (srcId, dstId, delay) => {
       const src = this.nodes.find(n => n.id === srcId);
@@ -687,12 +781,8 @@ class NetworkVisualization {
       }, delay);
     };
 
-    if (this.topologyMode === 'mesh') {
-      others.forEach((id, i) => runLeg(fromId, id, i * 90));
-      return;
-    }
-
     const hubId = this._findHubId();
+    const others = this.nodes.map(n => n.id).filter(id => id !== fromId);
     if (hubId && fromId !== hubId) {
       runLeg(fromId, hubId, 0);
       let i = 0;
