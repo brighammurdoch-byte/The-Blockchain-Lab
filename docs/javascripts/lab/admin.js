@@ -428,7 +428,13 @@ function initClientSideNetworking(mode, roomCode) {
     showToastNotification(`Miner joined: ${msg.from}`, 'info');
 
     if (relayState) {
-      relayState.addOrUpdateParticipant(msg.from, msg.role || 'miner');
+      const role = msg.role || 'miner';
+      const r = String(role).toLowerCase();
+      const extra = (r === 'wallet' || r === 'observer') ? { endowment: 100 } : {};
+      relayState.addOrUpdateParticipant(msg.from, role, extra);
+      if (typeof relayState._recomputeMiningRewards === 'function') {
+        relayState._recomputeMiningRewards();
+      }
     }
     if (typeof renderClientParticipants === 'function') {
       renderClientParticipants();

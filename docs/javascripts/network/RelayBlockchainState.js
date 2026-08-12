@@ -188,23 +188,57 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     this.networkStats.averageBlockTimeMs = sum / this.networkStats.blockIntervals.length;
   }
 
+  /**
+   * Classroom starting coins (applied after each chain recompute via p.endowment).
+   * Admin hub and student wallets get 100 so demos work without mining first.
+   */
+  static defaultEndowmentForRole(role) {
+    const r = String(role || '').toLowerCase();
+    if (r === 'wallet' || r === 'observer' || r === 'admin' || r === 'hub') return 100;
+    return 0;
+  }
+
   // Called when a new peer joins via the relay
   addOrUpdateParticipant(userId, role = 'miner', extra = {}) {
+    extra = extra || {};
     if (!this.participants.has(userId)) {
-      this.participants.set(userId, {
-        userId,
-        role,
+      const endow = (extra.endowment != null)
+        ? Math.max(0, Number(extra.endowment) || 0)
+        : RelayBlockchainState.defaultEndowmentForRole(role);
+      const row = {
+        userId: userId,
+        role: role,
         name: extra.name || null,
         hashrate: 0,
         blocksMined: 0,
-        balance: 0,
+        balance: endow,
+        endowment: endow,
         joinedAt: Date.now(),
-        status: 'idle',
-        ...extra
-      });
+        status: 'idle'
+      };
+      Object.assign(row, extra);
+      // Keep endowment authoritative after assign
+      row.endowment = (extra.endowment != null)
+        ? Math.max(0, Number(extra.endowment) || 0)
+        : endow;
+      if (extra.balance == null) row.balance = row.endowment;
+      this.participants.set(userId, row);
     } else {
       const p = this.participants.get(userId);
       Object.assign(p, extra);
+      // Promote a known peer to wallet with starting coins if they never had an endowment
+      const r = String(role || p.role || '').toLowerCase();
+      if (
+        (r === 'wallet' || r === 'observer') &&
+        !(Number(p.endowment) > 0) &&
+        extra.endowment == null
+      ) {
+        p.endowment = 100;
+        p.role = role || p.role || 'wallet';
+        p.balance = (Number(p.balance) || 0) + 100;
+      } else if (role && !p.role) {
+        p.role = role;
+      }
     }
   }
 
@@ -327,10 +361,18 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       });
     });
 
-    // Classroom demo: admin hub can carry a starting endowment so the instructor
-    // can fund student wallets without mining first. Applied after chain replay.
+    // Classroom demo: admin + wallets carry a starting endowment (default 100)
+    // so students can send coins without mining first. Applied after chain replay.
     this.participants.forEach((p) => {
-      const endow = Number(p.endowment) || 0;
+      let endow = Number(p.endowment) || 0;
+      // Backfill wallets that joined before endowment existed
+      if (!endow) {
+        const r = String(p.role || '').toLowerCase();
+        if (r === 'wallet' || r === 'observer' || r === 'admin' || r === 'hub') {
+          endow = 100;
+          p.endowment = 100;
+        }
+      }
       if (endow > 0) {
         p.balance = (p.balance || 0) + endow;
       }
