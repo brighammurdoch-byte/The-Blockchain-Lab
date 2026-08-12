@@ -908,20 +908,32 @@ function setupEventHandlers() {
     <div class="form-group">
       <label>Activation Block Height:</label>
       <input type="number" id="forkHeight" class="form-control" value="10" min="1" />
+      <small class="form-text text-muted" id="forkHeightHint">Defaults to current height + 10 blocks.</small>
     </div>
     <button id="proposeForkBtn" class="btn btn-warning btn-block">Propose Hard Fork</button>
     <div id="adminForkStatus" style="display:none; margin-top:10px;" class="alert alert-warning"></div>
   `);
+
+  // Keep default activation = tip + 10 until the instructor edits the field
+  $('#forkHeight').data('userEdited', false);
+  $('#forkHeight').on('input change', function () {
+    $(this).data('userEdited', true);
+  });
+  refreshForkHeightDefault(true);
   
   $('#proposeForkBtn').click(function(e) {
     e.preventDefault();
-    const height = parseInt($('#forkHeight').val(), 10) || 10;
+    // On initiate: if they left the default alone, snap to current tip + 10
+    if (!$('#forkHeight').data('userEdited')) {
+      refreshForkHeightDefault(true);
+    }
+    const height = parseInt($('#forkHeight').val(), 10) || defaultForkActivationHeight();
     const name = ($('#forkName').val() || 'Hard Fork').trim() || 'Hard Fork';
     if (!Number.isFinite(height) || height < 1) {
       showToastNotification('Enter a valid activation block height', 'error');
       return;
     }
-    if (!confirm('Propose “' + name + '” at block ' + height + '?')) return;
+    if (!confirm('Propose “' + name + '” at block ' + height + ' (current tip is ' + getHubBlockHeight() + ')?')) return;
     proposeHardFork(name, height);
   });
 
@@ -1354,18 +1366,49 @@ function startTeamCollusionAttack(blocksBack) {
   );
 }
 
+/** Current canonical tip height (0 = genesis). */
+function getHubBlockHeight() {
+  if (relayState && Array.isArray(relayState.chain) && relayState.chain.length > 0) {
+    const tip = relayState.chain[relayState.chain.length - 1];
+    if (tip && tip.index != null && !isNaN(tip.index)) return Math.max(0, Number(tip.index));
+    return Math.max(0, relayState.chain.length - 1);
+  }
+  return 0;
+}
+
+/** Default hard-fork activation: 10 blocks after the current tip. */
+function defaultForkActivationHeight() {
+  return getHubBlockHeight() + 10;
+}
+
+/**
+ * Keep the activation height field on tip+10 unless the instructor edited it
+ * or is currently typing in the field.
+ */
+function refreshForkHeightDefault(force) {
+  const $el = $('#forkHeight');
+  if (!$el.length) return;
+  if (!force && $el.is(':focus')) return;
+  if (!force && $el.data('userEdited')) return;
+  const suggested = defaultForkActivationHeight();
+  $el.val(suggested);
+  const tip = getHubBlockHeight();
+  $('#forkHeightHint').text(
+    'Default: current height (' + tip + ') + 10 → activates at block ' + suggested + '.'
+  );
+}
+
 /** Broadcast hard-fork proposal (event name miners listen for). */
 function proposeHardFork(name, height) {
   if (!net) {
     showToastNotification('Network hub not ready', 'error');
     return;
   }
-  const h = parseInt(height, 10);
-  const n = (name || 'Hard Fork').trim() || 'Hard Fork';
+  let h = parseInt(height, 10);
   if (!Number.isFinite(h) || h < 1) {
-    showToastNotification('Invalid fork activation height', 'error');
-    return;
+    h = defaultForkActivationHeight();
   }
+  const n = (name || 'Hard Fork').trim() || 'Hard Fork';
 
   if (relayState) {
     relayState.pendingFork = { height: h, name: n };
@@ -1377,7 +1420,8 @@ function proposeHardFork(name, height) {
   if ($st.length) {
     $st.show().html(
       '<strong>Hard fork proposed:</strong> ' + n +
-      ' at height <strong>' + h + '</strong>. Miners should see a choice modal.'
+      ' at height <strong>' + h + '</strong> (tip was ' + getHubBlockHeight() +
+      '). Miners should see a choice modal.'
     );
   }
   showToastNotification('Hard fork proposed: ' + n + ' @ block ' + h, 'warning');
@@ -1738,6 +1782,7 @@ function renderClientRelayChain(opts) {
     $('#avgBlockTime').text('—');
   }
   if (typeof refreshBlockPaceDisplay === 'function') refreshBlockPaceDisplay();
+  if (typeof refreshForkHeightDefault === 'function') refreshForkHeightDefault(false);
 
   // Update participants table from relay state
   renderClientParticipants();
