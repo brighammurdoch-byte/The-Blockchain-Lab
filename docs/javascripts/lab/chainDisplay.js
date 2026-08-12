@@ -34,20 +34,43 @@
       if (p.userId) map[String(p.userId)] = nm;
       if (p.address) map[String(p.address)] = nm;
       if (p.id) map[String(p.id)] = nm;
+      // Some relays only put the id on `miner` / address fields inconsistently
+      if (p.miner) map[String(p.miner)] = nm;
     }
     return map;
   }
 
+  /** Shorten long hex ids for narrow screens while keeping full value in title/copy. */
+  function shortAddress(addr) {
+    var s = String(addr || '');
+    if (s.length <= 14) return s;
+    return s.slice(0, 6) + '…' + s.slice(-4);
+  }
+
   /**
    * Renders address with optional node name beside it, plus copy control.
+   * Name is always on its own line first so mobile doesn't hide it behind long ids.
    * @param {string} address miner or wallet id
    * @param {Record<string,string>} nameLookup address/userId -> display name
    */
   function formatChainParticipantHtml(address, nameLookup) {
     var addr = address == null ? '' : String(address);
     if (!addr) return '<span class="text-muted">—</span>';
-    var isSystem = addr === 'system' || addr === 'genesis';
-    var nm = !isSystem && nameLookup && nameLookup[addr] ? String(nameLookup[addr]).trim() : '';
+    var isSystem = addr === 'system' || addr === 'genesis' || addr === 'Genesis';
+    var nm = '';
+    if (!isSystem && nameLookup) {
+      nm = nameLookup[addr] ? String(nameLookup[addr]).trim() : '';
+      // Case-insensitive fallback (some mobile WebViews normalize ids)
+      if (!nm) {
+        var lower = addr.toLowerCase();
+        for (var k in nameLookup) {
+          if (Object.prototype.hasOwnProperty.call(nameLookup, k) && String(k).toLowerCase() === lower) {
+            nm = String(nameLookup[k]).trim();
+            break;
+          }
+        }
+      }
+    }
 
     var copyBtn = '';
     if (!isSystem) {
@@ -58,20 +81,56 @@
     }
 
     var nameBit = nm
-      ? '<strong class="chain-node-name" style="margin-right:6px;white-space:nowrap;">' +
+      ? '<div class="chain-node-name" style="font-weight:700;font-size:13px;line-height:1.25;margin:0 0 2px 0;word-break:break-word;">' +
         escapeHtml(nm) +
-        '</strong>'
+        '</div>'
       : '';
 
+    var addrHtml = isSystem
+      ? '<code class="chain-address-full" style="font-size:11px;margin:0;">' + escapeHtml(addr) + '</code>'
+      : '<code class="chain-address-full" title="' +
+        escapeAttr(addr) +
+        '" style="font-size:10px;word-break:break-all;flex:1;min-width:0;margin:0;">' +
+        '<span class="chain-address-short">' +
+        escapeHtml(shortAddress(addr)) +
+        '</span><span class="chain-address-long">' +
+        escapeHtml(addr) +
+        '</span></code>';
+
     return (
-      '<div class="chain-id-row" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
+      '<div class="chain-id-row" style="display:flex;flex-direction:column;align-items:stretch;gap:2px;max-width:100%;">' +
       nameBit +
-      '<code class="chain-address-full" style="font-size:11px;word-break:break-all;flex:1;min-width:0;margin:0;">' +
-      escapeHtml(addr) +
-      '</code>' +
+      '<div style="display:flex;align-items:center;gap:6px;min-width:0;">' +
+      addrHtml +
       copyBtn +
-      '</div>'
+      '</div></div>'
     );
+  }
+
+  function isNewForkId(fid) {
+    return fid === 'new' || fid === 'NEW';
+  }
+
+  /**
+   * Label for non-main blocks: hard-fork side vs true race orphan.
+   */
+  function sideChainLabel(block) {
+    if (!block) {
+      return { text: 'SIDE', cls: 'label-warning', panel: 'panel-warning' };
+    }
+    if (isNewForkId(block.forkId)) {
+      return { text: 'NEW CHAIN', cls: 'label-info', panel: 'panel-info' };
+    }
+    var fid = block.forkId && block.forkId !== 'classic' ? String(block.forkId) : '';
+    if (fid) {
+      return {
+        text: fid.toUpperCase() + ' CHAIN',
+        cls: 'label-info',
+        panel: 'panel-info'
+      };
+    }
+    // Same rules / classic competing tip that lost longest-chain race
+    return { text: 'ORPHAN', cls: 'label-warning', panel: 'panel-warning' };
   }
 
   /**
@@ -163,11 +222,30 @@
       for (var li = 0; li < level.length; li++) {
         var block = level[li];
         var isMain = !!mainHashes[block.hash];
-        var panelClass = isMain ? (i === maxIndex ? 'panel-success' : 'panel-primary') : 'panel-warning';
-        var label = isMain ? '' : '<span class="label label-warning pull-right">ORPHAN</span>';
-        var forkId = block.forkId && block.forkId !== 'classic' ? String(block.forkId) : '';
+        var side = !isMain ? sideChainLabel(block) : null;
+        var panelClass = isMain
+          ? i === maxIndex
+            ? 'panel-success'
+            : 'panel-primary'
+          : side.panel;
+        // Hard-fork NEW side is a permanent parallel chain — never call it ORPHAN.
+        // True race losers stay ORPHAN (warning).
+        var label = '';
+        if (!isMain && side) {
+          label =
+            '<span class="label ' +
+            side.cls +
+            ' pull-right chain-side-label">' +
+            escapeHtml(side.text) +
+            '</span>';
+        }
+        // Avoid double-badging: NEW CHAIN label already implies forkId
+        var forkId =
+          block.forkId && block.forkId !== 'classic' && !isNewForkId(block.forkId)
+            ? String(block.forkId)
+            : '';
         var forkBadge = forkId
-          ? '<span class="label label-info pull-right" style="margin-right:5px;">' +
+          ? '<span class="label label-default pull-right" style="margin-right:5px;">' +
             escapeHtml(forkId.toUpperCase()) +
             '</span>'
           : '';
@@ -243,7 +321,7 @@
           '</div></div>';
         html +=
           '<div class="panel-body" style="padding:10px 15px;">' +
-          '<dl class="dl-horizontal" style="margin-bottom:0;">' +
+          '<dl class="dl-horizontal chain-block-dl" style="margin-bottom:0;">' +
           '<dt style="width:80px;">Hash</dt><dd style="margin-left:90px;"><code style="font-size:10px;word-break:break-all;">' +
           escapeHtml(hashShort) +
           '…</code></dd>' +
@@ -263,7 +341,13 @@
 
         // Single down-arrow under this card only if it has children (no multi-angle fan)
         if (childCount > 0) {
-          var arrowColor = hasOrphanChild || !isMain ? '#f0ad4e' : '#9e9e9e';
+          var arrowColor = !isMain
+            ? isNewForkId(block.forkId)
+              ? '#5bc0de'
+              : '#f0ad4e'
+            : hasOrphanChild
+              ? '#f0ad4e'
+              : '#9e9e9e';
           html +=
             '<div style="text-align:center;margin:6px 0 2px;color:' +
             arrowColor +
@@ -294,6 +378,8 @@
     escapeHtml: escapeHtml,
     buildParticipantNameLookup: buildParticipantNameLookup,
     formatChainParticipantHtml: formatChainParticipantHtml,
-    renderChainHtml: renderChainHtml
+    renderChainHtml: renderChainHtml,
+    sideChainLabel: sideChainLabel,
+    shortAddress: shortAddress
   };
 })(typeof window !== 'undefined' ? window : this);

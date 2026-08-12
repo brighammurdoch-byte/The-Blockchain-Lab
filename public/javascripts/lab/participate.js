@@ -21,6 +21,8 @@ let myForkChoice = 'classic';
 let pendingForkHeight = null;
 let pendingForkName = null;
 let lastKnownOrphans = []; // Competing / hard-fork tips from hub
+/** Cached roster so chain re-renders keep miner names (mobile often re-renders without a payload). */
+let lastKnownParticipants = [];
 /** Best known tip on the NEW hard-fork branch (miners on "new" stick to this). */
 let localNewForkTip = null;
 /** Best known tip on the CLASSIC side after activation (miners on "classic" stick to this). */
@@ -220,8 +222,8 @@ function applyCanonicalChain(chain, opts) {
       else if (me.minedBlocks !== undefined) $('#blocksMined').text(me.minedBlocks);
     }
     applyMyBalanceFromParticipants(parts);
-    // Personal view = own tip path; Shared Network = main + all known orphans
-    updateParticipantBlockchainView({ chain: window.lastRelayedChain }, parts);
+    // Personal view = own tip path (fork-aware); Shared Network = main + side chains
+    updateParticipantBlockchainView({ chain: getPersonalChainBlocks() }, parts);
     refreshSharedNetworkView(parts);
   } catch (e) {
     console.error('Error applying canonical chain UI', e);
@@ -295,9 +297,40 @@ function getDisplayOrphans() {
   });
 }
 
+/** Remember roster for name lookup on later paints (don't pass [] and wipe names). */
+function rememberParticipants(parts) {
+  if (!Array.isArray(parts) || !parts.length) return lastKnownParticipants;
+  // Merge by userId so a partial roster doesn't drop names we already know
+  const byId = new Map();
+  (lastKnownParticipants || []).forEach(function (p) {
+    const id = p && (p.userId || p.address || p.id);
+    if (id) byId.set(String(id), p);
+  });
+  parts.forEach(function (p) {
+    if (!p) return;
+    const id = p.userId || p.address || p.id;
+    if (!id) return;
+    const prev = byId.get(String(id)) || {};
+    const merged = Object.assign({}, prev, p);
+    // Never clobber a known display name with null/empty from a sparse MQTT payload
+    const prevName = (prev.displayName || prev.name || '').trim();
+    const nextName = (p.displayName || p.name || '').trim();
+    if (!nextName && prevName) {
+      merged.name = prev.name || prevName;
+      merged.displayName = prev.displayName || prevName;
+    } else if (nextName) {
+      merged.name = p.name || nextName;
+      merged.displayName = p.displayName || nextName;
+    }
+    byId.set(String(id), merged);
+  });
+  lastKnownParticipants = Array.from(byId.values());
+  return lastKnownParticipants;
+}
+
 /** Redraw Shared Network tab: hub main chain + orphans / competing forks. */
 function refreshSharedNetworkView(participants) {
-  const parts = participants || [];
+  const parts = rememberParticipants(participants);
   try {
     updateNetworkBlockchainView(
       window.lastRelayedChain || [],
@@ -1047,10 +1080,13 @@ function initClientSideNetworkingForParticipant(mode) {
       });
       if (payload.reorg) {
         showToastNotification('Chain reorg — following longest chain', 'warning');
-      } else if (payload.isFork && block && isNewForkId(block.forkId) && myForkChoice === 'new') {
-        // Expected: our NEW block sits beside main; keep mining the NEW tip
-      } else if (payload.isFork && myForkChoice !== 'new') {
-        showToastNotification('Your block was an orphan — mining on the winning tip', 'info');
+      } else if (payload.isFork && block && isNewForkId(block.forkId)) {
+        // Hard-fork NEW side is intentional, not a lost race
+        if (myForkChoice === 'new') {
+          // keep mining the NEW tip
+        }
+      } else if (payload.isFork && myForkChoice !== 'new' && !(block && isNewForkId(block.forkId))) {
+        showToastNotification('Your block lost a race (orphan) — mining on the winning tip', 'info');
       }
       return;
     }
@@ -1115,8 +1151,9 @@ function initClientSideNetworkingForParticipant(mode) {
         } catch (e) {}
       }
       try {
-        updateParticipantBlockchainView({ chain: window.lastRelayedChain }, payload.participants || []);
-        refreshSharedNetworkView(payload.participants || []);
+        rememberParticipants(payload.participants || []);
+        updateParticipantBlockchainView({ chain: getPersonalChainBlocks() }, lastKnownParticipants);
+        refreshSharedNetworkView(lastKnownParticipants);
       } catch (e) {}
       if (payload.newHeight != null) {
         $('#blockHeight').text(payload.newHeight);
@@ -1174,11 +1211,40 @@ function initClientSideNetworkingForParticipant(mode) {
     const payload = msg.payload || msg;
     const parts = payload.participants || [];
     if (!parts.length) return;
-    try { updateParticipantList({ participants: parts }); } catch (e) {}
-    try { applyMyBalanceFromParticipants(parts); } catch (e) {}
+    rememberParticipants(parts);
+    try { updateParticipantList({ participants: lastKnownParticipants }); } catch (e) {}
+    try { applyMyBalanceFromParticipants(lastKnownParticipants); } catch (e) {}
+    // Re-paint chains so miner names appear on blocks (mobile often only had addresses)
+    try {
+      updateParticipantBlockchainView(
+        { chain: getPersonalChainBlocks() },
+        lastKnownParticipants
+      );
+    } catch (e) {}
+    try { refreshSharedNetworkView(lastKnownParticipants); } catch (e) {}
   });
 
   net.on('participant-updated', (msg) => {
+    const payload = msg.payload || msg;
+    const uid = payload.userId || payload.from || msg.from;
+    const name = payload.name != null ? String(payload.name).trim() : '';
+    if (uid && name) {
+      rememberParticipants([{
+        userId: uid,
+        address: uid,
+        name: name,
+        displayName: name,
+        role: payload.role || 'miner'
+      }]);
+      try { updateParticipantList({ participants: lastKnownParticipants }); } catch (e) {}
+      try { refreshSharedNetworkView(lastKnownParticipants); } catch (e) {}
+      try {
+        updateParticipantBlockchainView(
+          { chain: getPersonalChainBlocks() },
+          lastKnownParticipants
+        );
+      } catch (e) {}
+    }
     // Soft refresh — ask hub for full roster with balances
     if (net) net.send('request-state', { from: userId });
   });
@@ -1449,7 +1515,23 @@ function setupEventHandlers() {
         name: nodeName
       });
     }
-    
+
+    // Optimistic local name so block miner rows update immediately (esp. mobile)
+    if (userId) {
+      rememberParticipants([{
+        userId: userId,
+        address: userId,
+        name: nodeName,
+        displayName: nodeName,
+        role: 'miner'
+      }]);
+      try { updateParticipantList({ participants: lastKnownParticipants }); } catch (e) {}
+      try {
+        updateParticipantBlockchainView({ chain: getPersonalChainBlocks() }, lastKnownParticipants);
+      } catch (e) {}
+      try { refreshSharedNetworkView(lastKnownParticipants); } catch (e) {}
+    }
+
     showToastNotification('Node name updated!', 'success');
   });
   
@@ -2357,23 +2439,96 @@ function loadBlockchainState() {
   if (typeof debugLog === 'function') debugLog('loadBlockchainState no-op in client-relay');
 }
 
+/**
+ * Blocks for the Personal tab: follow the miner's chosen hard-fork side so
+ * NEW-side miners don't only see classic main with their blocks "orphaned".
+ */
+function getPersonalChainBlocks() {
+  const main = window.lastRelayedChain || [];
+  if (myForkChoice !== 'new' || pendingForkHeight == null) {
+    // Classic (or no fork): hub main is our chain; prefer sticky classic tip path if longer
+    if (localClassicForkTip && localClassicForkTip.hash) {
+      const path = pathFromTipHash(localClassicForkTip.hash);
+      if (path && path.length >= main.length) return path;
+    }
+    return main.slice();
+  }
+
+  // NEW side: path to sticky NEW tip (shared history + NEW blocks)
+  refreshLocalNewForkTip();
+  if (localNewForkTip && localNewForkTip.hash) {
+    const path = pathFromTipHash(localNewForkTip.hash);
+    if (path && path.length) return path;
+  }
+  // Fall back: main up through activation parent only
+  const act = Number(pendingForkHeight);
+  return main.filter(function (b) {
+    return !b || b.index == null || Number(b.index) < act || !isNewForkId(b.forkId);
+  }).filter(function (b) {
+    // drop any NEW that snuck onto main
+    return b && !isNewForkId(b.forkId);
+  });
+}
+
+function pathFromTipHash(tipHash) {
+  if (!tipHash) return null;
+  const all = collectKnownBlocks();
+  const path = [];
+  const seen = new Set();
+  let cur = all.get(tipHash);
+  while (cur && cur.hash && !seen.has(cur.hash)) {
+    seen.add(cur.hash);
+    path.unshift(cur);
+    if (
+      cur.index === 0 ||
+      cur.previousHash === '0' ||
+      cur.miner === 'genesis'
+    ) {
+      return path;
+    }
+    cur = all.get(cur.previousHash);
+    if (!cur) break;
+  }
+  return path.length ? path : null;
+}
+
 function updateParticipantBlockchainView(chainData, participants) {
-  const blocks = chainData.chain || [];
+  const parts = rememberParticipants(participants);
+  // Prefer explicit chain if provided and non-empty; otherwise personal/fork-aware path
+  let blocks =
+    chainData && Array.isArray(chainData.chain) && chainData.chain.length
+      ? chainData.chain
+      : getPersonalChainBlocks();
+  // When caller passes hub main during a NEW choice, replace with personal path
+  if (myForkChoice === 'new' && pendingForkHeight != null) {
+    const personal = getPersonalChainBlocks();
+    if (personal && personal.length) blocks = personal;
+  }
+
   const CD = window.ChainDisplay;
-  const nameLookup = CD ? CD.buildParticipantNameLookup(participants || []) : {};
+  const nameLookup = CD ? CD.buildParticipantNameLookup(parts) : {};
   const fmtAddr = (addr) => (CD ? CD.formatChainParticipantHtml(addr, nameLookup) : `<code>${addr || ''}</code>`);
-  
+
   if (blocks.length > 0) {
     localChainTipHash = blocks[blocks.length - 1].hash;
   }
-  
-  let html = '<h4>Your Blockchain Copy (Height: ' + blocks.length + ')</h4>';
-  
+
+  const sideNote =
+    myForkChoice === 'new' && pendingForkHeight != null
+      ? ' <span class="label label-info">Following NEW chain</span>'
+      : '';
+  let html =
+    '<h4>Your Blockchain Copy (Height: ' +
+    Math.max(0, blocks.length ? (blocks[blocks.length - 1].index != null ? blocks[blocks.length - 1].index : blocks.length - 1) : 0) +
+    ')' +
+    sideNote +
+    '</h4>';
+
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i];
     const highlight = block.miner === userId ? 'panel-success' : 'panel-default';
     const minerId = block.miner != null ? block.miner : '';
-    
+
     let txHtml = `${block.transactions ? block.transactions.length : 0}`;
     if (block.transactions && block.transactions.length > 0) {
       txHtml += ' <button class="btn btn-xs btn-default" onclick="toggleTransactions(\'personal_' + i + '\')">View Details</button>';
@@ -2381,7 +2536,7 @@ function updateParticipantBlockchainView(chainData, participants) {
       txHtml += '<div id="txDetails_personal_' + i + '" style="display:' + displayStyle + '; margin-top: 10px;">';
       txHtml += '<table class="table table-condensed">';
       txHtml += '<thead><tr><th>From</th><th>To</th><th>Amount</th><th>Time</th></tr></thead><tbody>';
-      
+
       for (const tx of block.transactions) {
         const timeStr = tx.timestamp ? new Date(tx.timestamp).toLocaleTimeString() : '-';
         txHtml += `<tr>`;
@@ -2391,11 +2546,14 @@ function updateParticipantBlockchainView(chainData, participants) {
         txHtml += `<td>${timeStr}</td>`;
         txHtml += `</tr>`;
       }
-      
+
       txHtml += '</tbody></table></div>';
     }
 
-      const forkBadge = (block.forkId && block.forkId !== 'classic') ? `<span class="label label-warning pull-right">${block.forkId.toUpperCase()}</span>` : '';
+    const forkBadge =
+      block.forkId && block.forkId !== 'classic'
+        ? `<span class="label label-info pull-right">${String(block.forkId).toUpperCase()} CHAIN</span>`
+        : '';
     html += `
       <div class="panel ${highlight}">
         <div class="panel-heading">
@@ -2403,7 +2561,7 @@ function updateParticipantBlockchainView(chainData, participants) {
           <span class="pull-right text-muted small">${new Date(block.timestamp).toLocaleTimeString()}</span>
         </div>
         <div class="panel-body">
-          <dl class="dl-horizontal">
+          <dl class="dl-horizontal chain-block-dl">
             <dt>Hash</dt>
             <dd><code style="font-size: 10px; word-break: break-all;">${block.hash}</code></dd>
             <dt>Previous Hash</dt>
@@ -2419,12 +2577,13 @@ function updateParticipantBlockchainView(chainData, participants) {
       </div>
     `;
   }
-  
+
   $('#blockchainView').html(html || '<p class="text-muted">No blocks yet</p>');
 }
 
 function updateNetworkBlockchainView(mainChain, orphans, participants) {
   const main = mainChain || window.lastRelayedChain || [];
+  const parts = rememberParticipants(participants);
   // Always prefer the accumulated orphan set so Shared Network shows forks
   const orphanList = (orphans && orphans.length)
     ? orphans
@@ -2433,19 +2592,34 @@ function updateNetworkBlockchainView(mainChain, orphans, participants) {
     let html = ChainDisplay.renderChainHtml({
       mainChain: main,
       orphans: orphanList,
-      participants: participants || [],
+      participants: parts,
       openTxPanels: openTxPanels
     });
+    const newSide = (orphanList || []).filter(function (b) {
+      return b && (b.forkId === 'new' || b.forkId === 'NEW');
+    }).length;
+    const otherSide = (orphanList || []).length - newSide;
     if (orphanList && orphanList.length) {
+      let caption =
+        'Shared network: <strong>classic main</strong>';
+      if (newSide > 0) {
+        caption +=
+          ' + <strong>' + newSide + '</strong> block(s) on the <strong>NEW</strong> hard-fork chain';
+      }
+      if (otherSide > 0) {
+        caption +=
+          (newSide > 0 ? ';' : ' +') +
+          ' <strong>' +
+          otherSide +
+          '</strong> competing/orphan block(s)';
+      }
+      caption += '.';
       html =
-        '<p class="small text-muted" style="margin-bottom:8px;">' +
-        'Shared network: main chain + <strong>' + orphanList.length +
-        '</strong> orphan/competing block(s) (e.g. hard-fork side).</p>' +
-        html;
+        '<p class="small text-muted" style="margin-bottom:8px;">' + caption + '</p>' + html;
     } else {
       html =
         '<p class="small text-muted" style="margin-bottom:8px;">' +
-        'Shared network view (main chain). Orphans appear here when forks compete.</p>' +
+        'Shared network view (main chain). Hard-fork side chains and race orphans appear beside it.</p>' +
         html;
     }
     $('#networkBlockchainView').html(html);
@@ -2468,7 +2642,10 @@ function toggleTransactions(blockIndex) {
 
 
 function updateParticipantList(blockchain) {
-  const participants = (blockchain.participants || []).filter(function (p) {
+  if (blockchain && Array.isArray(blockchain.participants) && blockchain.participants.length) {
+    rememberParticipants(blockchain.participants);
+  }
+  const participants = (lastKnownParticipants || blockchain.participants || []).filter(function (p) {
     const id = p.userId || p.address || p.id || '';
     return id && String(id).indexOf('probe-') !== 0;
   }).slice().sort(function (a, b) {

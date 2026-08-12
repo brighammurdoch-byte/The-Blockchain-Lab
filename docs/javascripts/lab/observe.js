@@ -332,11 +332,42 @@ function initClientSideNetworkingForObserver(mode) {
   window.BlockchainLabNet = net;
 }
 
+/** Merge roster so chain re-paints keep miner names when payloads omit them. */
+function rememberObserverParticipants(parts) {
+  if (!Array.isArray(parts) || !parts.length) {
+    return window._observerParticipants || [];
+  }
+  const byId = new Map();
+  (window._observerParticipants || []).forEach(function (p) {
+    const id = p && (p.userId || p.address || p.id);
+    if (id) byId.set(String(id), p);
+  });
+  parts.forEach(function (p) {
+    if (!p) return;
+    const id = p.userId || p.address || p.id;
+    if (!id) return;
+    const prev = byId.get(String(id)) || {};
+    const merged = Object.assign({}, prev, p);
+    const prevName = (prev.displayName || prev.name || '').trim();
+    const nextName = (p.displayName || p.name || '').trim();
+    if (!nextName && prevName) {
+      merged.name = prev.name || prevName;
+      merged.displayName = prev.displayName || prevName;
+    } else if (nextName) {
+      merged.name = p.name || nextName;
+      merged.displayName = p.displayName || nextName;
+    }
+    byId.set(String(id), merged);
+  });
+  window._observerParticipants = Array.from(byId.values());
+  return window._observerParticipants;
+}
+
 function populateObserverUIFromState(state) {
   if (!state) return;
   try {
     const chain = state.chain || [];
-    const participants = state.participants || [];
+    const participants = rememberObserverParticipants(state.participants || []);
     const orphans = state.orphans || [];
     if (Array.isArray(state.pendingTransactions)) {
       window._observerPending = state.pendingTransactions.slice();
@@ -400,13 +431,14 @@ function loadBlockchainState() {
 }
 
 function updateBlockchainView(mainChain, orphans, participants) {
+  const parts = rememberObserverParticipants(participants || []);
   $('#blockchainView').css('background-color', '#fcfcfc').css('padding', '15px').css('border-radius', '4px');
   if (window.ChainDisplay && typeof ChainDisplay.renderChainHtml === 'function') {
     $('#blockchainView').html(
       ChainDisplay.renderChainHtml({
         mainChain: mainChain || [],
         orphans: orphans || [],
-        participants: participants || [],
+        participants: parts,
         openTxPanels: openTxPanels
       })
     );

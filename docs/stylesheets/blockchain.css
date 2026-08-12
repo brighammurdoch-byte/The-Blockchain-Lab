@@ -86,11 +86,47 @@ input {
 .chain-address-full {
   font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
 }
+.chain-node-name {
+  color: #1a1a1a;
+}
 .panel-body dl dd .chain-id-row {
   max-width: 100%;
 }
 table.table-condensed td .chain-id-row {
   max-width: 220px;
+}
+/* Mobile: show shortened address; desktop: full */
+.chain-address-short {
+  display: none;
+}
+.chain-address-long {
+  display: inline;
+}
+@media (max-width: 767px) {
+  .chain-address-short {
+    display: inline;
+  }
+  .chain-address-long {
+    display: none;
+  }
+  .chain-node-name {
+    font-size: 14px !important;
+  }
+  /* Bootstrap dl-horizontal only floats ≥768px; tighten stacked labels on phones */
+  .chain-block-dl > dt {
+    float: none;
+    width: auto;
+    text-align: left;
+    font-weight: 600;
+    margin-top: 6px;
+  }
+  .chain-block-dl > dd {
+    margin-left: 0;
+  }
+  .chain-side-label {
+    display: inline-block;
+    margin-top: 2px;
+  }
 }
 @media (min-width: 1200px) {
   table.table-condensed td .chain-id-row {
