@@ -20,11 +20,16 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     this.participants = new Map(); // userId -> { userId, role, name, hashrate, blocksMined, balance, joinedAt }
     this.pendingTransactions = [];
     this.settings = {
-      difficultyLeading: 4,
+      // Start easy; auto-difficulty climbs toward targetBlockTimeSec
+      difficultyLeading: 1,
       difficultySecondary: 8,
       miningRewardCoins: 10,
       parametersLocked: false,
-      networkMode: 'admin-relay'
+      networkMode: 'admin-relay',
+      /** Desired average seconds between blocks (classroom pacing). */
+      targetBlockTimeSec: 10,
+      /** When true, hub nudges difficulty after each tip extension. */
+      autoDifficulty: true
     };
     this.networkStats = {
       totalHashrate: 0,
@@ -65,9 +70,18 @@ if (typeof window.RelayBlockchainState === 'undefined') {
   // Update admin settings (called when admin changes sliders)
   updateSettings(newSettings) {
     this.settings = { ...this.settings, ...newSettings };
+    if (this.settings.targetBlockTimeSec != null) {
+      const t = Number(this.settings.targetBlockTimeSec);
+      this.settings.targetBlockTimeSec = isNaN(t) ? 10 : Math.max(2, Math.min(120, t));
+    }
+    if (this.settings.autoDifficulty != null) {
+      this.settings.autoDifficulty = !!this.settings.autoDifficulty;
+    }
     // Always expose a miner-friendly difficulty object
-    const leading = this.settings.difficultyLeading || 4;
+    const leading = this.settings.difficultyLeading != null ? this.settings.difficultyLeading : 1;
     const secondary = this.settings.difficultySecondary !== undefined ? this.settings.difficultySecondary : 8;
+    this.settings.difficultyLeading = leading;
+    this.settings.difficultySecondary = secondary;
     this.settings.currentDifficulty = {
       leadingZeros: leading,
       secondaryHex: Number(secondary).toString(16).toUpperCase()
@@ -81,14 +95,89 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     };
   }
 
+  /** Encode leading zeros + secondary nibble as a single ladder step. */
+  _difficultyScore(leading, secondary) {
+    const L = Math.max(1, Math.min(6, Number(leading) || 1));
+    const S = Math.max(0, Math.min(15, Number(secondary) || 0));
+    return L * 16 + S;
+  }
+
+  _scoreToDifficulty(score) {
+    const minScore = 1 * 16 + 0;
+    const maxScore = 5 * 16 + 15; // leading 6 is usually unusable in class
+    const s = Math.max(minScore, Math.min(maxScore, score));
+    return {
+      difficultyLeading: Math.floor(s / 16),
+      difficultySecondary: s % 16
+    };
+  }
+
+  /**
+   * Nudge difficulty so recent block intervals approach targetBlockTimeSec.
+   * Returns updated settings object if changed, else null.
+   */
+  maybeRetargetDifficulty() {
+    if (!this.settings || !this.settings.autoDifficulty) return null;
+    if (this.settings.parametersLocked) return null;
+
+    const targetSec = Number(this.settings.targetBlockTimeSec);
+    const targetMs = Math.max(2000, Math.min(120000, (isNaN(targetSec) ? 10 : targetSec) * 1000));
+    const intervals = Array.isArray(this.networkStats.blockIntervals)
+      ? this.networkStats.blockIntervals
+      : [];
+    if (intervals.length < 1) return null;
+
+    // Responsive window: last few blocks
+    const recent = intervals.slice(-5);
+    const avg = recent.reduce((a, b) => a + b, 0) / recent.length;
+    if (!(avg > 0)) return null;
+
+    const ratio = avg / targetMs;
+    let delta = 0;
+    // Blocks too fast → harder; too slow → easier
+    if (ratio < 0.45) delta = 4;
+    else if (ratio < 0.65) delta = 2;
+    else if (ratio < 0.85) delta = 1;
+    else if (ratio > 2.2) delta = -4;
+    else if (ratio > 1.55) delta = -2;
+    else if (ratio > 1.2) delta = -1;
+    // ~0.85–1.2 of target: hold
+
+    if (delta === 0) return null;
+
+    const curScore = this._difficultyScore(
+      this.settings.difficultyLeading,
+      this.settings.difficultySecondary
+    );
+    const next = this._scoreToDifficulty(curScore + delta);
+    if (
+      next.difficultyLeading === this.settings.difficultyLeading &&
+      next.difficultySecondary === this.settings.difficultySecondary
+    ) {
+      return null;
+    }
+
+    this.updateSettings(next);
+    this.networkStats.lastRetarget = {
+      at: Date.now(),
+      avgMs: avg,
+      targetMs: targetMs,
+      ratio: ratio,
+      delta: delta,
+      leading: next.difficultyLeading,
+      secondary: next.difficultySecondary
+    };
+    return Object.assign({}, this.settings);
+  }
+
   _recordBlockInterval(block) {
     const prev = this.chain.length >= 2 ? this.chain[this.chain.length - 2] : null;
     if (!prev || !block || !block.timestamp || !prev.timestamp) return;
-    // Ignore genesis→first interval noise if genesis used a fake older timestamp
-    if (prev.index === 0 && prev.miner === 'genesis') {
-      // still record first real block interval from "now-ish" genesis for demo value
-    }
+    // Skip genesis→first (genesis timestamp is synthetic and skews the average)
+    if (prev.miner === 'genesis' || prev.index === 0) return;
+
     const interval = Math.max(0, (block.timestamp || 0) - (prev.timestamp || 0));
+    if (!(interval > 0)) return;
     if (!Array.isArray(this.networkStats.blockIntervals)) this.networkStats.blockIntervals = [];
     this.networkStats.blockIntervals.push(interval);
     // Keep last 20 intervals
@@ -270,12 +359,23 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       };
     }
 
-    // Basic PoW check using current settings
-    const leading = (this.settings.difficultyLeading != null) ? this.settings.difficultyLeading : 4;
+    // PoW check: leading zeros + secondary hex nibble (matches miner isValidHash)
+    const leading = (this.settings.difficultyLeading != null) ? this.settings.difficultyLeading : 1;
+    const secondary = (this.settings.difficultySecondary != null) ? this.settings.difficultySecondary : 8;
     const requiredPrefix = leading > 0 ? '0'.repeat(leading) : '';
 
-    if (requiredPrefix && !block.hash.startsWith(requiredPrefix)) {
+    if (requiredPrefix && !String(block.hash).startsWith(requiredPrefix)) {
       return { accepted: false, reason: `Block does not meet difficulty (needs ${leading} leading zeros)` };
+    }
+    if (requiredPrefix) {
+      const nextChar = String(block.hash).charAt(leading);
+      const secHex = Number(secondary).toString(16).toLowerCase();
+      if (nextChar && nextChar.toLowerCase() > secHex) {
+        return {
+          accepted: false,
+          reason: `Block does not meet secondary difficulty (need ≤0x${secHex.toUpperCase()} after ${leading} zeros)`
+        };
+      }
     }
 
     this.ensureGenesis();
@@ -349,13 +449,20 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       }
     }
 
+    // Classroom pacing: retarget difficulty toward target block time
+    let retargetSettings = null;
+    if (onBest && tipChanged && typeof this.maybeRetargetDifficulty === 'function') {
+      retargetSettings = this.maybeRetargetDifficulty();
+    }
+
     return {
       accepted: true,
       newHeight: Math.max(0, this.chain.length - 1),
       isFork: !onBest,
       reorg: didReorg,
       tipChanged: tipChanged,
-      chain: this.chain.slice()
+      chain: this.chain.slice(),
+      retargetSettings: retargetSettings
     };
   }
   tryAddTransaction(tx) {

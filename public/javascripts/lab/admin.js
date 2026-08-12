@@ -277,12 +277,19 @@ function initClientSideNetworking(mode, roomCode) {
 
         // Re-apply restored settings to the UI sliders
         if (restored.settings) {
-          $('#difficultyLeading').val(restored.settings.difficultyLeading || 4);
+          $('#difficultyLeading').val(restored.settings.difficultyLeading != null ? restored.settings.difficultyLeading : 1);
           $('#difficultySecondary').val(restored.settings.difficultySecondary != null ? restored.settings.difficultySecondary : 8);
           $('#miningReward').val(restored.settings.miningRewardCoins || 10);
+          if (restored.settings.targetBlockTimeSec != null) {
+            $('#targetBlockTimeSec').val(restored.settings.targetBlockTimeSec);
+          }
+          if (typeof restored.settings.autoDifficulty === 'boolean') {
+            $('#autoDifficulty').prop('checked', restored.settings.autoDifficulty);
+          }
           $('#lockParameters').prop('checked', !!restored.settings.parametersLocked);
           updateDifficultyDisplay();
           updateSettingsDisplay(restored.settings);
+          applyAutoDifficultyUI();
         }
         if (relayState.networkPaused) {
           $('#toggleNetworkBtn').text('Resume Network').data('paused', true);
@@ -296,13 +303,15 @@ function initClientSideNetworking(mode, roomCode) {
 
     // Apply any current slider values as initial settings (if no restore)
     const initialSettings = {
-      difficultyLeading: parseInt($('#difficultyLeading').val()) || 4,
+      difficultyLeading: parseInt($('#difficultyLeading').val(), 10) || 1,
       difficultySecondary: (function () {
         var s = parseInt($('#difficultySecondary').val(), 10);
         return isNaN(s) ? 8 : s;
       })(),
-      miningRewardCoins: parseInt($('#miningReward').val()) || 10,
-      parametersLocked: $('#lockParameters').is(':checked')
+      miningRewardCoins: parseInt($('#miningReward').val(), 10) || 10,
+      parametersLocked: $('#lockParameters').is(':checked'),
+      targetBlockTimeSec: parseInt($('#targetBlockTimeSec').val(), 10) || 10,
+      autoDifficulty: $('#autoDifficulty').length ? $('#autoDifficulty').is(':checked') : true
     };
     relayState.updateSettings(initialSettings);
 
@@ -357,6 +366,30 @@ function initClientSideNetworking(mode, roomCode) {
     });
 
     console.log('[ClientNet] AdminRelayCoordinator + RelayBlockchainState attached (with strong persistence)');
+
+    // When auto-difficulty retargets, keep admin sliders + badge in sync
+    coordinator.onDifficultyRetarget = function (settings) {
+      if (!settings) return;
+      if (settings.difficultyLeading != null) {
+        $('#difficultyLeading').val(settings.difficultyLeading);
+      }
+      if (settings.difficultySecondary != null) {
+        $('#difficultySecondary').val(settings.difficultySecondary);
+      }
+      updateDifficultyDisplay();
+      refreshBlockPaceDisplay();
+      // Soft toast so instructor sees pacing is working (debounced)
+      if (!window.__lastRetargetToast || Date.now() - window.__lastRetargetToast > 8000) {
+        window.__lastRetargetToast = Date.now();
+        const t = settings.targetBlockTimeSec || 10;
+        showToastNotification(
+          'Difficulty auto-adjusted toward ~' + t + 's blocks (now ' +
+          settings.difficultyLeading + ' + 0x' +
+          Number(settings.difficultySecondary).toString(16).toUpperCase() + ')',
+          'info'
+        );
+      }
+    };
   }
 
   // Presence + initial-state are sent after initAsAdmin resolves (see above)
@@ -607,6 +640,14 @@ function initClientSideNetworking(mode, roomCode) {
     if (!block || !relayState) return;
     const result = relayState.tryAddBlock(block, minerId);
     if (result && result.accepted && !result.duplicate) {
+      if (result.retargetSettings && coordinator) {
+        coordinator.broadcastSettings(result.retargetSettings);
+        if (typeof coordinator.onDifficultyRetarget === 'function') {
+          coordinator.onDifficultyRetarget(result.retargetSettings);
+        }
+      } else if (result.retargetSettings && net) {
+        net.send('admin-settings-updated', result.retargetSettings);
+      }
       net.send('block-accepted', {
         block,
         minerId,
@@ -654,12 +695,18 @@ function setupEventHandlers() {
   } else {
     applyParameterLockUI($('#lockParameters').is(':checked'));
   }
+  applyAutoDifficultyUI();
+  refreshBlockPaceDisplay();
 
   $('#lockParameters').on('change', function () {
     // Unchecking immediately re-enables controls; locking still requires Update Settings
     if (!$(this).is(':checked')) {
       applyParameterLockUI(false);
     }
+  });
+
+  $('#autoDifficulty').on('change', function () {
+    applyAutoDifficultyUI();
   });
 
   // Update Settings Button
@@ -677,22 +724,27 @@ function setupEventHandlers() {
         $('#difficultyLeading').val(s.difficultyLeading);
         $('#difficultySecondary').val(s.difficultySecondary != null ? s.difficultySecondary : 8);
         $('#miningReward').val(s.miningRewardCoins || 10);
+        if (s.targetBlockTimeSec != null) $('#targetBlockTimeSec').val(s.targetBlockTimeSec);
+        if (typeof s.autoDifficulty === 'boolean') $('#autoDifficulty').prop('checked', s.autoDifficulty);
         $('#networkModeSelect').val(s.networkMode === 'p2p' ? 'p2p' : 'admin-relay');
         updateDifficultyDisplay();
         applyParameterLockUI(true);
+        applyAutoDifficultyUI();
       }
       return;
     }
 
     const newSettings = {
-      difficultyLeading: parseInt($('#difficultyLeading').val(), 10) || 4,
+      difficultyLeading: parseInt($('#difficultyLeading').val(), 10) || 1,
       difficultySecondary: (function () {
         var s = parseInt($('#difficultySecondary').val(), 10);
         return isNaN(s) ? 8 : s;
       })(),
       miningRewardCoins: parseInt($('#miningReward').val(), 10) || 10,
       networkMode: selectedMode,
-      parametersLocked: wantLock
+      parametersLocked: wantLock,
+      targetBlockTimeSec: parseInt($('#targetBlockTimeSec').val(), 10) || 10,
+      autoDifficulty: $('#autoDifficulty').is(':checked')
     };
 
     networkMode = selectedMode;
@@ -722,6 +774,8 @@ function setupEventHandlers() {
     }
 
     applyParameterLockUI(wantLock);
+    applyAutoDifficultyUI();
+    refreshBlockPaceDisplay();
     showToastNotification(
       wantLock
         ? 'Settings updated and LOCKED — difficulty/reward/mode frozen'
@@ -891,13 +945,47 @@ function updateDifficultyDisplay() {
 /** Freeze difficulty/reward/mode controls when parameters are locked. */
 function applyParameterLockUI(locked) {
   const on = !!locked;
-  $('#difficultyLeading, #difficultySecondary, #miningReward, #networkModeSelect')
+  $('#miningReward, #networkModeSelect, #targetBlockTimeSec, #autoDifficulty')
     .prop('disabled', on);
+  // Difficulty sliders: locked OR auto-managed
+  applyAutoDifficultyUI();
   if (on) {
+    $('#difficultyLeading, #difficultySecondary').prop('disabled', true);
     $('#lockParameters').closest('.checkbox').addClass('text-danger');
   } else {
     $('#lockParameters').closest('.checkbox').removeClass('text-danger');
   }
+}
+
+/** When auto-difficulty is on, sliders are driven by the hub (read-only). */
+function applyAutoDifficultyUI() {
+  const locked = $('#lockParameters').is(':checked') ||
+    !!(relayState && relayState.settings && relayState.settings.parametersLocked);
+  const auto = $('#autoDifficulty').is(':checked');
+  const freezeDiff = locked || auto;
+  $('#difficultyLeading, #difficultySecondary').prop('disabled', freezeDiff);
+  const $badge = $('#autoDifficultyBadge');
+  if ($badge.length) {
+    if (auto) {
+      $badge.text('Auto difficulty ON').removeClass('label-default label-warning').addClass('label-success');
+    } else {
+      $badge.text('Manual difficulty').removeClass('label-success label-default').addClass('label-warning');
+    }
+  }
+}
+
+function refreshBlockPaceDisplay() {
+  const target = (relayState && relayState.settings && relayState.settings.targetBlockTimeSec) ||
+    parseInt($('#targetBlockTimeSec').val(), 10) || 10;
+  const avgMs = relayState && relayState.networkStats && relayState.networkStats.averageBlockTimeMs;
+  let text = '—';
+  if (avgMs != null && !isNaN(avgMs) && avgMs > 0) {
+    const sec = avgMs / 1000;
+    text = (sec >= 10 ? sec.toFixed(0) : sec.toFixed(1)) + 's (target ' + target + 's)';
+  } else {
+    text = 'warming up… (target ' + target + 's)';
+  }
+  $('#observedBlockTimeAvg').text(text);
 }
 
 /**
@@ -1141,13 +1229,17 @@ function updateSettingsDisplay(settings) {
 
   // Auto-sync the sliders to match the server defaults on first load
   if (!initialSettingsLoaded) {
-    $('#difficultyLeading').val(settings.difficultyLeading);
-    $('#difficultySecondary').val(settings.difficultySecondary);
+    $('#difficultyLeading').val(settings.difficultyLeading != null ? settings.difficultyLeading : 1);
+    $('#difficultySecondary').val(settings.difficultySecondary != null ? settings.difficultySecondary : 8);
     $('#miningReward').val(settings.miningRewardCoins);
+    if (settings.targetBlockTimeSec != null) $('#targetBlockTimeSec').val(settings.targetBlockTimeSec);
+    if (typeof settings.autoDifficulty === 'boolean') $('#autoDifficulty').prop('checked', settings.autoDifficulty);
     $('#networkModeSelect').val(settings.networkMode === 'p2p' ? 'p2p' : 'admin-relay');
     $('#lockParameters').prop('checked', settings.parametersLocked);
     updateDifficultyDisplay();
     applyParameterLockUI(!!settings.parametersLocked);
+    applyAutoDifficultyUI();
+    refreshBlockPaceDisplay();
     initialSettingsLoaded = true;
   }
 }
@@ -1412,6 +1504,7 @@ function renderClientRelayChain(opts) {
   } else {
     $('#avgBlockTime').text('—');
   }
+  if (typeof refreshBlockPaceDisplay === 'function') refreshBlockPaceDisplay();
 
   // Update participants table from relay state
   renderClientParticipants();

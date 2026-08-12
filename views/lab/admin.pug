@@ -40,16 +40,36 @@ block content
             h3.panel-title Network Controls
           .panel-body
             .form-group
+              label Target average block time (seconds):
+              input.form-control#targetBlockTimeSec(type="number", min="2", max="120", step="1", value="10")
+              small.form-text.text-muted
+                | Default <strong>10s</strong>. The hub auto-tunes difficulty so blocks land near this pace.
+              p(style="margin:8px 0 0;")
+                small.text-muted Observed avg:
+                |
+                strong#observedBlockTimeAvg —
+                |  
+                span.label.label-default#autoDifficultyBadge Auto difficulty
+
+            .form-group
+              .checkbox
+                label
+                  input(type="checkbox", id="autoDifficulty", checked)
+                  | Auto-adjust difficulty to hit target pace
+
+            .form-group#manualDifficultyGroup
               label Difficulty (Leading Zeros):
-              input.form-control#difficultyLeading(type="range", min="1", max="6", value="4")
-              small.form-text.text-muted Current: 
-              strong#difficultyLeadingValue 4
+              input.form-control#difficultyLeading(type="range", min="1", max="6", value="1")
+              small.form-text.text-muted Current:
+              strong#difficultyLeadingValue 1
 
             .form-group
               label Difficulty (Secondary):
               input.form-control#difficultySecondary(type="range", min="0", max="15", value="8")
               small.form-text.text-muted Current: 0x
               strong#difficultySecondaryValue 8
+              small.form-text.text-muted(style="display:block;margin-top:4px;")
+                | Fine steps between leading zeros. When auto is on, these move for you.
 
             .form-group
               label Mining Reward (coins):
@@ -292,10 +312,10 @@ block content
   script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=fixrelay")
   script(src="/javascripts/network/MqttAdminRelayTransport.js?v=pause2")
   script(src="/javascripts/network/P2PAdminRelayTransport.js?v=mobjoin1")
-  script(src="/javascripts/network/AdminRelayCoordinator.js?v=mempool1")
+  script(src="/javascripts/network/AdminRelayCoordinator.js?v=pace1")
   script(src="/javascripts/network/Persistence.js?v=fixrelay")
-  script(src="/javascripts/network/RelayBlockchainState.js?v=txonce1")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=pace1")
   script(src="/javascripts/network/NetworkManager.js?v=mqtt1")
   script(src="/javascripts/lab/chainDisplay.js?v=name1")
   script(src="/javascripts/lab/networkVisualization.js?v=topomesh1")
-  script(src="/javascripts/lab/admin.js?v=pause2")
+  script(src="/javascripts/lab/admin.js?v=pace1")

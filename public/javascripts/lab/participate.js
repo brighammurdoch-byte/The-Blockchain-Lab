@@ -2035,9 +2035,14 @@ function updateNetworkStats(blockchain) {
 }
 
 function updateDifficultyInfo(settings) {
-  const zeros = (settings.difficultyLeading || 4);
-  const secondary = (settings.difficultySecondary || 8).toString(16).toUpperCase();
-  $('#difficultyLevel').text(zeros + '-bit (0x' + secondary + ')');
+  const zeros = (settings.difficultyLeading != null ? settings.difficultyLeading : 1);
+  const secondary = (settings.difficultySecondary != null ? settings.difficultySecondary : 8).toString(16).toUpperCase();
+  let label = zeros + ' + 0x' + secondary;
+  if (settings.targetBlockTimeSec) {
+    label += ' (~' + settings.targetBlockTimeSec + 's target)';
+  }
+  if (settings.autoDifficulty) label += ' auto';
+  $('#difficultyLevel').text(label);
 }
 
 // Check if hash meets difficulty requirement

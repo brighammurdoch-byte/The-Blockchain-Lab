@@ -150,6 +150,14 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
         pendingTransactions: snap.pendingTransactions || [],
         networkStats: snap.networkStats || (this.lab && this.lab.networkStats ? { ...this.lab.networkStats } : undefined)
       });
+
+      // Auto-difficulty: push new target to miners after a tip extension
+      if (result.retargetSettings) {
+        this.broadcastSettings(result.retargetSettings);
+        if (typeof this.onDifficultyRetarget === 'function') {
+          try { this.onDifficultyRetarget(result.retargetSettings); } catch (e) {}
+        }
+      }
     } else {
       const chain = this.lab && Array.isArray(this.lab.chain) ? this.lab.chain.slice() : null;
       this.net.send('block-rejected', {
