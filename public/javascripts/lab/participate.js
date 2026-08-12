@@ -162,14 +162,12 @@ function applyCanonicalChain(chain, opts) {
 
   try {
     const parts = opts.participants || [];
-    const orphans = opts.orphans || [];
-    updateParticipantBlockchainView({ chain: window.lastRelayedChain }, parts);
-    updateNetworkBlockchainView(window.lastRelayedChain, orphans, parts);
-    if (opts.pendingTransactions) {
-      localPendingTxs = opts.pendingTransactions.slice();
-    }
+    // Merge orphans BEFORE rendering Shared Network (was painting empty orphans first)
     if (opts.orphans) {
       mergeKnownOrphans(opts.orphans);
+    }
+    if (opts.pendingTransactions) {
+      localPendingTxs = opts.pendingTransactions.slice();
     }
     // Strip anything already on the new chain (hub list can lag under MQTT races)
     pruneLocalMempool();
@@ -193,6 +191,9 @@ function applyCanonicalChain(chain, opts) {
       else if (me.minedBlocks !== undefined) $('#blocksMined').text(me.minedBlocks);
     }
     applyMyBalanceFromParticipants(parts);
+    // Personal view = own tip path; Shared Network = main + all known orphans
+    updateParticipantBlockchainView({ chain: window.lastRelayedChain }, parts);
+    refreshSharedNetworkView(parts);
   } catch (e) {
     console.error('Error applying canonical chain UI', e);
   }
@@ -239,6 +240,42 @@ function mergeKnownOrphans(list) {
   refreshLocalNewForkTip();
 }
 
+/** Orphans for Shared Network UI (includes sticky local NEW tip if not on main). */
+function getDisplayOrphans() {
+  const byHash = new Map();
+  (lastKnownOrphans || []).forEach(function (b) {
+    if (b && b.hash) byHash.set(b.hash, b);
+  });
+  if (localNewForkTip && localNewForkTip.block && localNewForkTip.block.hash) {
+    byHash.set(localNewForkTip.block.hash, localNewForkTip.block);
+  }
+  // Also include any ancestors of local NEW tip we know about that aren't on main
+  const main = new Set((window.lastRelayedChain || []).map(function (b) { return b && b.hash; }));
+  const all = collectKnownBlocks();
+  all.forEach(function (b, hash) {
+    if (b && hash && !main.has(hash) && isNewForkId(b.forkId)) {
+      byHash.set(hash, b);
+    }
+  });
+  return Array.from(byHash.values()).filter(function (b) {
+    return b && b.hash && !main.has(b.hash);
+  });
+}
+
+/** Redraw Shared Network tab: hub main chain + orphans / competing forks. */
+function refreshSharedNetworkView(participants) {
+  const parts = participants || [];
+  try {
+    updateNetworkBlockchainView(
+      window.lastRelayedChain || [],
+      getDisplayOrphans(),
+      parts
+    );
+  } catch (e) {
+    console.warn('refreshSharedNetworkView', e);
+  }
+}
+
 /** Remember / refresh the best NEW hard-fork tip we know about. */
 function noteNewForkBlock(block) {
   if (!block || !block.hash || !isNewForkId(block.forkId)) return;
@@ -259,6 +296,8 @@ function noteNewForkBlock(block) {
     }
   }
   refreshLocalNewForkTip();
+  // Keep Shared Network live when orphans arrive (even if user is on Personal tab)
+  refreshSharedNetworkView();
 }
 
 function refreshLocalNewForkTip() {
@@ -945,11 +984,7 @@ function initClientSideNetworkingForParticipant(mode) {
       }
       try {
         updateParticipantBlockchainView({ chain: window.lastRelayedChain }, payload.participants || []);
-        updateNetworkBlockchainView(
-          window.lastRelayedChain,
-          lastKnownOrphans,
-          payload.participants || []
-        );
+        refreshSharedNetworkView(payload.participants || []);
       } catch (e) {}
       if (payload.newHeight != null) {
         $('#blockHeight').text(payload.newHeight);
@@ -1228,6 +1263,11 @@ function setupEventHandlers() {
     $('#cpuUsageValue').text(cpuLimitPercent);
   });
   
+  // When opening Shared Network, repaint main + orphans (data may have arrived while on Personal tab)
+  $('a[href="#tabNetwork"]').on('shown.bs.tab', function () {
+    refreshSharedNetworkView();
+  });
+
   // Mining buttons — when paused, these toggle "mining switch" intent only
   $('#mineBtn').click(function() {
     if (networkPaused) {
@@ -2244,15 +2284,31 @@ function updateParticipantBlockchainView(chainData, participants) {
 }
 
 function updateNetworkBlockchainView(mainChain, orphans, participants) {
+  const main = mainChain || window.lastRelayedChain || [];
+  // Always prefer the accumulated orphan set so Shared Network shows forks
+  const orphanList = (orphans && orphans.length)
+    ? orphans
+    : getDisplayOrphans();
   if (window.ChainDisplay && typeof ChainDisplay.renderChainHtml === 'function') {
-    $('#networkBlockchainView').html(
-      ChainDisplay.renderChainHtml({
-        mainChain: mainChain || [],
-        orphans: orphans || [],
-        participants: participants || [],
-        openTxPanels: openTxPanels
-      })
-    );
+    let html = ChainDisplay.renderChainHtml({
+      mainChain: main,
+      orphans: orphanList,
+      participants: participants || [],
+      openTxPanels: openTxPanels
+    });
+    if (orphanList && orphanList.length) {
+      html =
+        '<p class="small text-muted" style="margin-bottom:8px;">' +
+        'Shared network: main chain + <strong>' + orphanList.length +
+        '</strong> orphan/competing block(s) (e.g. hard-fork side).</p>' +
+        html;
+    } else {
+      html =
+        '<p class="small text-muted" style="margin-bottom:8px;">' +
+        'Shared network view (main chain). Orphans appear here when forks compete.</p>' +
+        html;
+    }
+    $('#networkBlockchainView').html(html);
     return;
   }
   $('#networkBlockchainView').html('<p class="text-muted">No blocks yet</p>');
