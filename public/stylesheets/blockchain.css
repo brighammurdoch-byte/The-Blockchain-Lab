@@ -88,6 +88,7 @@ input {
 }
 .chain-node-name {
   color: #1a1a1a;
+  font-weight: 700;
 }
 .panel-body dl dd .chain-id-row {
   max-width: 100%;
@@ -95,12 +96,15 @@ input {
 table.table-condensed td .chain-id-row {
   max-width: 220px;
 }
-/* Mobile: show shortened address; desktop: full */
+/* Desktop: full address; mobile: shortened */
 .chain-address-short {
   display: none;
 }
 .chain-address-long {
   display: inline;
+}
+.chain-side-label {
+  margin-left: 4px;
 }
 @media (max-width: 767px) {
   .chain-address-short {
@@ -111,17 +115,22 @@ table.table-condensed td .chain-id-row {
   }
   .chain-node-name {
     font-size: 14px !important;
+    color: #0d47a1;
   }
   /* Bootstrap dl-horizontal only floats ≥768px; tighten stacked labels on phones */
-  .chain-block-dl > dt {
-    float: none;
-    width: auto;
-    text-align: left;
+  .chain-block-dl > dt,
+  #blockchainView .dl-horizontal > dt,
+  #networkBlockchainView .dl-horizontal > dt {
+    float: none !important;
+    width: auto !important;
+    text-align: left !important;
     font-weight: 600;
     margin-top: 6px;
   }
-  .chain-block-dl > dd {
-    margin-left: 0;
+  .chain-block-dl > dd,
+  #blockchainView .dl-horizontal > dd,
+  #networkBlockchainView .dl-horizontal > dd {
+    margin-left: 0 !important;
   }
   .chain-side-label {
     display: inline-block;

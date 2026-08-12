@@ -333,32 +333,25 @@ async function adminSnapshot(page) {
       await wait(400);
     }
 
-    if (acceptNew) {
-      const btn = page.locator('#btnAcceptFork');
-      if (await btn.isVisible().catch(() => false)) await btn.click();
-      else {
-        // Control panel toggle
-        await page.locator('#btnFollowNew').click({ timeout: 5000 }).catch(async () => {
-          await page.evaluate(() => {
-            if (typeof myForkChoice !== 'undefined') myForkChoice = 'new';
-            const b = document.getElementById('btnFollowNew') || document.getElementById('btnAcceptFork');
-            if (b) b.click();
-          });
-        });
+    // Prefer evaluate so hidden/Bootstrap-modal buttons still work
+    await page.evaluate((acceptNew) => {
+      if (typeof myForkChoice !== 'undefined') {
+        myForkChoice = acceptNew ? 'new' : 'classic';
       }
-    } else {
-      const btn = page.locator('#btnRejectFork');
-      if (await btn.isVisible().catch(() => false)) await btn.click();
-      else {
-        await page.locator('#btnFollowClassic').click({ timeout: 5000 }).catch(async () => {
-          await page.evaluate(() => {
-            if (typeof myForkChoice !== 'undefined') myForkChoice = 'classic';
-            const b = document.getElementById('btnFollowClassic') || document.getElementById('btnRejectFork');
-            if (b) b.click();
-          });
-        });
+      if (acceptNew && typeof localClassicForkTip !== 'undefined') {
+        localClassicForkTip = null;
       }
-    }
+      if (!acceptNew && typeof localNewForkTip !== 'undefined') {
+        localNewForkTip = null;
+      }
+      const primary = document.getElementById(acceptNew ? 'btnAcceptFork' : 'btnRejectFork');
+      const fallback = document.getElementById(acceptNew ? 'btnFollowNew' : 'btnFollowClassic');
+      const btn = (primary && primary.offsetParent !== null) ? primary : (fallback || primary);
+      if (btn) btn.click();
+      try {
+        if (window.jQuery) window.jQuery('#forkChoiceModal').modal('hide');
+      } catch (e) {}
+    }, acceptNew);
     await wait(500);
   }
 

@@ -9,6 +9,18 @@ let isMining = false;
 let networkPaused = false;
 let cpuLimitPercent = 20;
 let miningWorker = null;
+let miningWorkerReady = false;
+let miningWorkerFailed = false; // after hard failure, stay on main-thread mining
+let miningJobGen = 0;
+let lastWorkerProgressAt = 0;
+let lastHashrateEmitAt = 0;
+let currentMiningBlock = null;
+let miningWakeLock = null;
+let miningKeepaliveTimer = null;
+let mainThreadMineTimer = null;
+let lastRemineAt = 0;
+/** Highest block index the hub has confirmed (classic main). Caps optimistic race-ahead. */
+let hubConfirmedHeight = 0;
 let openTxPanels = new Set();
 let originalValidatorCode = '';
 let localChainTipHash = null;
@@ -70,15 +82,519 @@ function applyMyBalanceFromParticipants(participants) {
   }
 }
 
-/** Restart the mining loop on the current hub tip without flipping isMining off. */
-function remineOnCanonicalTip() {
+/**
+ * Restart the mining loop on the current hub tip without flipping isMining off.
+ * @param {{ force?: boolean }} [opts] force=true skips debounce (hub chain sync)
+ */
+function remineOnCanonicalTip(opts) {
   if (!isMining || isColluding || networkPaused) return;
-  if (miningWorker) {
-    try { miningWorker.postMessage({ command: 'stop' }); } catch (e) {}
+  const force = !!(opts && opts.force);
+  // Debounce: presence/roster floods must not thrash the worker every ms
+  const now = Date.now();
+  if (!force && now - lastRemineAt < 250) return;
+  lastRemineAt = now;
+  // Invalidate in-flight worker job; fetchDataAndMine posts a new gen
+  miningJobGen++;
+  fetchDataAndMine();
+}
+
+/** Absolute URL helpers for the mining worker (blob importScripts needs absolute). */
+function getLabAssetAbsoluteUrl(path) {
+  const rel = (window.LabPaths && typeof LabPaths.assetUrl === 'function')
+    ? LabPaths.assetUrl(path)
+    : path;
+  try {
+    return new URL(rel, window.location.href).href;
+  } catch (e) {
+    return rel;
+  }
+}
+
+function getSha256ScriptUrl() {
+  return getLabAssetAbsoluteUrl('/javascripts/lib/sha256.js');
+}
+
+/**
+ * Build a blob:// worker URL with PoW inlined (importScripts loads CryptoJS).
+ * Blob workers avoid path/404 issues on GitHub Pages and survive more reliably.
+ */
+function getMiningWorkerScriptUrl() {
+  if (window.__labMiningWorkerBlobUrl) return window.__labMiningWorkerBlobUrl;
+  const workerSource = `
+var running = false, job = null, nonce = 0, totalIterations = 0, startTime = 0, timer = null, cryptoReady = false;
+function clearTimer(){ if (timer != null) { clearTimeout(timer); timer = null; } }
+function ensureCrypto(sha256Url){
+  if (cryptoReady && typeof CryptoJS !== 'undefined') return Promise.resolve();
+  return new Promise(function(resolve, reject){
+    try {
+      if (typeof CryptoJS === 'undefined') {
+        if (!sha256Url) { reject(new Error('sha256Url required')); return; }
+        importScripts(sha256Url);
+      }
+      if (typeof CryptoJS === 'undefined' || !CryptoJS.SHA256) { reject(new Error('CryptoJS unavailable')); return; }
+      cryptoReady = true; resolve();
+    } catch (e) { reject(e); }
+  });
+}
+function sha256Hex(data){ return CryptoJS.SHA256(data).toString(); }
+function canonicalizeObject(obj){
+  if (Array.isArray(obj)) return obj.map(canonicalizeObject);
+  if (obj !== null && typeof obj === 'object') {
+    var sorted = {}, keys = Object.keys(obj).sort(), i;
+    for (i = 0; i < keys.length; i++) sorted[keys[i]] = canonicalizeObject(obj[keys[i]]);
+    return sorted;
+  }
+  return obj;
+}
+function isValidHash(hash, difficulty){
+  if (difficulty == null) return false;
+  if (typeof difficulty === 'number') difficulty = { leadingZeros: Math.max(1, Math.floor(difficulty)), secondaryHex: 'F' };
+  if (typeof difficulty !== 'object') return false;
+  var zeros = difficulty.leadingZeros != null ? difficulty.leadingZeros : 3, i;
+  for (i = 0; i < zeros; i++) if (hash[i] !== '0') return false;
+  if (difficulty.secondaryHex != null && String(difficulty.secondaryHex) !== '') {
+    var nextChar = hash.charAt(zeros);
+    if (nextChar && nextChar.toLowerCase() > String(difficulty.secondaryHex).toLowerCase()) return false;
+  }
+  return true;
+}
+function mineBatch(){
+  if (!running || !job || !job.block) return;
+  var block = job.block, difficulty = job.difficulty, batchSize = job.batchSize > 0 ? job.batchSize : 2000, i, hash;
+  for (i = 0; i < batchSize; i++) {
+    if (!running) return;
+    hash = sha256Hex(JSON.stringify(canonicalizeObject({
+      index: block.index, timestamp: block.timestamp, nonce: nonce, previousHash: block.previousHash,
+      transactions: block.transactions, miner: block.miner, difficulty: block.difficulty, forkId: block.forkId
+    })));
+    if (isValidHash(hash, difficulty)) {
+      block.hash = hash; block.nonce = nonce;
+      self.postMessage({ type: 'found', gen: job.gen, block: block, hash: hash, nonce: nonce, totalIterations: totalIterations + 1, startTime: startTime });
+      running = false; clearTimer(); return;
+    }
+    nonce++; totalIterations++;
+  }
+  var elapsed = Math.max(0.1, (Date.now() - startTime) / 1000);
+  self.postMessage({ type: 'progress', gen: job.gen, nonce: nonce, totalIterations: totalIterations, hashrate: Math.max(1, Math.floor(totalIterations / elapsed)), startTime: startTime });
+  if (!running) return;
+  timer = setTimeout(mineBatch, job.delay != null ? job.delay : 0);
+}
+self.onmessage = function(e){
+  var d = e.data || {}, cmd = d.command;
+  if (cmd === 'init') {
+    ensureCrypto(d.sha256Url).then(function(){ self.postMessage({ type: 'ready' }); })
+      .catch(function(err){ self.postMessage({ type: 'error', message: (err && err.message) || String(err) }); });
+    return;
+  }
+  if (cmd === 'start') {
+    ensureCrypto(d.sha256Url).then(function(){
+      clearTimer(); running = true;
+      job = { gen: d.gen, block: d.block, difficulty: d.difficulty, delay: d.delay != null ? d.delay : 0, batchSize: d.batchSize != null ? d.batchSize : 2000 };
+      nonce = d.nonce || 0; totalIterations = d.totalIterations || 0; startTime = d.startTime || Date.now();
+      mineBatch();
+    }).catch(function(err){ self.postMessage({ type: 'error', message: (err && err.message) || String(err) }); });
+    return;
+  }
+  if (cmd === 'setPace') {
+    if (job) { if (d.delay != null) job.delay = d.delay; if (d.batchSize != null) job.batchSize = d.batchSize; }
+    return;
+  }
+  if (cmd === 'stop') { running = false; clearTimer(); job = null; }
+};
+`;
+  const blob = new Blob([workerSource], { type: 'application/javascript' });
+  window.__labMiningWorkerBlobUrl = URL.createObjectURL(blob);
+  return window.__labMiningWorkerBlobUrl;
+}
+
+/** True when we can mine fully inside the worker (no custom student validator). */
+function canUseWorkerMining() {
+  if (miningWorkerFailed) return false;
+  if (window.customValidator && window.customValidator._broken) return false;
+  // Default validator is fine in the worker; student-edited validators stay on main thread
+  if (window.__labValidatorIsCustom) return false;
+  return true;
+}
+
+function miningPaceForVisibility() {
+  const hidden = typeof document !== 'undefined' && document.hidden;
+  // Background: max throughput in the worker. Foreground: honor CPU slider.
+  return {
+    delay: hidden ? 0 : getMineCpuDelay(),
+    batchSize: hidden ? 8000 : 2000
+  };
+}
+
+function ensureMiningWorker() {
+  if (miningWorkerFailed) return null;
+  if (miningWorker) return miningWorker;
+  try {
+    miningWorker = new Worker(getMiningWorkerScriptUrl());
+  } catch (e) {
+    console.warn('Mining worker unavailable, falling back to main-thread mining', e);
+    miningWorkerFailed = true;
+    miningWorker = null;
+    return null;
+  }
+  miningWorker.onmessage = handleMiningWorkerMessage;
+  miningWorker.onerror = function (err) {
+    console.error('Mining worker error', err && err.message, err && err.filename, err && err.lineno);
     try { miningWorker.terminate(); } catch (e) {}
     miningWorker = null;
+    miningWorkerReady = false;
+    miningWorkerFailed = true; // do not tight-loop recreating a broken worker
+    if (isMining && !networkPaused && currentMiningBlock) {
+      mineBlockOnMainThread(currentMiningBlock, lastKnownAdminSettings);
+    } else if (isMining && !networkPaused && window.lastMiningIntent) {
+      setTimeout(function () {
+        if (isMining && !networkPaused) fetchDataAndMine();
+      }, 100);
+    }
+  };
+  try {
+    miningWorker.postMessage({ command: 'init', sha256Url: getSha256ScriptUrl() });
+  } catch (e) {
+    miningWorkerFailed = true;
+    try { miningWorker.terminate(); } catch (err) {}
+    miningWorker = null;
+    return null;
   }
-  fetchDataAndMine();
+  return miningWorker;
+}
+
+function handleMiningWorkerMessage(ev) {
+  const data = ev && ev.data;
+  if (!data || !data.type) return;
+
+  if (data.type === 'ready') {
+    miningWorkerReady = true;
+    return;
+  }
+
+  if (data.type === 'error') {
+    console.error('Mining worker:', data.message);
+    // Recover on main thread if worker crypto failed — once, not in a recreate loop
+    miningWorkerFailed = true;
+    try { if (miningWorker) miningWorker.terminate(); } catch (e) {}
+    miningWorker = null;
+    miningWorkerReady = false;
+    if (isMining && !networkPaused && currentMiningBlock) {
+      mineBlockOnMainThread(currentMiningBlock, lastKnownAdminSettings);
+    }
+    return;
+  }
+
+  if (data.gen != null && data.gen !== miningJobGen) {
+    // Stale job after remine/stop
+    return;
+  }
+
+  if (data.type === 'progress') {
+    lastWorkerProgressAt = Date.now();
+    const nonce = data.nonce || 0;
+    const hashrate = data.hashrate || 0;
+    try {
+      const nc = document.getElementById('nonceCount');
+      if (nc) nc.textContent = Number(nonce).toLocaleString();
+      const ch = document.getElementById('currentHashrate');
+      if (ch) ch.textContent = Number(hashrate).toLocaleString();
+      const yh = document.getElementById('yourHashrate');
+      if (yh) yh.textContent = Number(hashrate).toLocaleString() + ' H/s';
+    } catch (e) {}
+
+    const now = Date.now();
+    if (now - lastHashrateEmitAt > 2000) {
+      lastHashrateEmitAt = now;
+      emitHashrate(hashrate);
+    }
+    return;
+  }
+
+  if (data.type === 'found') {
+    lastWorkerProgressAt = Date.now();
+    if (!isMining || networkPaused) return;
+    const block = data.block;
+    if (!block || !block.hash) return;
+
+    if (isColluding) {
+      collusionTipHash = block.hash;
+      collusionHeight = (block.index != null ? block.index : collusionHeight) + 1;
+      collusionTransactions = [];
+    }
+
+    seenBlocks.add(block.hash);
+    pruneLocalMempool(block);
+
+    if (isNewForkId(block.forkId)) {
+      noteNewForkBlock(block);
+    } else if (
+      pendingForkHeight != null &&
+      block.index != null &&
+      Number(block.index) >= Number(pendingForkHeight)
+    ) {
+      noteClassicForkBlock(block);
+    }
+
+    submitMinedBlock(block, data.startTime || Date.now(), data.totalIterations || 0);
+
+    // Continue at most one block ahead of hub confirmation on the classic main path.
+    // NEW hard-fork side is orphaned by design and may lead the classic tip.
+    // Further classic work waits for block-accepted → forced remine.
+    if (!isMining || networkPaused) return;
+    const capClassic = myForkChoice !== 'new';
+    const foundIndex = block.index != null ? Number(block.index) : 0;
+    if (capClassic && foundIndex > hubConfirmedHeight + 1) {
+      updateMiningActivityUi(foundIndex);
+      return;
+    }
+    const nextTmpl = getMiningTemplate();
+    if (!nextTmpl) return;
+    // If classic template is already more than 1 past hub tip, wait for hub
+    if (
+      capClassic &&
+      nextTmpl.index != null &&
+      Number(nextTmpl.index) > hubConfirmedHeight + 1
+    ) {
+      updateMiningActivityUi(nextTmpl.index);
+      return;
+    }
+    const nextBlock = {
+      index: nextTmpl.index,
+      timestamp: Date.now(),
+      nonce: 0,
+      previousHash: nextTmpl.previousHash,
+      transactions: mempoolForNextBlock(),
+      miner: userId,
+      difficulty: getMiningDifficulty(),
+      hash: '',
+      forkId: nextTmpl.forkId
+    };
+    currentMiningBlock = nextBlock;
+    updateMiningActivityUi(nextBlock.index);
+    if (net) {
+      net.send('mining-on-block', {
+        blockHash: nextBlock.previousHash,
+        minerAddress: userId
+      });
+    }
+    startWorkerMiningJob(nextBlock);
+  }
+}
+
+function emitHashrate(hashrate) {
+  if (net) {
+    net.send('hashrate-update', {
+      userId: userId,
+      hashrate: hashrate
+    });
+  } else if (typeof socket !== 'undefined' && socket) {
+    socket.emit('hashrate-update', {
+      sessionId: sessionId,
+      hashrate: hashrate
+    });
+  }
+}
+
+function updateMiningActivityUi(blockIndex) {
+  const label = blockIndex != null ? (' (Block #' + blockIndex + ')') : '';
+  $('#miningActivity').html(
+    '<div class="alert alert-info">' +
+      '<p><strong>Mining in progress' + label + '…</strong></p>' +
+      '<p>Nonce attempts: <span id="nonceCount">0</span></p>' +
+      '<p>Current hashrate: <span id="currentHashrate">0</span> H/s</p>' +
+      '<p class="small text-muted" id="bgMineNote" style="margin-top:6px;">Mining runs in a Web Worker so it continues if you switch apps/tabs. On phones, keep the screen on (or disable battery optimization for the browser) for best results.</p>' +
+      '<div class="progress" style="margin-top: 10px;">' +
+        '<div id="miningProgress" class="progress-bar progress-bar-striped active" style="width: 100%"></div>' +
+      '</div>' +
+    '</div>'
+  );
+}
+
+function startWorkerMiningJob(block) {
+  if (!isMining || networkPaused || !block) return;
+  // Drop jobs that raced ahead of the hub (stale optimistic template)
+  if (
+    !isColluding &&
+    myForkChoice !== 'new' &&
+    block.index != null &&
+    Number(block.index) > hubConfirmedHeight + 1
+  ) {
+    debugWarn('Skip mining job ahead of hub', block.index, 'hub', hubConfirmedHeight);
+    return;
+  }
+  const worker = ensureMiningWorker();
+  if (!worker) {
+    mineBlockOnMainThread(block, lastKnownAdminSettings);
+    return;
+  }
+  miningJobGen++;
+  const gen = miningJobGen;
+  currentMiningBlock = block;
+  const pace = miningPaceForVisibility();
+  lastWorkerProgressAt = Date.now();
+  // Ensure difficulty object is the hub shape the worker understands
+  const diff = block.difficulty || getMiningDifficulty();
+  const difficulty = {
+    leadingZeros:
+      (diff && (diff.leadingZeros != null ? diff.leadingZeros : diff.leading)) != null
+        ? (diff.leadingZeros != null ? diff.leadingZeros : diff.leading)
+        : 1,
+    secondaryHex:
+      diff && diff.secondaryHex != null
+        ? String(diff.secondaryHex)
+        : (diff && diff.secondary != null ? Number(diff.secondary).toString(16) : 'f')
+  };
+  worker.postMessage({
+    command: 'start',
+    gen: gen,
+    sha256Url: getSha256ScriptUrl(),
+    block: JSON.parse(JSON.stringify(Object.assign({}, block, { difficulty: difficulty }))),
+    difficulty: difficulty,
+    delay: pace.delay,
+    batchSize: pace.batchSize,
+    nonce: 0,
+    totalIterations: 0,
+    startTime: Date.now()
+  });
+}
+
+function syncMiningWorkerPace() {
+  if (!miningWorker || !isMining) return;
+  const pace = miningPaceForVisibility();
+  try {
+    miningWorker.postMessage({
+      command: 'setPace',
+      delay: pace.delay,
+      batchSize: pace.batchSize
+    });
+  } catch (e) {}
+}
+
+async function requestMiningWakeLock() {
+  try {
+    if (typeof navigator === 'undefined' || !navigator.wakeLock || !navigator.wakeLock.request) {
+      return;
+    }
+    if (miningWakeLock) return;
+    miningWakeLock = await navigator.wakeLock.request('screen');
+    miningWakeLock.addEventListener('release', function () {
+      miningWakeLock = null;
+    });
+  } catch (e) {
+    // Browser may deny when tab is hidden or unsupported
+    miningWakeLock = null;
+  }
+}
+
+function releaseMiningWakeLock() {
+  if (!miningWakeLock) return;
+  try { miningWakeLock.release(); } catch (e) {}
+  miningWakeLock = null;
+}
+
+function startMiningKeepalive() {
+  if (miningKeepaliveTimer) return;
+  miningKeepaliveTimer = setInterval(function () {
+    if (!window.lastMiningIntent || networkPaused) return;
+    // If we intended to mine but aren't, restart
+    if (!isMining) {
+      startMining();
+      return;
+    }
+    // Worker/main loop went silent (tab freeze / process kill) — re-kick
+    if (Date.now() - lastWorkerProgressAt > 12000) {
+      debugWarn('Mining silent — restarting job');
+      // Allow another worker attempt after a long freeze (mobile OS kill)
+      if (miningWorkerFailed && Date.now() - lastWorkerProgressAt > 30000) {
+        miningWorkerFailed = false;
+      }
+      // Prefer re-posting work over terminate+recreate (cheaper, fewer 404 races)
+      if (miningWorker && currentMiningBlock && !miningWorkerFailed) {
+        try {
+          startWorkerMiningJob(currentMiningBlock);
+        } catch (e) {
+          try { miningWorker.terminate(); } catch (err) {}
+          miningWorker = null;
+          miningWorkerReady = false;
+          miningJobGen++;
+          fetchDataAndMine();
+        }
+      } else if (Date.now() - lastRemineAt >= 500) {
+        try {
+          if (miningWorker) {
+            miningWorker.postMessage({ command: 'stop' });
+            miningWorker.terminate();
+          }
+        } catch (e) {}
+        miningWorker = null;
+        miningWorkerReady = false;
+        lastRemineAt = Date.now();
+        miningJobGen++;
+        fetchDataAndMine();
+      }
+    } else {
+      syncMiningWorkerPace();
+    }
+    // Re-request wake lock if it was released (common when screen turns off then on)
+    if (document && !document.hidden) {
+      requestMiningWakeLock();
+    }
+  }, 3000);
+}
+
+function stopMiningKeepalive() {
+  if (miningKeepaliveTimer) {
+    clearInterval(miningKeepaliveTimer);
+    miningKeepaliveTimer = null;
+  }
+}
+
+/** Install once: keep mining across tab blur / mobile background / bfcache. */
+function setupBackgroundMiningGuards() {
+  if (window.__labBgMineGuards) return;
+  window.__labBgMineGuards = true;
+
+  document.addEventListener('visibilitychange', function () {
+    syncMiningWorkerPace();
+    if (!document.hidden) {
+      if (window.lastMiningIntent && !networkPaused) {
+        if (!isMining) startMining();
+        else {
+          // Nudge worker after returning to foreground
+          if (Date.now() - lastWorkerProgressAt > 2000) {
+            remineOnCanonicalTip();
+          }
+          requestMiningWakeLock();
+        }
+      }
+    } else if (isMining) {
+      // Backgrounded: switch to max-pace worker hashing
+      syncMiningWorkerPace();
+    }
+  });
+
+  window.addEventListener('pageshow', function () {
+    if (window.lastMiningIntent && !networkPaused) {
+      if (!isMining) startMining();
+      else if (Date.now() - lastWorkerProgressAt > 2000) remineOnCanonicalTip();
+      requestMiningWakeLock();
+    }
+  });
+
+  window.addEventListener('focus', function () {
+    if (window.lastMiningIntent && !networkPaused && !isMining) {
+      startMining();
+    }
+  });
+
+  // Page Lifecycle API (Chrome): resume after freeze
+  document.addEventListener('resume', function () {
+    if (window.lastMiningIntent && !networkPaused) {
+      if (!isMining) startMining();
+      else remineOnCanonicalTip();
+      requestMiningWakeLock();
+    }
+  });
 }
 
 /** Soft remine after mempool updates — debounced so a tx doesn't thrash mid-submit. */
@@ -136,6 +652,11 @@ function mempoolForNextBlock() {
 
 function pushOptimisticTip(block) {
   if (!block || !block.hash) return;
+  // Never race more than one unconfirmed block ahead of the hub (classic main).
+  // Unbounded optimistic tips were sending mobile miners to index 20+ while hub sat at 2.
+  if (block.index != null && Number(block.index) > hubConfirmedHeight + 1) {
+    return;
+  }
   if (!window.lastRelayedChain) window.lastRelayedChain = [];
   const tip = window.lastRelayedChain[window.lastRelayedChain.length - 1];
   if (tip && tip.hash === block.hash) return;
@@ -236,10 +757,17 @@ function applyCanonicalChain(chain, opts) {
     $('#blockHeight').text(h);
   }
 
+  // Track hub-confirmed tip height so optimistic mining cannot race dozens of blocks ahead
+  if (newTip && newTip.index != null) {
+    hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(newTip.index) || 0);
+  } else if (chain.length) {
+    hubConfirmedHeight = Math.max(hubConfirmedHeight, chain.length - 1);
+  }
+
   // Always remine after a hub sync while mining — cancels private optimistic forks
   // (mempool already pruned so the next template cannot re-include confirmed txs)
   if (opts.remine !== false && isMining) {
-    remineOnCanonicalTip();
+    remineOnCanonicalTip({ force: true });
   }
 
   return tipChanged;
@@ -674,6 +1202,7 @@ function applyCustomValidator(code) {
   }
   if (!code.trim()) {
     try { delete window.customValidator; } catch (e) { window.customValidator = null; }
+    window.__labValidatorIsCustom = false;
     return true;
   }
 
@@ -694,6 +1223,10 @@ function applyCustomValidator(code) {
       + '\nreturn new BlockValidator();';
     
     window.customValidator = new Function(browserCode)();
+    // Default classroom validator matches the worker's isValidHash. Only force
+    // main-thread mining when the student has edited the validator code.
+    const orig = (typeof originalValidatorCode === 'string') ? originalValidatorCode.trim() : '';
+    window.__labValidatorIsCustom = !!(orig && code.trim() !== orig);
     return true;
   } catch (e) {
     return e.message;
@@ -1097,6 +1630,13 @@ function initClientSideNetworkingForParticipant(mode) {
       try { handleGossipBlock(block, minerId || 'relay-admin'); } catch (e) {}
       if (!window.lastRelayedChain) window.lastRelayedChain = [];
 
+      // Hub-confirmed height (compact path never called applyCanonicalChain before)
+      if (payload.newHeight != null && !isNaN(Number(payload.newHeight))) {
+        hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(payload.newHeight));
+      } else if (block.index != null && !isNewForkId(block.forkId) && !payload.isFork) {
+        hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(block.index));
+      }
+
       // 1) Refresh mempool FIRST (before remine) so the next template is clean
       if (Array.isArray(payload.pendingTransactions)) {
         localPendingTxs = payload.pendingTransactions.slice();
@@ -1135,18 +1675,19 @@ function initClientSideNetworkingForParticipant(mode) {
         }
       }
       if (shouldRemine) {
-        remineOnCanonicalTip();
+        remineOnCanonicalTip({ force: true });
       }
 
       if (payload.participants && payload.participants.length) {
-        try { updateParticipantList({ participants: payload.participants }); } catch (e) {}
-        try { applyMyBalanceFromParticipants(payload.participants); } catch (e) {}
+        rememberParticipants(payload.participants);
+        try { updateParticipantList({ participants: lastKnownParticipants }); } catch (e) {}
+        try { applyMyBalanceFromParticipants(lastKnownParticipants); } catch (e) {}
       }
       if (payload.networkStats) {
         try {
           updateNetworkStats({
             networkStats: payload.networkStats,
-            participants: payload.participants || []
+            participants: lastKnownParticipants
           });
         } catch (e) {}
       }
@@ -1157,6 +1698,8 @@ function initClientSideNetworkingForParticipant(mode) {
       } catch (e) {}
       if (payload.newHeight != null) {
         $('#blockHeight').text(payload.newHeight);
+      } else if (block.index != null && !payload.isFork) {
+        $('#blockHeight').text(block.index);
       }
     }
   });
@@ -1457,8 +2000,10 @@ function broadcastViaWebRTC(block, minerId) {
 function setupEventHandlers() {
   // CPU usage slider
   $('#cpuUsage').on('input', function() {
-    cpuLimitPercent = $(this).val();
+    cpuLimitPercent = parseInt($(this).val(), 10) || 20;
     $('#cpuUsageValue').text(cpuLimitPercent);
+    // Live-adjust worker pace while hashing
+    syncMiningWorkerPace();
   });
   
   // When opening Shared Network, repaint main + orphans (data may have arrived while on Personal tab)
@@ -1986,6 +2531,8 @@ function handleTeamAttackStarted(data) {
 function startMining() {
   if (isMining) return;
   window.lastMiningIntent = true;
+  setupBackgroundMiningGuards();
+  startMiningKeepalive();
   if (networkPaused) {
     updateMiningControlsUI();
     showToastNotification('Mining switch ON — network is paused; hashing starts on resume', 'warning');
@@ -1994,6 +2541,7 @@ function startMining() {
 
   isMining = true;
   updateMiningControlsUI();
+  requestMiningWakeLock();
   fetchDataAndMine();
 }
 
@@ -2101,75 +2649,65 @@ function fetchDataAndMine() {
 }
 
 function mineBlock(block, adminSettings) {
-  const startTime = Date.now();
-  let nonce = 0;
-  let totalIterations = 0;
-  let lastHashrateEmit = Date.now();
-  
   // Report to network which block we're mining on (via relay if possible)
   if (net) {
     net.send('mining-on-block', {
       blockHash: block.previousHash,
       minerAddress: userId
     });
-  } else if (socket) {
+  } else if (typeof socket !== 'undefined' && socket) {
     socket.emit('mining-on-block', {
       sessionId: sessionId,
       blockHash: block.previousHash,
       minerAddress: userId
     });
   }
-  
-  $('#miningActivity').html(`
-    <div class="alert alert-info">
-      <p><strong>Mining in progress...</strong></p>
-      <p>Nonce attempts: <span id="nonceCount">0</span></p>
-      <p>Current hashrate: <span id="currentHashrate">0</span> H/s</p>
-      <div class="progress" style="margin-top: 10px;">
-        <div id="miningProgress" class="progress-bar progress-bar-striped active" style="width: 100%"></div>
-      </div>
-    </div>
-  `);
-  
-  // Terminate existing worker if any
+
+  updateMiningActivityUi(block.index);
+  currentMiningBlock = block;
+  setupBackgroundMiningGuards();
+  startMiningKeepalive();
+  requestMiningWakeLock();
+
+  // Prefer full PoW inside a Web Worker so background tabs keep hashing.
+  // Fall back to main-thread mining when a custom student validator is active.
+  if (canUseWorkerMining()) {
+    startWorkerMiningJob(block);
+  } else {
+    mineBlockOnMainThread(block, adminSettings);
+  }
+}
+
+/**
+ * Legacy/fallback: hash on the main thread, paced by a tiny worker timer.
+ * Used only when a custom validator is installed (cannot be serialized into the worker).
+ */
+function mineBlockOnMainThread(block, adminSettings) {
+  const startTime = Date.now();
+  let nonce = 0;
+  let totalIterations = 0;
+  currentMiningBlock = block;
+
+  // Stop any prior main-thread loop
+  if (mainThreadMineTimer) {
+    clearTimeout(mainThreadMineTimer);
+    mainThreadMineTimer = null;
+  }
+  // Soft-stop worker so we don't double-mine
   if (miningWorker) {
-    miningWorker.postMessage({ command: 'stop' });
-    miningWorker.terminate();
+    try { miningWorker.postMessage({ command: 'stop' }); } catch (e) {}
   }
 
-  // Create a Web Worker to act as an unthrottled background timer
-  // This prevents the browser from stopping the miner when you switch tabs
-  const workerCode = `
-    let delay = 1;
-    let timer = null;
-    self.onmessage = function(e) {
-      if (e.data.command === 'start') {
-        delay = e.data.delay || 1;
-        self.postMessage('tick');
-      } else if (e.data.command === 'next') {
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => self.postMessage('tick'), delay);
-      } else if (e.data.command === 'stop') {
-        if (timer) clearInterval(timer);
-      }
-    };
-  `;
-  const blob = new Blob([workerCode], { type: 'application/javascript' });
-  miningWorker = new Worker(URL.createObjectURL(blob));
+  const gen = ++miningJobGen;
 
-  miningWorker.onmessage = function() {
-    if (!isMining || networkPaused) {
-      if (networkPaused && isMining) {
-        stopMining({ preserveIntent: true });
-      }
-      try { if (miningWorker) miningWorker.postMessage({ command: 'stop' }); } catch (e) {}
+  function tick() {
+    if (!isMining || networkPaused || gen !== miningJobGen) {
+      if (networkPaused && isMining) stopMining({ preserveIntent: true });
       return;
     }
 
-    // Mine in batches (every iteration tries 1000 nonces)
-    const batchSize = 1000;
+    const batchSize = document.hidden ? 500 : 1000;
     for (let i = 0; i < batchSize; i++) {
-      // Create block copy with fields for hashing, canonicalized (sorted keys)
       const blockObj = {
         index: block.index,
         timestamp: block.timestamp,
@@ -2180,34 +2718,18 @@ function mineBlock(block, adminSettings) {
         difficulty: block.difficulty,
         forkId: block.forkId
       };
-      
-      // Canonicalize and stringify for consistent hashing
-      const canonical = canonicalizeObject(blockObj);
-      const blockCopy = JSON.stringify(canonical);
-      
-      const hash = sha256(blockCopy);
-      
-      // Check difficulty
+      const hash = sha256(JSON.stringify(canonicalizeObject(blockObj)));
       if (isValidHash(hash, block.difficulty)) {
-        // Found valid hash!
         block.hash = hash;
         block.nonce = nonce;
-        
         if (isColluding) {
           collusionTipHash = hash;
           collusionHeight++;
-          collusionTransactions = []; // Clear secret transactions after they are included in our fork
+          collusionTransactions = [];
         }
-        
-        // Create a copy to submit
         const minedBlock = JSON.parse(JSON.stringify(block));
-        seenBlocks.add(hash); // Add to our own cache
-
-        // Drop included txs from local mempool BEFORE starting the next block,
-        // otherwise the same transfer can be mined twice under load.
+        seenBlocks.add(hash);
         pruneLocalMempool(minedBlock);
-
-        // Stick to our fork tip before hub ack (both sides during hard fork)
         if (isNewForkId(minedBlock.forkId)) {
           noteNewForkBlock(minedBlock);
         } else if (
@@ -2218,86 +2740,64 @@ function mineBlock(block, adminSettings) {
           noteClassicForkBlock(minedBlock);
         }
         submitMinedBlock(minedBlock, startTime, totalIterations);
-        
-        // Optimistically continue on the same side (getMiningTemplate respects choice)
+
         const nextTmpl = getMiningTemplate();
-        if (nextTmpl) {
-          block.index = nextTmpl.index;
-          block.previousHash = nextTmpl.previousHash;
-          block.forkId = nextTmpl.forkId;
-        } else {
-          block.index = block.index + 1;
-          block.previousHash = block.hash;
-          block.forkId = effectiveForkIdForIndex(block.index);
+        const capClassic = myForkChoice !== 'new';
+        if (
+          !nextTmpl ||
+          (capClassic &&
+            nextTmpl.index != null &&
+            Number(nextTmpl.index) > hubConfirmedHeight + 1)
+        ) {
+          // Wait for hub confirmation before racing further on classic
+          updateMiningActivityUi(minedBlock.index);
+          return;
         }
+        block.index = nextTmpl.index;
+        block.previousHash = nextTmpl.previousHash;
+        block.forkId = nextTmpl.forkId;
         block.nonce = 0;
         block.hash = '';
         block.transactions = mempoolForNextBlock();
         block.timestamp = Date.now();
         nonce = 0;
-        
-        // Reset UI for next block
-        $('#miningActivity').html(`
-          <div class="alert alert-info">
-            <p><strong>Mining in progress (Block #${block.index})...</strong></p>
-            <p>Nonce attempts: <span id="nonceCount">0</span></p>
-            <p>Current hashrate: <span id="currentHashrate">0</span> H/s</p>
-            <div class="progress" style="margin-top: 10px;">
-              <div id="miningProgress" class="progress-bar progress-bar-striped active" style="width: 100%"></div>
-            </div>
-          </div>
-        `);
-        
+        updateMiningActivityUi(block.index);
         if (net) {
           net.send('mining-on-block', {
             blockHash: block.previousHash,
             minerAddress: userId
           });
-        } else if (socket) {
-          socket.emit('mining-on-block', {
-            sessionId: sessionId,
-            blockHash: block.previousHash,
-            minerAddress: userId
-          });
         }
-        
-        // Break out of the batch loop early so it triggers the next batch via worker message
         break;
       }
-      
       nonce++;
       totalIterations++;
     }
-    
-    // Update hashrate display
+
+    lastWorkerProgressAt = Date.now();
     const elapsed = Math.max(0.1, (Date.now() - startTime) / 1000);
     const hashrate = Math.max(1, Math.floor(totalIterations / elapsed));
-    $('#nonceCount').text(nonce.toLocaleString());
-    $('#currentHashrate').text(hashrate.toLocaleString());
-    $('#yourHashrate').text(hashrate.toLocaleString() + ' H/s');
-    
-    // Update mining stats via socket reliably every 2 seconds
-    const now = Date.now();
-    if ((now - lastHashrateEmit > 2000)) {
-      lastHashrateEmit = now;
-      if (net) {
-        net.send('hashrate-update', {
-          userId: userId,
-          hashrate: hashrate
-        });
-      } else if (socket) {
-        socket.emit('hashrate-update', {
-          sessionId: sessionId,
-          hashrate: hashrate
-        });
-      }
-    }
-    
-    // Request next batch
-    miningWorker.postMessage({ command: 'next' });
-  };
+    try {
+      const nc = document.getElementById('nonceCount');
+      if (nc) nc.textContent = nonce.toLocaleString();
+      const ch = document.getElementById('currentHashrate');
+      if (ch) ch.textContent = hashrate.toLocaleString();
+      const yh = document.getElementById('yourHashrate');
+      if (yh) yh.textContent = hashrate.toLocaleString() + ' H/s';
+    } catch (e) {}
 
-  miningWorker.postMessage({ command: 'start', delay: getMineCpuDelay() });
+    const now = Date.now();
+    if (now - lastHashrateEmitAt > 2000) {
+      lastHashrateEmitAt = now;
+      emitHashrate(hashrate);
+    }
+
+    // When hidden, browsers throttle setTimeout heavily — use shortest delay
+    const delay = document.hidden ? 0 : getMineCpuDelay();
+    mainThreadMineTimer = setTimeout(tick, delay);
+  }
+
+  tick();
 }
 
 function getMineCpuDelay() {
@@ -2349,32 +2849,37 @@ function submitMinedBlock(block, startTime, totalIterations) {
 function stopMining(opts) {
   const preserveIntent = !!(opts && opts.preserveIntent);
   isMining = false;
-  if (!preserveIntent) window.lastMiningIntent = false;
+  if (!preserveIntent) {
+    window.lastMiningIntent = false;
+    stopMiningKeepalive();
+    releaseMiningWakeLock();
+  }
+  miningJobGen++;
+  currentMiningBlock = null;
   $('#miningActivity').html(
     preserveIntent
       ? '<p class="text-warning">Mining paused by admin (will resume automatically if switch stays ON)</p>'
       : '<p class="text-muted">Mining stopped</p>'
   );
   $('#yourHashrate').text('0 H/s');
-  
+
+  if (mainThreadMineTimer) {
+    clearTimeout(mainThreadMineTimer);
+    mainThreadMineTimer = null;
+  }
+
   if (miningWorker) {
-    miningWorker.postMessage({ command: 'stop' });
-    miningWorker.terminate();
-    miningWorker = null;
+    try { miningWorker.postMessage({ command: 'stop' }); } catch (e) {}
+    // Keep the worker process around while intent remains so resume is faster
+    if (!preserveIntent) {
+      try { miningWorker.terminate(); } catch (e) {}
+      miningWorker = null;
+      miningWorkerReady = false;
+    }
   }
-  
+
   // Notify the network that we have stopped mining
-  if (net) {
-    net.send('hashrate-update', {
-      userId: userId,
-      hashrate: 0
-    });
-  } else if (socket) {
-    socket.emit('hashrate-update', {
-      sessionId: sessionId,
-      hashrate: 0
-    });
-  }
+  emitHashrate(0);
 
   updateMiningControlsUI();
 }
