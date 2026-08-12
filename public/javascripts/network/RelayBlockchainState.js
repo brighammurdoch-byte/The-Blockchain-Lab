@@ -424,6 +424,56 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
     this.ensureGenesis();
 
+    // Hard-fork rules: keep classic and NEW sides from crossing after activation
+    if (this.pendingFork && this.pendingFork.height != null) {
+      const act = Number(this.pendingFork.height);
+      const fid = block.forkId || 'classic';
+      const isNew = fid === 'new' || fid === 'NEW';
+      const parent = this.allBlocks.get(block.previousHash) ||
+        (this.chain && this.chain.find(function (b) { return b && b.hash === block.previousHash; }));
+      const parentFid = parent ? (parent.forkId || 'classic') : 'classic';
+      const parentIsNew = parentFid === 'new' || parentFid === 'NEW';
+      const bIndex = block.index != null ? Number(block.index) : null;
+
+      if (bIndex != null && bIndex < act) {
+        // Pre-activation: reject NEW-tagged blocks (they cause orphan spam)
+        if (isNew) {
+          return {
+            accepted: false,
+            reason: 'Hard fork not active yet (activation at #' + act + ')',
+            chain: this.chain.slice(),
+            newHeight: Math.max(0, this.chain.length - 1)
+          };
+        }
+      } else if (bIndex != null && bIndex >= act) {
+        if (isNew) {
+          // NEW must extend another NEW tip, or the classic activation parent (index act-1)
+          if (parent) {
+            const okFromNew = parentIsNew;
+            const okFirst = !parentIsNew && parent.index === act - 1 && bIndex === act;
+            if (!okFromNew && !okFirst) {
+              return {
+                accepted: false,
+                reason: 'NEW fork must extend activation parent (#' + (act - 1) + ') or a NEW tip',
+                chain: this.chain.slice(),
+                newHeight: Math.max(0, this.chain.length - 1)
+              };
+            }
+          }
+        } else {
+          // Classic post-activation cannot build on NEW blocks
+          if (parentIsNew) {
+            return {
+              accepted: false,
+              reason: 'Classic chain cannot extend a NEW-fork block',
+              chain: this.chain.slice(),
+              newHeight: Math.max(0, this.chain.length - 1)
+            };
+          }
+        }
+      }
+    }
+
     // Reject blocks that re-include transfers already on the canonical chain.
     // (Common race: two miners both hash the same mempool snapshot.)
     const confirmed = this._confirmedTxIds();

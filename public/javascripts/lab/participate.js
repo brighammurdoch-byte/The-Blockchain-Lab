@@ -21,6 +21,8 @@ let myForkChoice = 'classic';
 let pendingForkHeight = null;
 let pendingForkName = null;
 let lastKnownOrphans = []; // Competing / hard-fork tips from hub
+/** Best known tip on the NEW hard-fork branch (miners on "new" stick to this). */
+let localNewForkTip = null;
 let seenBlocks = new Set(); // Prevent infinite gossip loops
 let submittedBlockHashes = new Set(); // Avoid double-submit of the same PoW solution
 let localPendingTxs = []; // Mempool mirror from hub
@@ -211,6 +213,14 @@ function applyCanonicalChain(chain, opts) {
   return tipChanged;
 }
 
+function isNewForkId(fid) {
+  return fid === 'new' || fid === 'NEW';
+}
+
+function isClassicForkId(fid) {
+  return !fid || fid === 'classic' || fid === 'CLASSIC';
+}
+
 function mergeKnownOrphans(list) {
   if (!Array.isArray(list)) return;
   const byHash = new Map();
@@ -225,6 +235,91 @@ function mergeKnownOrphans(list) {
   lastKnownOrphans = Array.from(byHash.values()).filter(function (b) {
     return b && b.hash && !main.has(b.hash);
   });
+  // Keep NEW-side tip sticky for miners that chose the new chain
+  refreshLocalNewForkTip();
+}
+
+/** Remember / refresh the best NEW hard-fork tip we know about. */
+function noteNewForkBlock(block) {
+  if (!block || !block.hash || !isNewForkId(block.forkId)) return;
+  mergeKnownOrphans([block]);
+  if (
+    !localNewForkTip ||
+    (block.index != null && block.index > localNewForkTip.index) ||
+    (block.index === localNewForkTip.index && block.hash !== localNewForkTip.hash)
+  ) {
+    // Prefer higher index; same index keeps existing unless we don't have one
+    if (!localNewForkTip || block.index > localNewForkTip.index) {
+      localNewForkTip = {
+        hash: block.hash,
+        index: block.index != null ? block.index : 0,
+        previousHash: block.previousHash,
+        block: block
+      };
+    }
+  }
+  refreshLocalNewForkTip();
+}
+
+function refreshLocalNewForkTip() {
+  const all = collectKnownBlocks();
+  const newBlocks = Array.from(all.values()).filter(function (b) {
+    return b && isNewForkId(b.forkId);
+  });
+  if (!newBlocks.length) return;
+
+  const tips = newBlocks.filter(function (b) {
+    return !newBlocks.some(function (c) { return c.previousHash === b.hash; });
+  });
+  tips.sort(function (a, b) {
+    return (b.index || 0) - (a.index || 0);
+  });
+  const best = tips[0] || newBlocks[newBlocks.length - 1];
+  const bestIdx = best.index != null ? best.index : 0;
+  const localIdx = localNewForkTip && localNewForkTip.index != null ? localNewForkTip.index : -1;
+
+  // Keep local tip if we are ahead of hub knowledge (optimistic mining)
+  if (localNewForkTip && localIdx > bestIdx) return;
+
+  localNewForkTip = {
+    hash: best.hash,
+    index: bestIdx,
+    previousHash: best.previousHash,
+    block: best
+  };
+}
+
+function collectKnownBlocks() {
+  const all = new Map();
+  (window.lastRelayedChain || []).forEach(function (b) {
+    if (b && b.hash) all.set(b.hash, b);
+  });
+  (lastKnownOrphans || []).forEach(function (b) {
+    if (b && b.hash) all.set(b.hash, b);
+  });
+  if (localNewForkTip && localNewForkTip.block && localNewForkTip.block.hash) {
+    all.set(localNewForkTip.block.hash, localNewForkTip.block);
+  }
+  return all;
+}
+
+/**
+ * Classic tip = highest block on hub main that is not a NEW-fork block
+ * (or any block below activation height).
+ */
+function getClassicMiningTip(main) {
+  main = main || window.lastRelayedChain || [];
+  if (!main.length) return null;
+  const act = pendingForkHeight != null ? Number(pendingForkHeight) : null;
+  for (let i = main.length - 1; i >= 0; i--) {
+    const b = main[i];
+    if (!b) continue;
+    if (act != null && b.index != null && b.index >= act && isNewForkId(b.forkId)) {
+      continue; // skip NEW blocks that landed on "main" via longest-chain
+    }
+    return b;
+  }
+  return main[0];
 }
 
 /**
@@ -237,87 +332,99 @@ function effectiveForkIdForIndex(index) {
   return myForkChoice === 'new' ? 'new' : 'classic';
 }
 
-/** Pick parent + index + forkId for the next block we mine. */
+/** True once the classic tip has reached the hard-fork activation parent. */
+function hardForkActivatedOnChain() {
+  if (pendingForkHeight == null) return false;
+  const tip = getClassicMiningTip();
+  if (!tip || tip.index == null) return false;
+  return Number(tip.index) >= Number(pendingForkHeight) - 1;
+}
+
+/** Pick parent + index + forkId for the next block we mine. Stick to chosen side. */
 function getMiningTemplate() {
   const main = window.lastRelayedChain || [];
   if (!main.length) return null;
 
-  // Collusion handled separately in fetchDataAndMine
-  const tip = main[main.length - 1];
-  const nextIndexGuess = (tip.index != null ? tip.index : main.length - 1) + 1;
+  const act = pendingForkHeight != null ? Number(pendingForkHeight) : null;
+  const classicTip = getClassicMiningTip(main);
+  if (!classicTip) return null;
 
-  // Pre-activation or classic miners: always extend hub main tip with classic forkId
-  if (myForkChoice !== 'new' || pendingForkHeight == null) {
+  // Classic miners (or no fork): only ever extend the classic tip
+  if (myForkChoice !== 'new' || act == null) {
+    const index = (classicTip.index != null ? classicTip.index : 0) + 1;
     return {
-      previousHash: tip.hash,
-      index: nextIndexGuess,
-      forkId: effectiveForkIdForIndex(nextIndexGuess)
-    };
-  }
-
-  // New-fork miners before the chain has reached activation parent: stay classic
-  const act = Number(pendingForkHeight);
-  if ((tip.index != null ? tip.index : 0) < act - 1) {
-    return {
-      previousHash: tip.hash,
-      index: nextIndexGuess,
-      forkId: 'classic'
-    };
-  }
-
-  // Build map of all known blocks
-  const all = new Map();
-  main.forEach(function (b) { if (b && b.hash) all.set(b.hash, b); });
-  (lastKnownOrphans || []).forEach(function (b) { if (b && b.hash) all.set(b.hash, b); });
-
-  const newBlocks = Array.from(all.values()).filter(function (b) {
-    return b && (b.forkId === 'new' || b.forkId === 'NEW');
-  });
-
-  if (newBlocks.length === 0) {
-    // First NEW block: parent = block at height act-1 (prefer main chain)
-    let parent = null;
-    for (let i = main.length - 1; i >= 0; i--) {
-      if (main[i].index === act - 1) {
-        parent = main[i];
-        break;
-      }
-    }
-    if (!parent) {
-      // Fallback: highest main block strictly below activation
-      for (let i = main.length - 1; i >= 0; i--) {
-        if (main[i].index != null && main[i].index < act) {
-          parent = main[i];
-          break;
-        }
-      }
-    }
-    if (!parent) parent = tip;
-    const index = parent.index + 1;
-    // Only tag NEW at/after activation
-    return {
-      previousHash: parent.hash,
+      previousHash: classicTip.hash,
       index: index,
       forkId: effectiveForkIdForIndex(index)
     };
   }
 
-  // Extend longest NEW tip (highest index; break ties by first-seen order)
-  const childParents = new Set(
-    newBlocks.map(function (b) { return b.previousHash; })
-  );
-  // Tips = new blocks that are not the parent of another new block
-  const tips = newBlocks.filter(function (b) {
-    return !newBlocks.some(function (c) { return c.previousHash === b.hash; });
+  // NEW miners before activation parent exists: still classic
+  if ((classicTip.index != null ? classicTip.index : 0) < act - 1) {
+    const index = (classicTip.index != null ? classicTip.index : 0) + 1;
+    return {
+      previousHash: classicTip.hash,
+      index: index,
+      forkId: 'classic'
+    };
+  }
+
+  // Prefer sticky local NEW tip, then best known NEW tip from orphans/main
+  refreshLocalNewForkTip();
+  if (localNewForkTip && localNewForkTip.hash) {
+    return {
+      previousHash: localNewForkTip.hash,
+      index: (localNewForkTip.index != null ? localNewForkTip.index : 0) + 1,
+      forkId: 'new'
+    };
+  }
+
+  const all = collectKnownBlocks();
+  const newBlocks = Array.from(all.values()).filter(function (b) {
+    return b && isNewForkId(b.forkId);
   });
-  tips.sort(function (a, b) {
-    return (b.index || 0) - (a.index || 0);
-  });
-  const best = tips[0] || newBlocks[newBlocks.length - 1];
+
+  if (newBlocks.length > 0) {
+    const tips = newBlocks.filter(function (b) {
+      return !newBlocks.some(function (c) { return c.previousHash === b.hash; });
+    });
+    tips.sort(function (a, b) { return (b.index || 0) - (a.index || 0); });
+    const best = tips[0] || newBlocks[newBlocks.length - 1];
+    localNewForkTip = {
+      hash: best.hash,
+      index: best.index != null ? best.index : 0,
+      previousHash: best.previousHash,
+      block: best
+    };
+    return {
+      previousHash: best.hash,
+      index: (best.index != null ? best.index : 0) + 1,
+      forkId: 'new'
+    };
+  }
+
+  // First NEW block: parent must be classic block at height act-1
+  let parent = null;
+  for (let i = main.length - 1; i >= 0; i--) {
+    if (main[i].index === act - 1 && isClassicForkId(main[i].forkId)) {
+      parent = main[i];
+      break;
+    }
+  }
+  if (!parent) {
+    for (let i = main.length - 1; i >= 0; i--) {
+      if (main[i].index != null && main[i].index < act && isClassicForkId(main[i].forkId)) {
+        parent = main[i];
+        break;
+      }
+    }
+  }
+  if (!parent) parent = classicTip;
+  const index = (parent.index != null ? parent.index : 0) + 1;
   return {
-    previousHash: best.hash,
-    index: (best.index != null ? best.index : 0) + 1,
-    forkId: 'new'
+    previousHash: parent.hash,
+    index: index,
+    forkId: index >= act ? 'new' : 'classic'
   };
 }
 
@@ -668,19 +775,35 @@ function initClientSideNetworkingForParticipant(mode) {
     const minerId = (msg.payload && msg.payload.minerId) || msg.from;
     const chain = (msg.payload && msg.payload.chain) || msg.chain;
     if (chain && Array.isArray(chain) && chain.length > 0) {
-      applyCanonicalChain(chain, { remine: true });
+      applyCanonicalChain(chain, {
+        orphans: (msg.payload && msg.payload.orphans) || lastKnownOrphans,
+        remine: true
+      });
       return;
     }
     if (!block) return;
     if (block.hash) seenBlocks.add(block.hash);
     try { handleGossipBlock(block, minerId || 'peer'); } catch (e) {}
     if (!window.lastRelayedChain) window.lastRelayedChain = [];
-    const tip = window.lastRelayedChain[window.lastRelayedChain.length - 1];
-    if (!tip || block.previousHash === tip.hash) {
-      window.lastRelayedChain.push(block);
-      remineOnCanonicalTip();
+
+    // NEW-side gossip: track as orphan tip, don't rewrite classic main mirror
+    if (isNewForkId(block.forkId)) {
+      noteNewForkBlock(block);
+      if (isMining) remineOnCanonicalTip();
+      return;
     }
-    // Non-extending gossip without a full chain: ignore (wait for hub)
+
+    const tip = getClassicMiningTip(window.lastRelayedChain);
+    if (!tip || block.previousHash === tip.hash) {
+      // Only append classic extensions to local main mirror
+      const last = window.lastRelayedChain[window.lastRelayedChain.length - 1];
+      if (last && last.hash === tip.hash && block.previousHash === tip.hash) {
+        window.lastRelayedChain.push(block);
+      } else if (!last) {
+        window.lastRelayedChain.push(block);
+      }
+      if (isMining) remineOnCanonicalTip();
+    }
   });
 
   net.on('hard-fork-proposed', (msg) => {
@@ -735,20 +858,27 @@ function initClientSideNetworkingForParticipant(mode) {
       pendingForkName = payload.pendingFork.name || pendingForkName;
     }
 
+    // Always absorb orphans / NEW blocks before any remine so we stick to our side
+    if (Array.isArray(payload.orphans)) {
+      mergeKnownOrphans(payload.orphans);
+    }
+    if (block && isNewForkId(block.forkId)) {
+      noteNewForkBlock(block);
+    }
+
     if (payload.chain && Array.isArray(payload.chain) && payload.chain.length > 0) {
       applyCanonicalChain(payload.chain, {
         participants: payload.participants || [],
         networkStats: payload.networkStats,
-        orphans: payload.orphans || [],
+        orphans: payload.orphans || lastKnownOrphans,
         pendingTransactions: payload.pendingTransactions,
         remine: true
       });
       if (payload.reorg) {
         showToastNotification('Chain reorg — following longest chain', 'warning');
-      } else if (payload.isFork && block && block.forkId === 'new' && myForkChoice === 'new') {
-        // Expected: NEW chain lives alongside main until it overtakes
-        mergeKnownOrphans([block].concat(payload.orphans || []));
-      } else if (payload.isFork) {
+      } else if (payload.isFork && block && isNewForkId(block.forkId) && myForkChoice === 'new') {
+        // Expected: our NEW block sits beside main; keep mining the NEW tip
+      } else if (payload.isFork && myForkChoice !== 'new') {
         showToastNotification('Your block was an orphan — mining on the winning tip', 'info');
       }
       return;
@@ -759,12 +889,6 @@ function initClientSideNetworkingForParticipant(mode) {
       if (block.hash) seenBlocks.add(block.hash);
       try { handleGossipBlock(block, minerId || 'relay-admin'); } catch (e) {}
       if (!window.lastRelayedChain) window.lastRelayedChain = [];
-
-      if (Array.isArray(payload.orphans)) {
-        mergeKnownOrphans(payload.orphans);
-      } else if (payload.isFork && block) {
-        mergeKnownOrphans([block]);
-      }
 
       // 1) Refresh mempool FIRST (before remine) so the next template is clean
       if (Array.isArray(payload.pendingTransactions)) {
@@ -779,17 +903,29 @@ function initClientSideNetworkingForParticipant(mode) {
         });
       } catch (e) {}
 
-      // 2) Extend tip, then remine on the updated mempool
+      // 2) Extend local main mirror only with classic-side tip extensions
       let shouldRemine = false;
       const tip = window.lastRelayedChain[window.lastRelayedChain.length - 1];
-      if (!tip || tip.hash === block.hash) {
-        shouldRemine = isMining; // still remine so in-flight template drops confirmed txs
-      } else if (block.previousHash === tip.hash) {
+      if (isNewForkId(block.forkId)) {
+        // Do not pollute lastRelayedChain with NEW blocks
+        noteNewForkBlock(block);
+        shouldRemine = isMining;
+      } else if (!tip || tip.hash === block.hash) {
+        shouldRemine = isMining;
+      } else if (block.previousHash === tip.hash && isClassicForkId(block.forkId)) {
         window.lastRelayedChain.push(block);
+        shouldRemine = isMining;
+      } else if (block.previousHash === tip.hash && isNewForkId(block.forkId)) {
+        noteNewForkBlock(block);
         shouldRemine = isMining;
       } else {
         // Stale/orphan without chain snapshot — ask hub for canonical state
-        net.send('request-state', { from: userId });
+        if (!payload.isFork) {
+          net.send('request-state', { from: userId });
+        } else {
+          mergeKnownOrphans([block]);
+          shouldRemine = isMining;
+        }
       }
       if (shouldRemine) {
         remineOnCanonicalTip();
@@ -809,7 +945,11 @@ function initClientSideNetworkingForParticipant(mode) {
       }
       try {
         updateParticipantBlockchainView({ chain: window.lastRelayedChain }, payload.participants || []);
-        updateNetworkBlockchainView(window.lastRelayedChain, [], payload.participants || []);
+        updateNetworkBlockchainView(
+          window.lastRelayedChain,
+          lastKnownOrphans,
+          payload.participants || []
+        );
       } catch (e) {}
       if (payload.newHeight != null) {
         $('#blockHeight').text(payload.newHeight);
@@ -1269,6 +1409,7 @@ executeDoubleSpendAttack(target1, target2, amount);
   // Hard fork voting handlers
   $('#btnRejectFork').click(function() {
     myForkChoice = 'classic';
+    localNewForkTip = null;
     if (net) net.send('hard-fork-vote', { choice: 'classic' });
     $('#forkChoiceModal').modal('hide');
     showToastNotification(
@@ -1286,7 +1427,7 @@ executeDoubleSpendAttack(target1, target2, amount);
     showToastNotification(
       'You chose New Chain. You still mine classic until block ' +
       (pendingForkHeight != null ? pendingForkHeight : '?') +
-      ', then split off.',
+      ', then split off and stay on the NEW tip.',
       'warning'
     );
     if (isMining) remineOnCanonicalTip();
@@ -1295,6 +1436,7 @@ executeDoubleSpendAttack(target1, target2, amount);
   // Fork toggling handlers
   $('#forkControlPanel').on('click', '#btnFollowClassic', function() {
     myForkChoice = 'classic';
+    localNewForkTip = null;
     if (net) net.send('hard-fork-vote', { choice: 'classic' });
     showToastNotification('Switched to Classic Chain.', 'info');
     if (isMining) remineOnCanonicalTip();
@@ -1304,7 +1446,8 @@ executeDoubleSpendAttack(target1, target2, amount);
     if (net) net.send('hard-fork-vote', { choice: 'new' });
     showToastNotification(
       'Switched to New Chain (active at block ' +
-      (pendingForkHeight != null ? pendingForkHeight : '?') + ').',
+      (pendingForkHeight != null ? pendingForkHeight : '?') +
+      '). You will stick to the NEW tip after activation.',
       'warning'
     );
     if (isMining) remineOnCanonicalTip();
@@ -1808,19 +1951,27 @@ function mineBlock(block, adminSettings) {
         // otherwise the same transfer can be mined twice under load.
         pruneLocalMempool(minedBlock);
 
+        // Stick to our fork tip before hub ack
+        if (isNewForkId(minedBlock.forkId)) {
+          noteNewForkBlock(minedBlock);
+        }
         submitMinedBlock(minedBlock, startTime, totalIterations);
         
-        // Optimistically start mining the next block immediately!
-        // Keep forkId gated by activation height (do not force myForkChoice early)
-        block.index = block.index + 1;
-        block.previousHash = block.hash;
+        // Optimistically continue on the same side (getMiningTemplate respects choice)
+        const nextTmpl = getMiningTemplate();
+        if (nextTmpl) {
+          block.index = nextTmpl.index;
+          block.previousHash = nextTmpl.previousHash;
+          block.forkId = nextTmpl.forkId;
+        } else {
+          block.index = block.index + 1;
+          block.previousHash = block.hash;
+          block.forkId = effectiveForkIdForIndex(block.index);
+        }
         block.nonce = 0;
         block.hash = '';
         block.transactions = mempoolForNextBlock();
         block.timestamp = Date.now();
-        block.forkId = effectiveForkIdForIndex(block.index);
-        // If we are on the NEW side post-activation, stay on our private tip path
-        // (template already used correct parent). Classic side will remine on hub tip.
         nonce = 0;
         
         // Reset UI for next block
