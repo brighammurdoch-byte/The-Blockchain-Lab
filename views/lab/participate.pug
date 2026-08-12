@@ -77,8 +77,15 @@ block content
               small.form-text.text-muted
                 span#cpuUsageValue 50
                 | % CPU usage
+            #miningSwitchStatus.text-center(style="margin-bottom: 10px;")
+              span.label.label-default#miningIntentBadge Mining switch: OFF
+              |  
+              span.label.label-success#networkLiveBadge Network: Live
+              |  
+              span.label.label-default#hashingBadge Hashing: No
             button.btn.btn-success.btn-block.btn-lg#mineBtn Start Mining
             button.btn.btn-warning.btn-block.btn-lg#stopMineBtn(style="display: none;") Stop Mining
+            p#miningControlHint.small.text-muted.text-center(style="margin-top:8px;margin-bottom:0;")
             .alert.alert-warning.mt-3
               small Limit CPU usage to prevent system strain. Recommended: 50%
 
@@ -313,7 +320,7 @@ block content
   script(src="/javascripts/network/NetworkManager.js?v=mqtt1")
   script(src="/javascripts/lab/sessionProbe.js?v=probe22")
   script(src="/javascripts/lab/chainDisplay.js?v=forkfix1")
-  script(src="/javascripts/lab/participate.js?v=forkfix1")
+  script(src="/javascripts/lab/participate.js?v=mineui1")
   
   script.
     // Do not redeclare sessionId — participate.js already owns that binding.

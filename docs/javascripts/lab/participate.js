@@ -1088,14 +1088,31 @@ function setupEventHandlers() {
     $('#cpuUsageValue').text(cpuLimitPercent);
   });
   
-  // Mining buttons
+  // Mining buttons — when paused, these toggle "mining switch" intent only
   $('#mineBtn').click(function() {
+    if (networkPaused) {
+      // Arm mining so it auto-starts when the network resumes
+      window.lastMiningIntent = true;
+      updateMiningControlsUI();
+      showToastNotification('Mining switch ON — will start when the network resumes', 'info');
+      return;
+    }
     startMining();
   });
   
   $('#stopMineBtn').click(function() {
+    if (networkPaused) {
+      // Disarm auto-resume
+      window.lastMiningIntent = false;
+      updateMiningControlsUI();
+      showToastNotification('Mining switch OFF — will not auto-resume', 'info');
+      return;
+    }
     stopMining();
   });
+
+  // Initial control labels
+  if (typeof updateMiningControlsUI === 'function') updateMiningControlsUI();
 
   // Node name handler
   $('#setNodeNameBtn').click(function() {
@@ -1331,13 +1348,7 @@ function applyNetworkPaused(msgOrPaused, opts) {
     if (!opts.silent || !prev) {
       showToastNotification('Network paused by admin — mining halted', 'warning');
     }
-    $('#stopMineBtn').hide();
-    if (window.lastMiningIntent) {
-      $('#mineBtn').show().prop('disabled', true)
-        .text('Network Paused');
-    }
   } else {
-    $('#mineBtn').prop('disabled', false).text('Start Mining');
     if (!opts.silent || prev) {
       showToastNotification('Network resumed by admin', 'success');
     }
@@ -1345,10 +1356,107 @@ function applyNetworkPaused(msgOrPaused, opts) {
       setTimeout(startMining, 100);
     }
   }
+  updateMiningControlsUI();
 }
 
 function handleNetworkToggled(msg) {
   applyNetworkPaused(msg, { silent: false });
+}
+
+/**
+ * Keep Start/Stop labels + status badges in sync with:
+ * - mining switch intent (lastMiningIntent)
+ * - network pause
+ * - whether we are actually hashing
+ */
+function updateMiningControlsUI() {
+  const intent = !!window.lastMiningIntent;
+  const paused = !!networkPaused;
+  const hashing = !!isMining;
+
+  const $mine = $('#mineBtn');
+  const $stop = $('#stopMineBtn');
+  const $hint = $('#miningControlHint');
+  const $intent = $('#miningIntentBadge');
+  const $net = $('#networkLiveBadge');
+  const $hash = $('#hashingBadge');
+
+  // Status badges
+  if ($intent.length) {
+    $intent
+      .text(intent ? 'Mining switch: ON' : 'Mining switch: OFF')
+      .removeClass('label-default label-success label-warning')
+      .addClass(intent ? 'label-success' : 'label-default');
+  }
+  if ($net.length) {
+    $net
+      .text(paused ? 'Network: Paused' : 'Network: Live')
+      .removeClass('label-default label-success label-warning label-danger')
+      .addClass(paused ? 'label-warning' : 'label-success');
+  }
+  if ($hash.length) {
+    $hash
+      .text(hashing ? 'Hashing: Yes' : 'Hashing: No')
+      .removeClass('label-default label-info label-success')
+      .addClass(hashing ? 'label-info' : 'label-default');
+  }
+
+  if (paused) {
+    // Not hashing while paused — buttons toggle intent (arm / disarm resume)
+    $mine.prop('disabled', false).show();
+    $stop.prop('disabled', false);
+    if (intent) {
+      $mine.hide();
+      $stop
+        .show()
+        .removeClass('btn-success')
+        .addClass('btn-warning')
+        .text('Turn Mining Off (network paused)');
+      if ($hint.length) {
+        $hint.text('Mining switch is ON. Hashing is stopped until the admin resumes the network.');
+      }
+    } else {
+      $stop.hide();
+      $mine
+        .show()
+        .removeClass('btn-warning')
+        .addClass('btn-success')
+        .text('Turn Mining On (network paused)');
+      if ($hint.length) {
+        $hint.text('Mining switch is OFF. You can arm it now; hashing starts only when the network is live.');
+      }
+    }
+    return;
+  }
+
+  // Network live
+  if (hashing) {
+    $mine.hide();
+    $stop
+      .show()
+      .removeClass('btn-success')
+      .addClass('btn-warning')
+      .text('Stop Mining')
+      .prop('disabled', false);
+    if ($hint.length) {
+      $hint.text('Mining switch ON — this node is actively hashing.');
+    }
+  } else {
+    $stop.hide();
+    $mine
+      .show()
+      .removeClass('btn-warning')
+      .addClass('btn-success')
+      .text(intent ? 'Start Mining (armed)' : 'Start Mining')
+      .prop('disabled', false);
+    if ($hint.length) {
+      $hint.text(
+        intent
+          ? 'Mining switch ON but not hashing yet — click Start if needed, or wait for auto-resume.'
+          : 'Mining switch OFF — click Start Mining to begin.'
+      );
+    }
+  }
 }
 
 /** Show hard-fork modal + persistent fork control panel. */
@@ -1478,16 +1586,15 @@ function handleTeamAttackStarted(data) {
 
 function startMining() {
   if (isMining) return;
+  window.lastMiningIntent = true;
   if (networkPaused) {
-    showToastNotification('Network is paused by admin', 'warning');
+    updateMiningControlsUI();
+    showToastNotification('Mining switch ON — network is paused; hashing starts on resume', 'warning');
     return;
   }
 
   isMining = true;
-  window.lastMiningIntent = true;
-  $('#mineBtn').hide();
-  $('#stopMineBtn').show();
-  
+  updateMiningControlsUI();
   fetchDataAndMine();
 }
 
@@ -1830,11 +1937,9 @@ function stopMining(opts) {
   const preserveIntent = !!(opts && opts.preserveIntent);
   isMining = false;
   if (!preserveIntent) window.lastMiningIntent = false;
-  $('#mineBtn').show();
-  $('#stopMineBtn').hide();
   $('#miningActivity').html(
     preserveIntent
-      ? '<p class="text-warning">Mining paused by admin (will resume automatically)</p>'
+      ? '<p class="text-warning">Mining paused by admin (will resume automatically if switch stays ON)</p>'
       : '<p class="text-muted">Mining stopped</p>'
   );
   $('#yourHashrate').text('0 H/s');
@@ -1857,6 +1962,8 @@ function stopMining(opts) {
       hashrate: 0
     });
   }
+
+  updateMiningControlsUI();
 }
 
 function sendTransaction(recipientAddress, amount) {
