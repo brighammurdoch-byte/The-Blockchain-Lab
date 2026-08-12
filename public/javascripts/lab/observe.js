@@ -400,118 +400,19 @@ function loadBlockchainState() {
 }
 
 function updateBlockchainView(mainChain, orphans, participants) {
-  const allBlocks = [...mainChain];
-  const mainHashes = new Set(mainChain.map(b => b.hash));
-  if (orphans && orphans.length > 0) {
-    allBlocks.push(...orphans);
-  }
-  
-  if (allBlocks.length === 0) {
-    $('#blockchainView').html('<p class="text-muted">No blocks yet</p>');
+  $('#blockchainView').css('background-color', '#fcfcfc').css('padding', '15px').css('border-radius', '4px');
+  if (window.ChainDisplay && typeof ChainDisplay.renderChainHtml === 'function') {
+    $('#blockchainView').html(
+      ChainDisplay.renderChainHtml({
+        mainChain: mainChain || [],
+        orphans: orphans || [],
+        participants: participants || [],
+        openTxPanels: openTxPanels
+      })
+    );
     return;
   }
-
-  const CD = window.ChainDisplay;
-  const nameLookup = CD ? CD.buildParticipantNameLookup(participants || []) : {};
-  const fmtAddr = (addr) => (CD ? CD.formatChainParticipantHtml(addr, nameLookup) : `<code>${addr || ''}</code>`);
-
-  const byIndex = {};
-  let maxIndex = 0;
-  for (const b of allBlocks) {
-    if (!byIndex[b.index]) byIndex[b.index] = [];
-    if (!byIndex[b.index].find(existing => existing.hash === b.hash)) {
-      byIndex[b.index].push(b);
-    }
-    if (b.index > maxIndex) maxIndex = b.index;
-  }
-
-  // Add a nice background to the view container to frame the tree
-  $('#blockchainView').css('background-color', '#fcfcfc').css('padding', '15px').css('border-radius', '4px');
-
-  let html = '<div style="display: flex; flex-direction: column; width: 100%;">';
-
-  for (let i = 0; i <= maxIndex; i++) {
-    if (!byIndex[i]) continue;
-    
-    html += `<div style="display: flex; justify-content: center; flex-wrap: wrap; gap: 15px; margin-bottom: 0;">`;
-    
-    for (const block of byIndex[i]) {
-      const isMain = mainHashes.has(block.hash);
-      const panelClass = isMain ? (i === maxIndex ? 'panel-success' : 'panel-primary') : 'panel-warning';
-      const label = isMain ? '' : '<span class="label label-warning pull-right">FORK</span>';
-      
-      let txHtml = `${block.transactions ? block.transactions.length : 0}`;
-      if (block.transactions && block.transactions.length > 0) {
-        const txId = `tx_${block.hash}`;
-        const displayStyle = openTxPanels.has(txId) ? 'block' : 'none';
-        txHtml += ` <button class="btn btn-xs btn-default" onclick="toggleTransactions('${txId}')">View Details</button>`;
-        txHtml += `<div id="txDetails_${txId}" style="display:${displayStyle}; margin-top: 10px; max-height: 150px; overflow-y: auto;">`;
-        txHtml += `<table class="table table-condensed"><thead><tr><th>From</th><th>To</th><th>Amt</th></tr></thead><tbody>`;
-        for (const tx of block.transactions) {
-          txHtml += `<tr><td>${fmtAddr(tx.from)}</td><td>${fmtAddr(tx.to)}</td><td>${tx.amount}</td></tr>`;
-        }
-        txHtml += `</tbody></table></div>`;
-      }
-
-      const forkBadge = (block.forkId && block.forkId !== 'classic') ? `<span class="label label-info pull-right" style="margin-right: 5px;">${block.forkId.toUpperCase()}</span>` : '';
-      const minerId = block.miner != null ? block.miner : '';
-      html += `<div style="display: flex; flex-direction: column; align-items: center; flex: 1 1 300px; max-width: 100%;">`;
-      html += `
-      <div class="panel ${panelClass}" style="width: 100%; margin-bottom: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-        <div class="panel-heading" style="padding: 8px 15px;">
-          <strong>Block #${block.index}</strong> ${label} ${forkBadge}
-          <div class="pull-right text-muted small" style="margin-top: 2px;">${new Date(block.timestamp).toLocaleTimeString()}</div>
-        </div>
-        <div class="panel-body" style="padding: 10px 15px;">
-          <dl class="dl-horizontal" style="margin-bottom: 0;">
-            <dt style="width: 80px;">Hash</dt><dd style="margin-left: 90px;"><code style="font-size: 10px; word-break: break-all;">${block.hash.substring(0, 16)}...</code></dd>
-            <dt style="width: 80px;">Prev Hash</dt><dd style="margin-left: 90px;"><code style="font-size: 10px; word-break: break-all;">${block.previousHash.substring(0, 16)}...</code></dd>
-            <dt style="width: 80px;">Miner</dt><dd style="margin-left: 90px;">${fmtAddr(minerId)}</dd>
-            <dt style="width: 80px;">Nonce</dt><dd style="margin-left: 90px;">${block.nonce}</dd>
-            <dt style="width: 80px;">Txs</dt><dd style="margin-left: 90px;">${txHtml}</dd>
-          </dl>
-        </div>
-      </div>
-      `;
-      
-      if (i < maxIndex) {
-        const children = (byIndex[i+1] || []).filter(b => b.previousHash === block.hash);
-        if (children.length > 0) {
-          let hasFork = false;
-          for (const child of children) {
-            if (!mainHashes.has(child.hash)) hasFork = true;
-          }
-          const arrowColor = hasFork || !isMain ? '#f0ad4e' : '#bbb';
-          
-          html += `<div style="text-align: center; margin-top: 5px; margin-bottom: 5px; color: ${arrowColor}; height: 20px;">`;
-          if (children.length === 1) {
-            html += `<i class="glyphicon glyphicon-arrow-down"></i>`;
-          } else if (children.length === 2) {
-            html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-15px) rotate(30deg);"></i>`;
-            html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(15px) rotate(-30deg);"></i>`;
-          } else {
-            const step = 60 / (children.length - 1);
-            for (let c = 0; c < children.length; c++) {
-              const angle = 30 - (c * step);
-              const transX = -angle * 0.5;
-              html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(${transX}px) rotate(${angle}deg); margin: 0 2px;"></i>`;
-            }
-          }
-          html += `</div>`;
-        } else {
-          html += `<div style="height: 30px;"></div>`;
-        }
-      } else {
-        html += `<div style="height: 5px;"></div>`;
-      }
-      
-      html += `</div>`;
-    }
-    html += `</div>`;
-  }
-  html += '</div>';
-  
-  $('#blockchainView').html(html);
+  $('#blockchainView').html('<p class="text-muted">Chain display unavailable</p>');
 }
 
 function toggleTransactions(blockIndex) {

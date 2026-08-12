@@ -150,7 +150,10 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
 
       // Compact MQTT payloads: full chain only on reorg/orphan — tip extensions send the new block only.
       // Flooding the full chain on every block kills public MQTT brokers in fast classroom demos.
-      const needFullChain = !!(result.reorg || result.isFork || !result.tipChanged);
+      // During a hard-fork simulation, always include orphans so NEW-side miners can extend their tip.
+      const hardForkLive = !!(this.lab && this.lab.pendingFork && this.lab.pendingFork.height != null);
+      const needFullChain = !!(result.reorg || result.isFork || !result.tipChanged || hardForkLive);
+      const needOrphans = needFullChain || hardForkLive || !!(block && block.forkId && block.forkId !== 'classic');
 
       this.net.send('block-accepted', {
         block,
@@ -160,10 +163,11 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
         tipChanged: !!result.tipChanged,
         newHeight: result.newHeight,
         chain: needFullChain ? chain : undefined,
-        orphans: needFullChain ? (snap.orphans || []) : undefined,
+        orphans: needOrphans ? (snap.orphans || []) : undefined,
         participants: participants,
         pendingTransactions: snap.pendingTransactions || [],
-        networkStats: snap.networkStats || (this.lab && this.lab.networkStats ? { ...this.lab.networkStats } : undefined)
+        networkStats: snap.networkStats || (this.lab && this.lab.networkStats ? { ...this.lab.networkStats } : undefined),
+        pendingFork: this.lab && this.lab.pendingFork ? this.lab.pendingFork : undefined
       });
 
       // Auto-difficulty: push new target to miners after a tip extension

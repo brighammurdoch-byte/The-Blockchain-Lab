@@ -42,6 +42,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     this.allBlocks = new Map(); // hash -> block (for simple fork/orphan handling)
     this.genesisCreated = false;
     this.networkPaused = false;
+    /** { height, name } when a classroom hard fork is proposed */
+    this.pendingFork = null;
   }
 
   // Create a minimal genesis block
@@ -567,7 +569,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       adminSettings: { ...this.settings },
       networkStats: { ...this.networkStats },
       pendingTransactions: this.pendingTransactions.slice(0, 20),
-      networkPaused: !!this.networkPaused
+      networkPaused: !!this.networkPaused,
+      pendingFork: this.pendingFork ? { ...this.pendingFork } : null
     };
   }
 
@@ -582,6 +585,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       networkStats: { ...this.networkStats },
       pendingTransactions: [...this.pendingTransactions],
       networkPaused: !!this.networkPaused,
+      pendingFork: this.pendingFork ? { ...this.pendingFork } : null,
       timestamp: Date.now()
     };
   }
@@ -602,6 +606,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     if (persisted.networkStats) this.networkStats = { ...this.networkStats, ...persisted.networkStats };
     if (persisted.pendingTransactions) this.pendingTransactions = persisted.pendingTransactions;
     if (typeof persisted.networkPaused === 'boolean') this.networkPaused = persisted.networkPaused;
+    if (persisted.pendingFork) this.pendingFork = persisted.pendingFork;
 
     // Rebuild allBlocks: prefer persisted orphans + chain
     this.allBlocks = new Map();

@@ -19,6 +19,8 @@ let collusionTransactions = [];
 let lastKnownAdminSettings = null;
 let myForkChoice = 'classic';
 let pendingForkHeight = null;
+let pendingForkName = null;
+let lastKnownOrphans = []; // Competing / hard-fork tips from hub
 let seenBlocks = new Set(); // Prevent infinite gossip loops
 let submittedBlockHashes = new Set(); // Avoid double-submit of the same PoW solution
 let localPendingTxs = []; // Mempool mirror from hub
@@ -164,6 +166,9 @@ function applyCanonicalChain(chain, opts) {
     if (opts.pendingTransactions) {
       localPendingTxs = opts.pendingTransactions.slice();
     }
+    if (opts.orphans) {
+      mergeKnownOrphans(opts.orphans);
+    }
     // Strip anything already on the new chain (hub list can lag under MQTT races)
     pruneLocalMempool();
     updatePendingTransactions({
@@ -204,6 +209,116 @@ function applyCanonicalChain(chain, opts) {
   }
 
   return tipChanged;
+}
+
+function mergeKnownOrphans(list) {
+  if (!Array.isArray(list)) return;
+  const byHash = new Map();
+  (lastKnownOrphans || []).forEach(function (b) {
+    if (b && b.hash) byHash.set(b.hash, b);
+  });
+  list.forEach(function (b) {
+    if (b && b.hash) byHash.set(b.hash, b);
+  });
+  // Drop anything that is now on the main relayed chain
+  const main = new Set((window.lastRelayedChain || []).map(function (b) { return b && b.hash; }));
+  lastKnownOrphans = Array.from(byHash.values()).filter(function (b) {
+    return b && b.hash && !main.has(b.hash);
+  });
+}
+
+/**
+ * forkId is only non-classic at/after activation height.
+ * Using 'new' before activation was causing races/orphans every block.
+ */
+function effectiveForkIdForIndex(index) {
+  if (pendingForkHeight == null || index == null) return 'classic';
+  if (Number(index) < Number(pendingForkHeight)) return 'classic';
+  return myForkChoice === 'new' ? 'new' : 'classic';
+}
+
+/** Pick parent + index + forkId for the next block we mine. */
+function getMiningTemplate() {
+  const main = window.lastRelayedChain || [];
+  if (!main.length) return null;
+
+  // Collusion handled separately in fetchDataAndMine
+  const tip = main[main.length - 1];
+  const nextIndexGuess = (tip.index != null ? tip.index : main.length - 1) + 1;
+
+  // Pre-activation or classic miners: always extend hub main tip with classic forkId
+  if (myForkChoice !== 'new' || pendingForkHeight == null) {
+    return {
+      previousHash: tip.hash,
+      index: nextIndexGuess,
+      forkId: effectiveForkIdForIndex(nextIndexGuess)
+    };
+  }
+
+  // New-fork miners before the chain has reached activation parent: stay classic
+  const act = Number(pendingForkHeight);
+  if ((tip.index != null ? tip.index : 0) < act - 1) {
+    return {
+      previousHash: tip.hash,
+      index: nextIndexGuess,
+      forkId: 'classic'
+    };
+  }
+
+  // Build map of all known blocks
+  const all = new Map();
+  main.forEach(function (b) { if (b && b.hash) all.set(b.hash, b); });
+  (lastKnownOrphans || []).forEach(function (b) { if (b && b.hash) all.set(b.hash, b); });
+
+  const newBlocks = Array.from(all.values()).filter(function (b) {
+    return b && (b.forkId === 'new' || b.forkId === 'NEW');
+  });
+
+  if (newBlocks.length === 0) {
+    // First NEW block: parent = block at height act-1 (prefer main chain)
+    let parent = null;
+    for (let i = main.length - 1; i >= 0; i--) {
+      if (main[i].index === act - 1) {
+        parent = main[i];
+        break;
+      }
+    }
+    if (!parent) {
+      // Fallback: highest main block strictly below activation
+      for (let i = main.length - 1; i >= 0; i--) {
+        if (main[i].index != null && main[i].index < act) {
+          parent = main[i];
+          break;
+        }
+      }
+    }
+    if (!parent) parent = tip;
+    const index = parent.index + 1;
+    // Only tag NEW at/after activation
+    return {
+      previousHash: parent.hash,
+      index: index,
+      forkId: effectiveForkIdForIndex(index)
+    };
+  }
+
+  // Extend longest NEW tip (highest index; break ties by first-seen order)
+  const childParents = new Set(
+    newBlocks.map(function (b) { return b.previousHash; })
+  );
+  // Tips = new blocks that are not the parent of another new block
+  const tips = newBlocks.filter(function (b) {
+    return !newBlocks.some(function (c) { return c.previousHash === b.hash; });
+  });
+  tips.sort(function (a, b) {
+    return (b.index || 0) - (a.index || 0);
+  });
+  const best = tips[0] || newBlocks[newBlocks.length - 1];
+  return {
+    previousHash: best.hash,
+    index: (best.index != null ? best.index : 0) + 1,
+    forkId: 'new'
+  };
 }
 
 // Canonicalize object for consistent hashing (sorted keys)
@@ -572,13 +687,19 @@ function initClientSideNetworkingForParticipant(mode) {
     const data = msg.payload || msg;
     const height = data.height;
     const name = data.name || 'Hard Fork';
-    pendingForkHeight = height;
+    pendingForkHeight = height != null ? Number(height) : null;
+    pendingForkName = name;
     showForkProposalModal(name, height);
+    // Stay on classic until activation — remine so templates drop early 'new' forkIds
+    if (isMining) remineOnCanonicalTip();
   });
   // Legacy alias (older admin builds)
   net.on('propose-hard-fork', (msg) => {
     const data = msg.payload || msg;
-    showForkProposalModal(data.name || 'Hard Fork', data.height);
+    pendingForkHeight = data.height != null ? Number(data.height) : null;
+    pendingForkName = data.name || 'Hard Fork';
+    showForkProposalModal(pendingForkName, pendingForkHeight);
+    if (isMining) remineOnCanonicalTip();
   });
 
   net.on('team-attack-started', (msg) => {
@@ -609,6 +730,11 @@ function initClientSideNetworkingForParticipant(mode) {
     });
     $('#connectionStatusNote').hide();
 
+    if (payload.pendingFork && payload.pendingFork.height != null) {
+      pendingForkHeight = Number(payload.pendingFork.height);
+      pendingForkName = payload.pendingFork.name || pendingForkName;
+    }
+
     if (payload.chain && Array.isArray(payload.chain) && payload.chain.length > 0) {
       applyCanonicalChain(payload.chain, {
         participants: payload.participants || [],
@@ -619,6 +745,9 @@ function initClientSideNetworkingForParticipant(mode) {
       });
       if (payload.reorg) {
         showToastNotification('Chain reorg — following longest chain', 'warning');
+      } else if (payload.isFork && block && block.forkId === 'new' && myForkChoice === 'new') {
+        // Expected: NEW chain lives alongside main until it overtakes
+        mergeKnownOrphans([block].concat(payload.orphans || []));
       } else if (payload.isFork) {
         showToastNotification('Your block was an orphan — mining on the winning tip', 'info');
       }
@@ -630,6 +759,12 @@ function initClientSideNetworkingForParticipant(mode) {
       if (block.hash) seenBlocks.add(block.hash);
       try { handleGossipBlock(block, minerId || 'relay-admin'); } catch (e) {}
       if (!window.lastRelayedChain) window.lastRelayedChain = [];
+
+      if (Array.isArray(payload.orphans)) {
+        mergeKnownOrphans(payload.orphans);
+      } else if (payload.isFork && block) {
+        mergeKnownOrphans([block]);
+      }
 
       // 1) Refresh mempool FIRST (before remine) so the next template is clean
       if (Array.isArray(payload.pendingTransactions)) {
@@ -793,6 +928,14 @@ function initClientSideNetworkingForParticipant(mode) {
 
     if (typeof state.networkPaused === 'boolean') {
       applyNetworkPaused(state.networkPaused, { silent: !state.networkPaused });
+    }
+    if (state.pendingFork && state.pendingFork.height != null) {
+      pendingForkHeight = Number(state.pendingFork.height);
+      pendingForkName = state.pendingFork.name || 'Hard Fork';
+      showForkProposalModal(pendingForkName, pendingForkHeight);
+    }
+    if (Array.isArray(state.orphans)) {
+      mergeKnownOrphans(state.orphans);
     }
 
     // loadBlockchainState(); // no-op in relay
@@ -1111,14 +1254,25 @@ executeDoubleSpendAttack(target1, target2, amount);
     myForkChoice = 'classic';
     if (net) net.send('hard-fork-vote', { choice: 'classic' });
     $('#forkChoiceModal').modal('hide');
-    showToastNotification('You chose the Classic Chain.', 'info');
+    showToastNotification(
+      'You chose Classic. Blocks stay classic until activation' +
+      (pendingForkHeight != null ? ' at #' + pendingForkHeight : '') + '.',
+      'info'
+    );
+    if (isMining) remineOnCanonicalTip();
   });
 
   $('#btnAcceptFork').click(function() {
     myForkChoice = 'new';
     if (net) net.send('hard-fork-vote', { choice: 'new' });
     $('#forkChoiceModal').modal('hide');
-    showToastNotification('You chose the New Chain.', 'warning');
+    showToastNotification(
+      'You chose New Chain. You still mine classic until block ' +
+      (pendingForkHeight != null ? pendingForkHeight : '?') +
+      ', then split off.',
+      'warning'
+    );
+    if (isMining) remineOnCanonicalTip();
   });
 
   // Fork toggling handlers
@@ -1126,13 +1280,17 @@ executeDoubleSpendAttack(target1, target2, amount);
     myForkChoice = 'classic';
     if (net) net.send('hard-fork-vote', { choice: 'classic' });
     showToastNotification('Switched to Classic Chain.', 'info');
-    loadBlockchainState(); // Refresh view immediately
+    if (isMining) remineOnCanonicalTip();
   });
   $('#forkControlPanel').on('click', '#btnFollowNew', function() {
     myForkChoice = 'new';
     if (net) net.send('hard-fork-vote', { choice: 'new' });
-    showToastNotification('Switched to New Chain.', 'warning');
-    loadBlockchainState(); // Refresh view immediately
+    showToastNotification(
+      'Switched to New Chain (active at block ' +
+      (pendingForkHeight != null ? pendingForkHeight : '?') + ').',
+      'warning'
+    );
+    if (isMining) remineOnCanonicalTip();
   });
 }
 
@@ -1195,13 +1353,29 @@ function handleNetworkToggled(msg) {
 
 /** Show hard-fork modal + persistent fork control panel. */
 function showForkProposalModal(name, height) {
-  pendingForkHeight = height;
-  const n = name || 'Hard Fork';
-  const h = height != null ? height : '?';
+  pendingForkHeight = height != null ? Number(height) : pendingForkHeight;
+  pendingForkName = name || pendingForkName || 'Hard Fork';
+  const n = pendingForkName;
+  const h = pendingForkHeight != null ? pendingForkHeight : '?';
 
   $('#forkProposalName').text(n);
   $('#forkProposalHeight').text(h);
   $('#forkControlPanel').show();
+  // Clarify: choice only affects blocks at/after activation
+  if (!$('#forkActivationNote').length) {
+    $('#forkControlPanel').append(
+      '<p id="forkActivationNote" class="small text-muted" style="margin-top:10px;margin-bottom:0;">' +
+      'Until block <strong>' + h + '</strong>, everyone still mines the classic chain. ' +
+      'After activation, “New Chain” miners build a separate fork from block ' +
+      (h !== '?' ? (Number(h) - 1) : 'N-1') + '.</p>'
+    );
+  } else {
+    $('#forkActivationNote').html(
+      'Until block <strong>' + h + '</strong>, everyone still mines the classic chain. ' +
+      'After activation, “New Chain” miners build a separate fork from block ' +
+      (h !== '?' ? (Number(h) - 1) : 'N-1') + '.'
+    );
+  }
 
   try {
     if (typeof $('#forkChoiceModal').modal === 'function') {
@@ -1211,7 +1385,11 @@ function showForkProposalModal(name, height) {
     console.warn('Could not open fork modal', e);
   }
 
-  showToastNotification('Hard fork proposed: ' + n + ' at block ' + h + ' — choose a side', 'warning');
+  showToastNotification(
+    'Hard fork proposed: ' + n + ' activates at block ' + h +
+    ' — choose a side (mining stays classic until then)',
+    'warning'
+  );
 }
 
 /** Sticky collusion banner (outside #miningActivity so mine loop HTML won't wipe it). */
@@ -1390,19 +1568,23 @@ function fetchDataAndMine() {
     return;
   }
 
-  // In client-relay, use the chain relayed from the admin hub
+  // In client-relay, use the chain relayed from the admin hub (+ orphan tips for hard fork)
   if (window.lastRelayedChain && window.lastRelayedChain.length > 0) {
-    const tipBlock = window.lastRelayedChain[window.lastRelayedChain.length - 1];
+    const tmpl = getMiningTemplate();
+    if (!tmpl) {
+      setTimeout(fetchDataAndMine, 300);
+      return;
+    }
     const newBlock = {
-      index: tipBlock.index + 1,
+      index: tmpl.index,
       timestamp: Date.now(),
       nonce: 0,
-      previousHash: tipBlock.hash,
+      previousHash: tmpl.previousHash,
       transactions: mempoolForNextBlock(),
       miner: userId,
       difficulty: getMiningDifficulty(),
       hash: '',
-      forkId: myForkChoice
+      forkId: tmpl.forkId
     };
     mineBlock(newBlock, lastKnownAdminSettings);
   } else {
@@ -1522,13 +1704,16 @@ function mineBlock(block, adminSettings) {
         submitMinedBlock(minedBlock, startTime, totalIterations);
         
         // Optimistically start mining the next block immediately!
+        // Keep forkId gated by activation height (do not force myForkChoice early)
         block.index = block.index + 1;
         block.previousHash = block.hash;
         block.nonce = 0;
         block.hash = '';
         block.transactions = mempoolForNextBlock();
         block.timestamp = Date.now();
-        block.forkId = myForkChoice;
+        block.forkId = effectiveForkIdForIndex(block.index);
+        // If we are on the NEW side post-activation, stay on our private tip path
+        // (template already used correct parent). Classic side will remine on hub tip.
         nonce = 0;
         
         // Reset UI for next block
@@ -1801,115 +1986,18 @@ function updateParticipantBlockchainView(chainData, participants) {
 }
 
 function updateNetworkBlockchainView(mainChain, orphans, participants) {
-  const allBlocks = [...mainChain];
-  const mainHashes = new Set(mainChain.map(b => b.hash));
-  if (orphans && orphans.length > 0) {
-    allBlocks.push(...orphans);
-  }
-  
-  if (allBlocks.length === 0) {
-    $('#networkBlockchainView').html('<p class="text-muted">No blocks yet</p>');
+  if (window.ChainDisplay && typeof ChainDisplay.renderChainHtml === 'function') {
+    $('#networkBlockchainView').html(
+      ChainDisplay.renderChainHtml({
+        mainChain: mainChain || [],
+        orphans: orphans || [],
+        participants: participants || [],
+        openTxPanels: openTxPanels
+      })
+    );
     return;
   }
-
-  const CD = window.ChainDisplay;
-  const nameLookup = CD ? CD.buildParticipantNameLookup(participants || []) : {};
-  const fmtAddr = (addr) => (CD ? CD.formatChainParticipantHtml(addr, nameLookup) : `<code>${addr || ''}</code>`);
-
-  const byIndex = {};
-  let maxIndex = 0;
-  for (const b of allBlocks) {
-    if (!byIndex[b.index]) byIndex[b.index] = [];
-    if (!byIndex[b.index].find(existing => existing.hash === b.hash)) {
-      byIndex[b.index].push(b);
-    }
-    if (b.index > maxIndex) maxIndex = b.index;
-  }
-
-  let html = '<div style="display: flex; flex-direction: column; width: 100%;">';
-
-  for (let i = 0; i <= maxIndex; i++) {
-    if (!byIndex[i]) continue;
-    
-    html += `<div style="display: flex; justify-content: center; flex-wrap: wrap; gap: 15px; margin-bottom: 0;">`;
-    
-    for (const block of byIndex[i]) {
-      const isMain = mainHashes.has(block.hash);
-      const panelClass = isMain ? (i === maxIndex ? 'panel-success' : 'panel-primary') : 'panel-warning';
-      const label = isMain ? '' : '<span class="label label-warning pull-right">FORK</span>';
-      
-      let txHtml = `${block.transactions ? block.transactions.length : 0}`;
-      if (block.transactions && block.transactions.length > 0) {
-        const txId = `network_tx_${block.hash}`;
-        const displayStyle = openTxPanels.has(txId) ? 'block' : 'none';
-        txHtml += ` <button class="btn btn-xs btn-default" onclick="toggleTransactions('${txId}')">View Details</button>`;
-        txHtml += `<div id="txDetails_${txId}" style="display:${displayStyle}; margin-top: 10px; max-height: 150px; overflow-y: auto;">`;
-        txHtml += `<table class="table table-condensed"><thead><tr><th>From</th><th>To</th><th>Amt</th></tr></thead><tbody>`;
-        for (const tx of block.transactions) {
-          txHtml += `<tr><td>${fmtAddr(tx.from)}</td><td>${fmtAddr(tx.to)}</td><td>${tx.amount}</td></tr>`;
-        }
-        txHtml += `</tbody></table></div>`;
-      }
-
-      const forkBadge = (block.forkId && block.forkId !== 'classic') ? `<span class="label label-info pull-right" style="margin-right: 5px;">${block.forkId.toUpperCase()}</span>` : '';
-      const minerId = block.miner != null ? block.miner : '';
-      html += `<div style="display: flex; flex-direction: column; align-items: center; flex: 1 1 300px; max-width: 100%;">`;
-      html += `
-      <div class="panel ${panelClass}" style="width: 100%; margin-bottom: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-        <div class="panel-heading" style="padding: 8px 15px;">
-          <strong>Block #${block.index}</strong> ${label} ${forkBadge}
-          <div class="pull-right text-muted small" style="margin-top: 2px;">${new Date(block.timestamp).toLocaleTimeString()}</div>
-        </div>
-        <div class="panel-body" style="padding: 10px 15px;">
-          <dl class="dl-horizontal" style="margin-bottom: 0;">
-            <dt style="width: 80px;">Hash</dt><dd style="margin-left: 90px;"><code style="font-size: 10px; word-break: break-all;">${block.hash.substring(0, 16)}...</code></dd>
-            <dt style="width: 80px;">Prev Hash</dt><dd style="margin-left: 90px;"><code style="font-size: 10px; word-break: break-all;">${block.previousHash.substring(0, 16)}...</code></dd>
-            <dt style="width: 80px;">Miner</dt><dd style="margin-left: 90px;">${fmtAddr(minerId)}</dd>
-            <dt style="width: 80px;">Nonce</dt><dd style="margin-left: 90px;">${block.nonce}</dd>
-            <dt style="width: 80px;">Txs</dt><dd style="margin-left: 90px;">${txHtml}</dd>
-          </dl>
-        </div>
-      </div>
-      `;
-      
-      if (i < maxIndex) {
-        const children = (byIndex[i+1] || []).filter(b => b.previousHash === block.hash);
-        if (children.length > 0) {
-          let hasFork = false;
-          for (const child of children) {
-            if (!mainHashes.has(child.hash)) hasFork = true;
-          }
-          const arrowColor = hasFork || !isMain ? '#f0ad4e' : '#bbb';
-          
-          html += `<div style="text-align: center; margin-top: 5px; margin-bottom: 5px; color: ${arrowColor}; height: 20px;">`;
-          if (children.length === 1) {
-            html += `<i class="glyphicon glyphicon-arrow-down"></i>`;
-          } else if (children.length === 2) {
-            html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(-15px) rotate(30deg);"></i>`;
-            html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(15px) rotate(-30deg);"></i>`;
-          } else {
-            const step = 60 / (children.length - 1);
-            for (let c = 0; c < children.length; c++) {
-              const angle = 30 - (c * step);
-              const transX = -angle * 0.5;
-              html += `<i class="glyphicon glyphicon-arrow-down" style="display: inline-block; transform: translateX(${transX}px) rotate(${angle}deg); margin: 0 2px;"></i>`;
-            }
-          }
-          html += `</div>`;
-        } else {
-          html += `<div style="height: 30px;"></div>`;
-        }
-      } else {
-        html += `<div style="height: 5px;"></div>`;
-      }
-      
-      html += `</div>`;
-    }
-    html += `</div>`;
-  }
-  html += '</div>';
-  
-  $('#networkBlockchainView').html(html);
+  $('#networkBlockchainView').html('<p class="text-muted">No blocks yet</p>');
 }
 
 function toggleTransactions(blockIndex) {
