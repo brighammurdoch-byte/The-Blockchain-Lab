@@ -234,6 +234,7 @@ block content
                 
                 button.btn.btn-success#submitValidatorCodeBtn Submit Modified Code
                 button.btn.btn-danger#btnSetupDoubleSpend(style="margin-left: 10px;") Simulate Double Spend
+                button.btn.btn-info#openStandaloneBtn(type="button" style="margin-left: 10px;") Open full editor
                 button.btn.btn-default#resetValidatorCodeBtn.pull-right Reset to Original
 
           // DEMOS TAB
@@ -311,6 +312,7 @@ block content
   script(src="/javascripts/lib/p2pt.bundle.js?v=fixrelay")
   script(src="/javascripts/lib/mqtt.min.js?v=mqtt1")
   script(src="/javascripts/lab/labPaths.js?v=sess1")
+  script(src="/javascripts/lab/validatorBridge.js?v=vbridge1")
   script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=fixrelay")
   script(src="/javascripts/network/MqttAdminRelayTransport.js?v=pause2")
   script(src="/javascripts/network/P2PAdminRelayTransport.js?v=mobjoin1")
@@ -324,6 +326,21 @@ block content
   
   script.
     // Do not redeclare sessionId — participate.js already owns that binding.
+    function openStandalone() {
+      var sid = (typeof sessionId !== 'undefined' && sessionId)
+        ? sessionId
+        : ((window.LabPaths && LabPaths.getSessionIdFromLocation()) || '');
+      var url = (window.LabPaths && LabPaths.labUrl)
+        ? LabPaths.labUrl('code', sid || '')
+        : ('/lab/code.html?session=' + encodeURIComponent(sid || ''));
+      window.open(url, '_blank');
+    }
+    $(function () {
+      $('#openStandaloneBtn').on('click', function (e) {
+        e.preventDefault();
+        openStandalone();
+      });
+    });
     function openDemos() {
       var sid = (typeof sessionId !== 'undefined' && sessionId)
         ? sessionId

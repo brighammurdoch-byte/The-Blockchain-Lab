@@ -1192,7 +1192,11 @@ window.sha256 = function(data) {
 
 // Apply participant's custom validator code to their local node
 function applyCustomValidator(code) {
-  // Defensive: corrupt JSON / jQuery oddities have delivered objects here before
+  if (window.ValidatorBridge) {
+    const result = ValidatorBridge.applyToWindow(code, originalValidatorCode);
+    if (result.skip) return true;
+    return result.ok ? true : result.error;
+  }
   if (code && typeof code === 'object' && typeof code.value === 'string') {
     code = code.value;
   }
@@ -1200,7 +1204,6 @@ function applyCustomValidator(code) {
     return 'Validator code must be a string';
   }
   if (code.includes('WALLET DOUBLE SPEND SCRIPT')) {
-    // Wallet attack scripts are not validators — leave mining rules alone
     return true;
   }
   if (!code.trim()) {
@@ -1226,8 +1229,6 @@ function applyCustomValidator(code) {
       + '\nreturn new BlockValidator();';
     
     window.customValidator = new Function(browserCode)();
-    // Default classroom validator matches the worker's isValidHash. Only force
-    // main-thread mining when the student has edited the validator code.
     const orig = (typeof originalValidatorCode === 'string') ? originalValidatorCode.trim() : '';
     window.__labValidatorIsCustom = !!(orig && code.trim() !== orig);
     return true;
@@ -1360,6 +1361,23 @@ $(document).ready(function() {
   }, 2500);
 
   loadValidatorCode();
+
+  if (window.ValidatorBridge && typeof ValidatorBridge.listen === 'function') {
+    ValidatorBridge.listen(function (msg) {
+      if (!msg) return;
+      if (msg.sessionId && sessionId && String(msg.sessionId).toUpperCase() !== String(sessionId).toUpperCase()) return;
+      if (msg.type === 'reset') {
+        var src = (typeof originalValidatorCode === 'string') ? originalValidatorCode : '';
+        $('#validatorCodeEditor').val(src);
+        applyCustomValidator(src);
+        return;
+      }
+      if (msg.type === 'apply' && msg.code) {
+        $('#validatorCodeEditor').val(msg.code);
+        applyCustomValidator(msg.code);
+      }
+    });
+  }
   
   // Set up event handlers
   setupEventHandlers();
@@ -2115,12 +2133,13 @@ function setupEventHandlers() {
       return;
     }
 
-    // Apply to local node immediately
+    // Apply to local node immediately (and any other tabs via ValidatorBridge)
     const compileResult = applyCustomValidator(modifiedCode);
     if (compileResult !== true) {
       showToastNotification('Validator Compile Error: ' + compileResult, 'error');
       window.customValidator = { _broken: true }; // Intentionally break their miner
     } else {
+      if (window.ValidatorBridge) ValidatorBridge.save(sessionId, modifiedCode);
       showToastNotification('Custom validator rules applied to your node!', 'success');
     }
   });
@@ -2130,6 +2149,7 @@ function setupEventHandlers() {
       try { delete window.customValidator; } catch (e) { window.customValidator = null; }
       const src = (typeof originalValidatorCode === 'string') ? originalValidatorCode : '';
       $('#validatorCodeEditor').val(src);
+      if (window.ValidatorBridge) ValidatorBridge.clear(sessionId);
       const resetResult = applyCustomValidator(src);
       $('#executeDoubleSpendBtn').hide();
       $('#submitValidatorCodeBtn').show();
@@ -3005,16 +3025,20 @@ function loadValidatorCode() {
     const src = normalizeValidatorSource(data && data.code);
     if (src) {
       originalValidatorCode = src;
-      $('#validatorCodeEditor').val(src);
-      applyCustomValidator(src);
+      var saved = (window.ValidatorBridge && ValidatorBridge.load(sessionId)) || '';
+      var use = (saved && saved.trim() && saved.trim() !== src.trim()) ? saved : src;
+      $('#validatorCodeEditor').val(use);
+      applyCustomValidator(use);
     }
   }).fail(function() {
     $.get('/lab/validator-code', function(data) {
       const src = normalizeValidatorSource(data && data.code);
       if (data && data.success && src) {
         originalValidatorCode = src;
-        $('#validatorCodeEditor').val(src);
-        applyCustomValidator(src);
+        var savedFb = (window.ValidatorBridge && ValidatorBridge.load(sessionId)) || '';
+        var useFb = (savedFb && savedFb.trim() && savedFb.trim() !== src.trim()) ? savedFb : src;
+        $('#validatorCodeEditor').val(useFb);
+        applyCustomValidator(useFb);
       } else {
         $('#validatorCodeEditor').val('// Error loading code: ' + ((data && data.error) || 'unknown'));
       }

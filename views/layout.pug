@@ -58,6 +58,11 @@ html
                   a(href='/tokens') #{__('Tokens')}
                 li(class={active: page === 'coinbase'})
                   a(href='/coinbase') #{__('Coinbase')}
+                li.divider
+                li(class={active: page === 'bitcoin'})
+                  a(href='/bitcoin') #{__('Bitcoin rules')}
+                li(class={active: page === 'ethereum'})
+                  a(href='/ethereum') #{__('Ethereum rules')}
             li(class={active: page === 'lab'})
               a(href='/lab')
                 | #{__('Full Simulation')}

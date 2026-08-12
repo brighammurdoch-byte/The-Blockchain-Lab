@@ -513,3 +513,15 @@ body.lab-app #blockchainView .panel:hover {
     padding: 22px 18px;
   }
 }
+
+.lab-protocol h1 {
+  font-family: var(--lab-display);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin-top: 6px;
+}
+
+.lab-protocol .alert-warning {
+  border: none;
+  border-left: 4px solid var(--lab-amber);
+}

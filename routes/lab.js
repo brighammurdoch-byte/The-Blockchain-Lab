@@ -18,6 +18,14 @@ router.get('/', function(req, res, next) {
   res.render('lab/index', { title: 'Blockchain Lab' });
 });
 
+router.get('/bitcoin', function(req, res) {
+  res.render('lab/bitcoin', { page: 'bitcoin', title: 'Bitcoin rules lab', sessionId: '', bodyClass: 'lab-app' });
+});
+
+router.get('/ethereum', function(req, res) {
+  res.render('lab/ethereum', { page: 'ethereum', title: 'Ethereum rules lab', sessionId: '', bodyClass: 'lab-app' });
+});
+
 router.get('/admin/:sessionId', function(req, res, next) {
   const sessionId = req.params.sessionId;
   res.render('lab/admin', { sessionId, title: 'Blockchain Lab - Admin' });
@@ -36,6 +44,9 @@ router.get('/observe/:sessionId', function(req, res, next) {
 router.get('/code/:sessionId', function(req, res, next) {
   const sessionId = req.params.sessionId;
   res.render('lab/code-editor', { sessionId, title: 'Blockchain Lab - Code Editor' });
+});
+router.get('/code.html', function (req, res) {
+  res.render('lab/code-editor', { sessionId: req.query.session || '', title: 'Blockchain Lab - Code Editor' });
 });
 
 // Guided demos (static educational content; session optional)

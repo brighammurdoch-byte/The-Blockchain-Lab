@@ -36,7 +36,9 @@
     blockchain: true,
     distributed: true,
     tokens: true,
-    coinbase: true
+    coinbase: true,
+    bitcoin: true,
+    ethereum: true
   };
 
   function isSessionCode(value) {
@@ -72,6 +74,10 @@
     var base = getBasePath();
     var code = sessionId ? String(sessionId).toUpperCase() : '';
     var staticMode = isStaticMode();
+
+    if (page === 'bitcoin' || page === 'ethereum') {
+      return staticMode ? (base + '/' + page + '/') : (base + '/' + page);
+    }
 
     if (staticMode) {
       var file = page === 'index' ? 'index.html' : (page + '.html');

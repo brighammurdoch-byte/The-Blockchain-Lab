@@ -1,0 +1,126 @@
+extends ../layout
+
+block config
+  - bodyClass = 'lab-app'
+  - page = 'bitcoin'
+
+block extra_css
+  link(rel='stylesheet', href='/stylesheets/lab-theme.css?v=labui2')
+
+block content
+  .container-fluid
+    .lab-protocol
+      span.lab-landing__eyebrow Protocol twin
+      h1 Bitcoin rules lab
+      p.lead
+        | A Bitcoin-like chain: SHA256d proof of work, UTXOs, 50 BTC subsidy and halvings.
+        | Finance students can just mine. Coding students can edit Core-shaped C++.
+
+      .alert.alert-warning
+        strong This is not bitcoind.
+        |
+        | Bitcoin Core is real C++ compiled with clang/gcc. Your browser cannot do that.
+        | The editor is trimmed to look like
+        code  validation.cpp
+        |  /
+        code  pow.cpp
+        | . On Apply, a translator reads the constants and checks (subsidy, halving interval, MAX_MONEY, empty vin) and feeds them into a JavaScript engine that implements those same Bitcoin rules. Change
+        code  50 * COIN
+        |  and the next coinbase really pays 100. That is the same *kind* of experiment as editing Core — not the same as merging a PR.
+
+      .row
+        .col-md-5
+          .panel.panel-primary
+            .panel-heading
+              h3.panel-title Chain
+            .panel-body
+              .row.text-center
+                .col-xs-4
+                  h3#btcHeight 0
+                  small Height
+                .col-xs-4
+                  h3#btcSubsidy —
+                  small Next subsidy
+                .col-xs-4
+                  h3#btcBalance —
+                  small Your mature BTC
+              p
+                small Tip:
+                |
+                code#btcTip
+              p
+                small UTXOs:
+                |
+                span#btcUtxos 0
+                |  · mempool:
+                |
+                span#btcMempool 0
+                |  · blocks to next halving:
+                |
+                span#btcNextHalving —
+              p
+                button.btn.btn-success#btcMineBtn Mine a block
+              form.form-inline(style="margin-top:10px;")
+                .form-group
+                  input.form-control#btcSendTo(type="text" placeholder="peer address" value="peer")
+                .form-group
+                  input.form-control#btcSendAmt(type="number" step="0.01" min="0.01" value="1" style="width:100px")
+                button.btn.btn-primary#btcSendBtn(type="button") Send
+              p.small.text-muted Coinbase needs maturity before you can spend it (Core: 100 blocks; editable in the C++).
+
+          .panel.panel-default
+            .panel-heading
+              h3.panel-title Recent blocks
+            .panel-body(style="max-height:320px;overflow:auto;")
+              table.table.table-condensed
+                thead
+                  tr
+                    th #
+                    th Hash
+                    th Miner
+                    th Subsidy
+                    th Txs
+                tbody#btcBlocks
+
+        .col-md-7
+          .panel.panel-info
+            .panel-heading
+              h3.panel-title
+                | Standalone —
+                code consensus/*.cpp
+            .panel-body
+              #btcEditor(style="height:420px;border:1px solid #ddd;")
+              p(style="margin-top:10px;")
+                button.btn.btn-success#btcApplyBtn Apply C++ rules
+                |
+                |
+                button.btn.btn-default#btcResetBtn Reset
+              #btcTranslateNotes.alert.alert-success(style="display:none;margin-top:10px;")
+
+          .panel.panel-default
+            .panel-heading
+              h3.panel-title What happens when you click Apply
+            .panel-body
+              ol
+                li The page does
+                  strong  not
+                  |  compile C++.
+                li
+                  | A small reader scans this source for Core names:
+                  code  GetBlockSubsidy
+                  | ,
+                  code  nSubsidyHalvingInterval
+                  | ,
+                  code  MAX_MONEY
+                  | ,
+                  code  vin.empty()
+                  | .
+                li Those values become the live JavaScript UTXO engine’s parameters.
+                li The next block you mine uses the new subsidy / checks. Peers on this page are solo unless you share a screenshot — this twin is for rule experiments, not a classroom mesh (use Full Simulation for that).
+
+  script(src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/ace.min.js")
+  script(src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/mode-c_cpp.min.js")
+  script(src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/theme-monokai.min.js")
+  script(src="/javascripts/chains/bitcoinRules.js?v=btc1")
+  script(src="/javascripts/chains/bitcoinTranslate.js?v=btc1")
+  script(src="/javascripts/lab/bitcoinPage.js?v=btc1")

@@ -27,13 +27,14 @@ block content
                 strong BlockValidator.js
               p.text-muted
                 small
-                  | This is the validation code running on your miner. Modify it to experiment with 
-                  strong forks
-                  | , 
-                  strong attacks
-                  | , or 
-                  strong consensus changes
-                  | !
+                  | This is the same 
+                  code blockValidator.js
+                  |  your miner compiles and runs. Finance students can ignore this page. Coding students can change consensus here — Submit applies it to every miner tab in this browser for the current session.
+              .alert.alert-info(style="margin-bottom:12px;")
+                strong How this runs:
+                |  the browser cannot execute Node’s 
+                code require('crypto')
+                | . On Submit we compile this source in-page (same path as the miner tab) and replace your node’s validator. Other students still use their own copy unless they submit too.
               
               // Syntax highlighted code editor
               pre#codeEditor(style="height: 600px; border: 1px solid #ddd; padding: 10px;")
@@ -201,6 +202,7 @@ block content
   script(src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/ace.min.js")
   script(src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/mode-javascript.min.js")
   script(src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/theme-monokai.min.js")
+  script(src="/javascripts/lab/validatorBridge.js?v=vbridge1")
 
   script.
     // Initialize Ace Editor (pin CDN base so workers don't 404 under /lab/)
@@ -263,31 +265,58 @@ block content
         });
     });
 
-    // Submit modified code (client-side sandbox — live miners use the Participate tab)
+    function currentSession() {
+      if (sessionId && String(sessionId).trim()) return String(sessionId).trim().toUpperCase();
+      return (window.LabPaths && LabPaths.getSessionIdFromLocation()) || '';
+    }
+
+    function applyLive(code, announce) {
+      if (!window.ValidatorBridge) {
+        alert('Validator bridge failed to load. Refresh the page.');
+        return false;
+      }
+      var result = ValidatorBridge.applyToWindow(code, originalCode);
+      if (!result.ok) {
+        alert('Validator compile error: ' + result.error);
+        return false;
+      }
+      if (result.empty) {
+        ValidatorBridge.clear(currentSession());
+      } else if (!result.skip) {
+        ValidatorBridge.save(currentSession(), code);
+      }
+      updateStatus(result.isCustom ? 'modified' : 'original');
+      if (announce) {
+        var sid = currentSession();
+        document.getElementById('networkStatus').innerHTML =
+          '<strong style="color: orange;">Your miner rules are now MODIFIED.</strong> ' +
+          (sid
+            ? 'Session <code>' + sid + '</code> miner tabs in this browser will use this code (open or refresh a miner if it was already running).'
+            : 'No session in the URL — this browser will apply the code to the next miner you join. Open a miner from a classroom session to use it live.');
+      }
+      return true;
+    }
+
+    // Submit modified code — same compile path as the miner tab
     document.getElementById('submitCode').addEventListener('click', function() {
       var modifiedCode = editor.getValue();
-      
       if (modifiedCode === originalCode) {
         alert('You haven\'t made any changes to the code.');
         return;
       }
-
-      if (!confirm('Apply this validator in the sandbox? Live miners apply changes from the Participate page (Your Validator Code tab).')) {
+      if (!confirm('Apply this validator to your miner node? Other students keep their own rules unless they submit the same change.')) {
         return;
       }
-
-      try { localStorage.setItem('labCustomValidator', modifiedCode); } catch (e) {}
-      updateStatus('modified');
-      document.getElementById('networkStatus').innerHTML = 
-        '<strong style="color: orange;">⚠ Sandbox validator is now MODIFIED.</strong> ' +
-        'To run this against the classroom chain, paste it into <em>Your Validator Code</em> on a miner tab.';
+      applyLive(modifiedCode, true);
     });
 
     function resetCode() {
       if (confirm('Reset validator code to original? Your modifications will be lost.')) {
         editor.setValue(originalCode);
+        if (window.ValidatorBridge) ValidatorBridge.clear(currentSession());
+        if (window.ValidatorBridge) ValidatorBridge.applyToWindow(originalCode, originalCode);
         updateStatus('original');
-        document.getElementById('networkStatus').innerHTML = '';
+        document.getElementById('networkStatus').innerHTML = '<small class="text-muted">Using original validator code.</small>';
       }
     }
 
@@ -350,10 +379,17 @@ block content
         .catch(function() {});
     }
 
-    // Load code on page load
+    // Load code on page load (prefer a previously submitted custom validator)
     window.addEventListener('load', function() {
       document.getElementById('loadCode').click();
       applyDemoFromQuery();
+      setTimeout(function () {
+        var saved = window.ValidatorBridge && ValidatorBridge.load(currentSession());
+        if (saved && originalCode && saved.trim() !== originalCode.trim()) {
+          editor.setValue(saved);
+          applyLive(saved, true);
+        }
+      }, 400);
     });
 
     // WebSocket listener for network changes
