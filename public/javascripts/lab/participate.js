@@ -21,6 +21,9 @@ let mainThreadMineTimer = null;
 let lastRemineAt = 0;
 /** Highest block index the hub has confirmed (classic main). Caps optimistic race-ahead. */
 let hubConfirmedHeight = 0;
+/** When set, we submitted hub+1 and are waiting for the hub before mining further. */
+let waitingForHubSince = 0;
+let waitingForHubIndex = null;
 let openTxPanels = new Set();
 let originalValidatorCode = '';
 let localChainTipHash = null;
@@ -99,6 +102,48 @@ function remineOnCanonicalTip(opts) {
   // Invalidate in-flight worker job; fetchDataAndMine posts a new gen
   miningJobGen++;
   fetchDataAndMine();
+}
+
+/** Last classic block at or below the hub-confirmed height (ignore optimistic tail). */
+function getHubConfirmedClassicTip(main) {
+  main = main || window.lastRelayedChain || [];
+  for (let i = main.length - 1; i >= 0; i--) {
+    const b = main[i];
+    if (!b || !b.hash) continue;
+    if (isNewForkId(b.forkId)) continue;
+    if (b.index == null || Number(b.index) <= hubConfirmedHeight) return b;
+  }
+  return null;
+}
+
+function trimOptimisticTail() {
+  const chain = window.lastRelayedChain;
+  if (!chain || !chain.length) return;
+  while (
+    chain.length &&
+    chain[chain.length - 1] &&
+    chain[chain.length - 1].index != null &&
+    Number(chain[chain.length - 1].index) > hubConfirmedHeight
+  ) {
+    chain.pop();
+  }
+}
+
+function showWaitingForHub(index) {
+  waitingForHubSince = waitingForHubSince || Date.now();
+  waitingForHubIndex = index != null ? Number(index) : waitingForHubIndex;
+  const label = waitingForHubIndex != null ? (' #' + waitingForHubIndex) : '';
+  $('#miningActivity').html(
+    '<div class="alert alert-warning">' +
+      '<p><strong>Waiting for the network to confirm block' + label + '…</strong></p>' +
+      '<p class="small" style="margin-bottom:0;">You already found the next block. Hashing pauses until the instructor hub accepts it, then mining continues. If it never arrives, we retry automatically.</p>' +
+    '</div>'
+  );
+}
+
+function clearWaitingForHub() {
+  waitingForHubSince = 0;
+  waitingForHubIndex = null;
 }
 
 /** Absolute URL helpers for the mining worker (blob importScripts needs absolute). */
@@ -342,25 +387,27 @@ function handleMiningWorkerMessage(ev) {
 
     // Continue at most one block ahead of hub confirmation on the classic main path.
     // NEW hard-fork side is orphaned by design and may lead the classic tip.
-    // Further classic work waits for block-accepted → forced remine.
     if (!isMining || networkPaused) return;
     const capClassic = myForkChoice !== 'new';
     const foundIndex = block.index != null ? Number(block.index) : 0;
-    if (capClassic && foundIndex > hubConfirmedHeight + 1) {
-      updateMiningActivityUi(foundIndex);
+    if (capClassic && foundIndex >= hubConfirmedHeight + 1) {
+      showWaitingForHub(foundIndex);
       return;
     }
     const nextTmpl = getMiningTemplate();
-    if (!nextTmpl) return;
-    // If classic template is already more than 1 past hub tip, wait for hub
+    if (!nextTmpl || nextTmpl.waitForHub) {
+      showWaitingForHub((nextTmpl && nextTmpl.waitingOn) || foundIndex);
+      return;
+    }
     if (
       capClassic &&
       nextTmpl.index != null &&
       Number(nextTmpl.index) > hubConfirmedHeight + 1
     ) {
-      updateMiningActivityUi(nextTmpl.index);
+      showWaitingForHub(hubConfirmedHeight + 1);
       return;
     }
+    clearWaitingForHub();
     const nextBlock = {
       index: nextTmpl.index,
       timestamp: Date.now(),
@@ -423,8 +470,10 @@ function startWorkerMiningJob(block) {
     Number(block.index) > hubConfirmedHeight + 1
   ) {
     debugWarn('Skip mining job ahead of hub', block.index, 'hub', hubConfirmedHeight);
+    showWaitingForHub(hubConfirmedHeight + 1);
     return;
   }
+  clearWaitingForHub();
   const worker = ensureMiningWorker();
   if (!worker) {
     mineBlockOnMainThread(block, lastKnownAdminSettings);
@@ -505,6 +554,15 @@ function startMiningKeepalive() {
       return;
     }
     // Worker/main loop went silent (tab freeze / process kill) — re-kick
+    // Submitted hub+1 and the worker is idle on purpose. If the hub never
+    // confirms, drop the optimistic tail and remine the same height.
+    if (waitingForHubSince && Date.now() - waitingForHubSince > 8000) {
+      debugWarn('Hub confirm timed out — retrying at confirmed tip', hubConfirmedHeight);
+      trimOptimisticTail();
+      clearWaitingForHub();
+      remineOnCanonicalTip({ force: true });
+      return;
+    }
     if (Date.now() - lastWorkerProgressAt > 12000) {
       debugWarn('Mining silent — restarting job');
       // Allow another worker attempt after a long freeze (mobile OS kill)
@@ -765,6 +823,9 @@ function applyCanonicalChain(chain, opts) {
     hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(newTip.index) || 0);
   } else if (chain.length) {
     hubConfirmedHeight = Math.max(hubConfirmedHeight, chain.length - 1);
+  }
+  if (waitingForHubIndex != null && hubConfirmedHeight >= waitingForHubIndex) {
+    clearWaitingForHub();
   }
 
   // Always remine after a hub sync while mining — cancels private optimistic forks
@@ -1084,13 +1145,33 @@ function getMiningTemplate() {
   const classicTip = getClassicMiningTip(main);
   if (!classicTip) return null;
 
-  // Classic miners (or no fork): only ever extend the classic tip
+  // Classic miners (or no fork): extend the *hub-confirmed* tip only.
+  // lastRelayedChain may include one optimistic local block; using that as
+  // parent produced "working on #23" with no #22 while hashing was skipped.
   if (myForkChoice !== 'new' || act == null) {
-    const index = (classicTip.index != null ? classicTip.index : 0) + 1;
+    const hubTip = getHubConfirmedClassicTip(main) || classicTip;
+    if (!hubTip) return null;
+    const nextIndex = (hubTip.index != null ? Number(hubTip.index) : 0) + 1;
+    const tail = main[main.length - 1];
+    if (
+      tail &&
+      tail.hash &&
+      tail.hash !== hubTip.hash &&
+      tail.index != null &&
+      Number(tail.index) >= nextIndex
+    ) {
+      return {
+        waitForHub: true,
+        waitingOn: nextIndex,
+        previousHash: hubTip.hash,
+        index: nextIndex,
+        forkId: effectiveForkIdForIndex(nextIndex)
+      };
+    }
     return {
-      previousHash: classicTip.hash,
-      index: index,
-      forkId: effectiveForkIdForIndex(index)
+      previousHash: hubTip.hash,
+      index: nextIndex,
+      forkId: effectiveForkIdForIndex(nextIndex)
     };
   }
 
@@ -2735,6 +2816,11 @@ function fetchDataAndMine() {
       setTimeout(fetchDataAndMine, 300);
       return;
     }
+    if (tmpl.waitForHub) {
+      showWaitingForHub(tmpl.waitingOn);
+      return;
+    }
+    clearWaitingForHub();
     const newBlock = {
       index: tmpl.index,
       timestamp: Date.now(),
@@ -2851,12 +2937,12 @@ function mineBlockOnMainThread(block, adminSettings) {
         const capClassic = myForkChoice !== 'new';
         if (
           !nextTmpl ||
+          nextTmpl.waitForHub ||
           (capClassic &&
             nextTmpl.index != null &&
             Number(nextTmpl.index) > hubConfirmedHeight + 1)
         ) {
-          // Wait for hub confirmation before racing further on classic
-          updateMiningActivityUi(minedBlock.index);
+          showWaitingForHub((nextTmpl && nextTmpl.waitingOn) || minedBlock.index);
           return;
         }
         block.index = nextTmpl.index;
