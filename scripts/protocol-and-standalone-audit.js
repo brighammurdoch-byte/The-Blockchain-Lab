@@ -80,12 +80,22 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
       }
     }
 
-    // Bitcoin page
+    // Bitcoin classroom landing
     await standalone.goto(SITE + '/bitcoin/', { waitUntil: 'domcontentloaded', timeout: 60000 });
     await wait(1000);
     const btcH1 = await standalone.locator('h1').textContent();
     if (/Bitcoin/i.test(btcH1 || '')) pass('Bitcoin page heading', btcH1.trim());
     else fail('Bitcoin page heading', btcH1);
+    const land = await standalone.locator('body').innerText();
+    if (await standalone.locator('#createSessionBtn').count() && await standalone.locator('#joinForm').count()) {
+      pass('Bitcoin classroom has admin + join', 'create + join present');
+    } else fail('Bitcoin classroom has admin + join', land.slice(0, 180));
+    if (/not bitcoind/i.test(land)) pass('Bitcoin landing disclaimer', 'not bitcoind');
+    else fail('Bitcoin landing disclaimer', 'missing');
+
+    // Optional standalone C++ twin
+    await standalone.goto(SITE + '/bitcoin/rules/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await wait(1000);
     const explain = await standalone.locator('body').innerText();
     if (/not bitcoind|cannot compile C\+\+|translator/i.test(explain)) {
       pass('Bitcoin explains background twin', 'disclaimer present');

@@ -6,6 +6,13 @@
  */
 
 $(document).ready(function () {
+  var chainFlavor = (window.LabPaths && LabPaths.getChainFlavor)
+    ? LabPaths.getChainFlavor()
+    : 'classic';
+  if (window.LabPaths && typeof LabPaths.applyClassroomTheme === 'function') {
+    LabPaths.applyClassroomTheme();
+  }
+
   function go(page, code) {
     if (window.LabPaths && typeof LabPaths.labUrl === 'function') {
       window.location.href = LabPaths.labUrl(page, code);
@@ -50,6 +57,11 @@ $(document).ready(function () {
       localStorage.setItem('networkingMode_' + roomCode, mode);
       localStorage.setItem('joinCode_' + roomCode, roomCode);
       localStorage.setItem('isAdmin_' + roomCode, 'true');
+      if (window.LabPaths && LabPaths.persistChainFlavor) {
+        LabPaths.persistChainFlavor(roomCode, chainFlavor);
+      } else {
+        localStorage.setItem('chainFlavor_' + roomCode, chainFlavor);
+      }
       if (net.userId) {
         localStorage.setItem('adminUserId_' + roomCode, net.userId);
       }
@@ -96,6 +108,9 @@ $(document).ready(function () {
       localStorage.setItem('joinCode_' + code, code);
       localStorage.setItem('userId_' + code, 'user-' + Date.now().toString(36));
       localStorage.setItem('networkingMode_' + code, 'admin-relay');
+      if (window.LabPaths && LabPaths.persistChainFlavor) {
+        LabPaths.persistChainFlavor(code, chainFlavor);
+      }
       go(role === 'wallet' ? 'observe' : 'participate', code);
     }).catch(function (err) {
       console.warn('[Join] probe failed', err);

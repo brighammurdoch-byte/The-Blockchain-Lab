@@ -38,7 +38,8 @@
     tokens: true,
     coinbase: true,
     bitcoin: true,
-    ethereum: true
+    ethereum: true,
+    rules: true
   };
 
   function isSessionCode(value) {
@@ -66,40 +67,123 @@
         document.documentElement.getAttribute('data-lab-static') === 'true'));
   }
 
+  function persistChainFlavor(sessionId, flavor) {
+    var code = String(sessionId || '').toUpperCase();
+    var f = String(flavor || '').toLowerCase();
+    if (!code || !f) return;
+    try { global.localStorage.setItem('chainFlavor_' + code, f); } catch (e) {}
+  }
+
+  function getChainFlavor() {
+    try {
+      var params = new URLSearchParams((global.location && global.location.search) || '');
+      var q = String(params.get('chain') || params.get('protocol') || '').toLowerCase();
+      if (q === 'btc') q = 'bitcoin';
+      if (q === 'eth') q = 'ethereum';
+      if (q === 'bitcoin' || q === 'ethereum') return q;
+    } catch (e) {}
+
+    var path = (global.location && global.location.pathname) || '';
+    if (/\/bitcoin(\/|$|\.)/i.test(path)) return 'bitcoin';
+    if (/\/ethereum(\/|$|\.)/i.test(path)) return 'ethereum';
+
+    try {
+      var code = getSessionIdFromLocation();
+      if (code && global.localStorage) {
+        var stored = String(global.localStorage.getItem('chainFlavor_' + code) || '').toLowerCase();
+        if (stored === 'btc') stored = 'bitcoin';
+        if (stored === 'bitcoin' || stored === 'ethereum') return stored;
+      }
+    } catch (e2) {}
+    return 'classic';
+  }
+
+  function withQuery(url, key, value) {
+    if (!url || !key || value == null || value === '') return url;
+    if (new RegExp('[?&]' + key + '=').test(url)) return url;
+    return url + (url.indexOf('?') >= 0 ? '&' : '?') + encodeURIComponent(key) + '=' + encodeURIComponent(value);
+  }
+
   /**
-   * @param {'index'|'admin'|'participate'|'observe'|'demos'|'code'} page
+   * @param {'index'|'admin'|'participate'|'observe'|'demos'|'code'|'bitcoin'|'ethereum'|'bitcoin-rules'} page
    * @param {string} [sessionId]
    */
   function labUrl(page, sessionId) {
     var base = getBasePath();
     var code = sessionId ? String(sessionId).toUpperCase() : '';
     var staticMode = isStaticMode();
+    var chain = getChainFlavor();
 
-    if (page === 'bitcoin' || page === 'ethereum') {
-      return staticMode ? (base + '/' + page + '/') : (base + '/' + page);
+    if (page === 'bitcoin-rules') {
+      return staticMode ? (base + '/bitcoin/rules/') : (base + '/bitcoin/rules');
     }
 
+    if (page === 'bitcoin' || page === 'ethereum') {
+      var land = staticMode ? (base + '/' + page + '/') : (base + '/' + page);
+      if (code) land += '?join=' + encodeURIComponent(code);
+      return land;
+    }
+
+    var url;
     if (staticMode) {
       var file = page === 'index' ? 'index.html' : (page + '.html');
-      var url = base + '/lab/' + file;
+      url = base + '/lab/' + file;
       if (code && page === 'index') {
         url += '?join=' + encodeURIComponent(code);
       } else if (code && page !== 'demos') {
         url += '?session=' + encodeURIComponent(code);
       }
-      return url;
+    } else if (page === 'index') {
+      url = base + '/lab' + (code ? ('?join=' + encodeURIComponent(code)) : '');
+    } else if (page === 'demos') {
+      url = base + '/lab/demos' + (code ? '/' + code : '');
+    } else {
+      url = base + '/lab/' + page + (code ? '/' + code : '');
     }
 
-    if (page === 'index') {
-      return base + '/lab' + (code ? ('?join=' + encodeURIComponent(code)) : '');
+    if (chain && chain !== 'classic' && page !== 'index' && page !== 'demos') {
+      url = withQuery(url, 'chain', chain);
     }
-    if (page === 'demos') return base + '/lab/demos' + (code ? '/' + code : '');
-    return base + '/lab/' + page + (code ? '/' + code : '');
+    return url;
   }
 
   /** Path or site-relative join link for students (landing with code pre-filled). */
   function joinUrl(sessionId) {
+    if (getChainFlavor() === 'bitcoin') return labUrl('bitcoin', sessionId);
+    if (getChainFlavor() === 'ethereum') return labUrl('ethereum', sessionId);
     return labUrl('index', sessionId);
+  }
+
+  function applyClassroomTheme() {
+    var flavor = getChainFlavor();
+    try {
+      if (typeof document !== 'undefined' && document.documentElement) {
+        document.documentElement.setAttribute('data-chain-flavor', flavor);
+      }
+    } catch (e) {}
+    if (flavor !== 'bitcoin') return flavor;
+
+    var $ = global.jQuery || global.$;
+    if ($) {
+      $('.js-unit-label').text('BTC');
+      $('#miningRewardLabel').text('Block subsidy (BTC)');
+      $('.js-endowment-note').text('Classroom faucet so wallets can send before they mine.');
+      if (!$('#chainFlavorBanner').length && $('.lab-session-banner').length) {
+        $('.lab-session-banner').prepend(
+          '<div class="col-md-12" id="chainFlavorBanner">' +
+            '<div class="alert alert-warning" style="margin-bottom:12px;">' +
+            '<strong>Bitcoin classroom.</strong> Instructor hub plus miner/wallet nodes — same flow as the main lab. ' +
+            'Subsidy starts at 50 BTC and halves every 21 blocks (Core is 210,000; scaled for class). ' +
+            'This is a teaching twin, not bitcoind.</div></div>'
+        );
+      }
+    }
+    try {
+      if (typeof document !== 'undefined' && document.title && !/bitcoin/i.test(document.title)) {
+        document.title = document.title.replace('Blockchain Lab', 'Bitcoin Lab');
+      }
+    } catch (e2) {}
+    return flavor;
   }
 
   /** Absolute https://… join URL for QR codes and sharing. */
@@ -121,6 +205,9 @@
     getBasePath: getBasePath,
     getSessionIdFromLocation: getSessionIdFromLocation,
     isSessionCode: isSessionCode,
+    getChainFlavor: getChainFlavor,
+    persistChainFlavor: persistChainFlavor,
+    applyClassroomTheme: applyClassroomTheme,
     labUrl: labUrl,
     joinUrl: joinUrl,
     absoluteJoinUrl: absoluteJoinUrl,

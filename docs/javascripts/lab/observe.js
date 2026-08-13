@@ -54,6 +54,12 @@ if (!$('#toastStyles').length) {
 
 $(document).ready(function() {
   sessionId = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || '';
+  if (window.LabPaths && LabPaths.persistChainFlavor) {
+    LabPaths.persistChainFlavor(sessionId, LabPaths.getChainFlavor());
+  }
+  if (window.LabPaths && typeof LabPaths.applyClassroomTheme === 'function') {
+    LabPaths.applyClassroomTheme();
+  }
   
   // Get userId from localStorage (set by landing.js when joining)
   userId = localStorage.getItem('userId_' + sessionId);

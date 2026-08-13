@@ -72,8 +72,9 @@ block content
                 | Fine steps between leading zeros. When auto is on, these move for you.
 
             .form-group
-              label Mining Reward (coins):
+              label#miningRewardLabel Mining Reward (coins):
               input.form-control#miningReward(type="number", min="1", max="100", value="10")
+              small.form-text.text-muted#nextSubsidyNote(style="display:none;")
 
             .form-group
               label Network Mode:
@@ -108,8 +109,8 @@ block content
               p.text-center(style="margin-bottom: 4px;")
                 strong Balance
               h3.text-center#yourBalance(style="margin: 0;") 0
-              p.text-center.text-muted(style="margin: 0;") coins
-              small.text-muted(style="display:block; text-align:center; margin-top: 6px;")
+              p.text-center.text-muted.js-unit-label(style="margin: 0;") coins
+              small.text-muted.js-endowment-note(style="display:block; text-align:center; margin-top: 6px;")
                 | Starts with 100 demo coins so you can fund students.
             form#transactionForm
               .form-group
@@ -308,14 +309,14 @@ block content
   script(src="/javascripts/lib/qrcode.min.js?v=labqr2")
   script(src="/javascripts/lib/p2pt.bundle.js?v=fixrelay")
   script(src="/javascripts/lib/mqtt.min.js?v=mqtt1")
-  script(src="/javascripts/lab/labPaths.js?v=sess1")
+  script(src="/javascripts/lab/labPaths.js?v=btcclass1")
   script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=fixrelay")
   script(src="/javascripts/network/MqttAdminRelayTransport.js?v=pause2")
   script(src="/javascripts/network/P2PAdminRelayTransport.js?v=mobjoin1")
   script(src="/javascripts/network/AdminRelayCoordinator.js?v=forkfix1")
   script(src="/javascripts/network/Persistence.js?v=fixrelay")
-  script(src="/javascripts/network/RelayBlockchainState.js?v=oneslot1")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=btcclass1")
   script(src="/javascripts/network/NetworkManager.js?v=mqtt1")
   script(src="/javascripts/lab/chainDisplay.js?v=bgmine2")
   script(src="/javascripts/lab/networkVisualization.js?v=gossip1")
-  script(src="/javascripts/lab/admin.js?v=forkfix1")
+  script(src="/javascripts/lab/admin.js?v=btcclass1")

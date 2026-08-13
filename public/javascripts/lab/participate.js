@@ -1573,6 +1573,12 @@ function resolveParticipantUserId(sessionId) {
 
 $(document).ready(function() {
   sessionId = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || '';
+  if (window.LabPaths && LabPaths.persistChainFlavor) {
+    LabPaths.persistChainFlavor(sessionId, LabPaths.getChainFlavor());
+  }
+  if (window.LabPaths && typeof LabPaths.applyClassroomTheme === 'function') {
+    LabPaths.applyClassroomTheme();
+  }
   restoreForkChoiceFromSession();
 
   // Set address and session code as early as possible from localStorage or URL to avoid "Loading..." flash/stuck
@@ -1773,6 +1779,10 @@ function initClientSideNetworkingForParticipant(mode) {
     const prevMode = networkMode;
     const wasLocked = !!prevSettings.parametersLocked;
     lastKnownAdminSettings = normalizeAdminSettings(settings);
+    if (settings.chainFlavor === 'bitcoin' && window.LabPaths) {
+      if (LabPaths.persistChainFlavor) LabPaths.persistChainFlavor(sessionId, 'bitcoin');
+      if (LabPaths.applyClassroomTheme) LabPaths.applyClassroomTheme();
+    }
 
     if (settings.networkMode) {
       networkMode = settings.networkMode;

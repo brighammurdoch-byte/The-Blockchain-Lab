@@ -26,7 +26,7 @@ html
     script(src='/javascripts/lib/sha256.js')
     script(src='https://d3js.org/d3.v7.min.js')
     script(src='/javascripts/blockchain.js')
-    script(src='/javascripts/lab/labPaths.js?v=sess1')
+    script(src='/javascripts/lab/labPaths.js?v=btcclass1')
 
   block config
   body(class=bodyClass || '')
@@ -60,7 +60,7 @@ html
                   a(href='/coinbase') #{__('Coinbase')}
                 li.divider
                 li(class={active: page === 'bitcoin'})
-                  a(href='/bitcoin') #{__('Bitcoin rules')}
+                  a(href='/bitcoin') #{__('Bitcoin classroom')}
                 li(class={active: page === 'ethereum'})
                   a(href='/ethereum') #{__('Ethereum rules')}
             li(class={active: page === 'lab'})

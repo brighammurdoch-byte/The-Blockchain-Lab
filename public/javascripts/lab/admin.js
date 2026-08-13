@@ -58,6 +58,12 @@ if (!$('#toastStyles').length) {
 $(document).ready(function() {
   // Extract sessionId from URL (path or ?session= for static hosting)
   sessionId = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || '';
+  if (window.LabPaths && LabPaths.persistChainFlavor) {
+    LabPaths.persistChainFlavor(sessionId, LabPaths.getChainFlavor());
+  }
+  if (window.LabPaths && typeof LabPaths.applyClassroomTheme === 'function') {
+    LabPaths.applyClassroomTheme();
+  }
 
   // Display session code (from storage or the one passed from server/URL)
   const joinCode = localStorage.getItem('joinCode_' + sessionId) || sessionId;
@@ -279,6 +285,16 @@ function initClientSideNetworking(mode, roomCode) {
     relayState = new RelayBlockchainState(roomCode);
     window.relayState = relayState; // projector + audits
     relayState.ensureGenesis();
+    if (window.LabPaths && LabPaths.getChainFlavor() === 'bitcoin') {
+      if (!relayState.settings || relayState.settings.chainFlavor !== 'bitcoin') {
+        relayState.updateSettings({
+          chainFlavor: 'bitcoin',
+          miningRewardCoins: 50,
+          halvingInterval: 21
+        });
+        $('#miningReward').val(50);
+      }
+    }
 
     // Try to restore previous session (admin refresh survival)
     const restored = Persistence.loadAdminState(roomCode);
@@ -315,16 +331,23 @@ function initClientSideNetworking(mode, roomCode) {
     }
 
     // Apply any current slider values as initial settings (if no restore)
+    const flavor = (window.LabPaths && LabPaths.getChainFlavor && LabPaths.getChainFlavor()) ||
+      (relayState.settings && relayState.settings.chainFlavor) || 'classic';
+    if (flavor === 'bitcoin' && (!$('#miningReward').val() || $('#miningReward').val() === '10')) {
+      $('#miningReward').val(50);
+    }
     const initialSettings = {
       difficultyLeading: parseInt($('#difficultyLeading').val(), 10) || 1,
       difficultySecondary: (function () {
         var s = parseInt($('#difficultySecondary').val(), 10);
         return isNaN(s) ? 8 : s;
       })(),
-      miningRewardCoins: parseInt($('#miningReward').val(), 10) || 10,
+      miningRewardCoins: parseInt($('#miningReward').val(), 10) || (flavor === 'bitcoin' ? 50 : 10),
       parametersLocked: $('#lockParameters').is(':checked'),
       targetBlockTimeSec: parseInt($('#targetBlockTimeSec').val(), 10) || 10,
-      autoDifficulty: $('#autoDifficulty').length ? $('#autoDifficulty').is(':checked') : true
+      autoDifficulty: $('#autoDifficulty').length ? $('#autoDifficulty').is(':checked') : true,
+      chainFlavor: flavor,
+      halvingInterval: (relayState.settings && relayState.settings.halvingInterval) || 21
     };
     relayState.updateSettings(initialSettings);
 
@@ -772,7 +795,10 @@ function setupEventHandlers() {
       networkMode: selectedMode,
       parametersLocked: wantLock,
       targetBlockTimeSec: parseInt($('#targetBlockTimeSec').val(), 10) || 10,
-      autoDifficulty: $('#autoDifficulty').is(':checked')
+      autoDifficulty: $('#autoDifficulty').is(':checked'),
+      chainFlavor: (relayState && relayState.settings && relayState.settings.chainFlavor) ||
+        (window.LabPaths && LabPaths.getChainFlavor()) || 'classic',
+      halvingInterval: (relayState && relayState.settings && relayState.settings.halvingInterval) || 21
     };
 
     networkMode = selectedMode;
@@ -1164,7 +1190,16 @@ function updateSettingsDisplay(settings) {
   if (!settings) return;
   $('#adminDifficultyLeading').text(settings.difficultyLeading);
   $('#adminDifficultySecondary').text('0x' + Number(settings.difficultySecondary != null ? settings.difficultySecondary : 8).toString(16).toUpperCase());
-  $('#adminMiningReward').text((settings.miningRewardCoins || 0) + ' coins');
+  const unit = (settings.chainFlavor === 'bitcoin') ? ' BTC' : ' coins';
+  $('#adminMiningReward').text((settings.miningRewardCoins || 0) + unit);
+  if (settings.chainFlavor === 'bitcoin' && relayState && typeof relayState.blockSubsidyAt === 'function') {
+    const h = (relayState.chain && relayState.chain.length) ? relayState.chain.length : 1;
+    const next = relayState.blockSubsidyAt(h);
+    $('#nextSubsidyNote').text('Next block subsidy: ' + next + ' BTC (halves every ' +
+      (settings.halvingInterval || 21) + ' blocks)').show();
+  } else {
+    $('#nextSubsidyNote').hide();
+  }
   $('#adminParams').html(settings.parametersLocked ?
     '<span class="label label-danger">Locked</span>' :
     '<span class="label label-success">Unlocked</span>'

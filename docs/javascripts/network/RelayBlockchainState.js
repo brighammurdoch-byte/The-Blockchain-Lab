@@ -24,6 +24,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       difficultyLeading: 1,
       difficultySecondary: 8,
       miningRewardCoins: 10,
+      chainFlavor: 'classic',
+      halvingInterval: 21,
       parametersLocked: false,
       networkMode: 'admin-relay',
       /** Desired average seconds between blocks (classroom pacing). */
@@ -398,12 +400,23 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     return ids;
   }
 
+  blockSubsidyAt(height) {
+    const s = this.settings || {};
+    const base = Number(s.miningRewardCoins);
+    if (s.chainFlavor !== 'bitcoin') return isNaN(base) ? 10 : base;
+    const start = isNaN(base) ? 50 : base;
+    const interval = Math.max(1, Number(s.halvingInterval) || 21);
+    const h = Math.max(0, Number(height) || 0);
+    const halvings = Math.floor(h / interval);
+    if (halvings >= 64) return 0;
+    return start / Math.pow(2, halvings);
+  }
+
   /**
    * Recompute balances from the canonical chain:
    * mining rewards + all included transfers.
    */
   _recomputeMiningRewards() {
-    const reward = Number(this.settings.miningRewardCoins) || 10;
     this.participants.forEach((p) => {
       p.blocksMined = 0;
       p.balance = 0;
@@ -420,7 +433,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
         }
         const miner = this.participants.get(minerId);
         miner.blocksMined = (miner.blocksMined || 0) + 1;
-        miner.balance = (miner.balance || 0) + reward;
+        const height = block.index != null ? Number(block.index) : 0;
+        miner.balance = (miner.balance || 0) + this.blockSubsidyAt(height);
       }
 
       const txs = Array.isArray(block.transactions) ? block.transactions : [];

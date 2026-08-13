@@ -18,8 +18,12 @@ router.get('/', function(req, res, next) {
   res.render('lab/index', { title: 'Blockchain Lab' });
 });
 
+router.get('/bitcoin/rules', function(req, res) {
+  res.render('lab/bitcoin-rules', { page: 'bitcoin', title: 'Bitcoin-like C++ rules', sessionId: '', bodyClass: 'lab-app' });
+});
+
 router.get('/bitcoin', function(req, res) {
-  res.render('lab/bitcoin', { page: 'bitcoin', title: 'Bitcoin rules lab', sessionId: '', bodyClass: 'lab-app' });
+  res.render('lab/bitcoin', { page: 'bitcoin', title: 'Bitcoin Lab', sessionId: '', bodyClass: 'lab-app' });
 });
 
 router.get('/ethereum', function(req, res) {

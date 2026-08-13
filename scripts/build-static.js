@@ -121,7 +121,7 @@ function main() {
   writeFile('lab/observe.html', renderLabPage('lab/observe.pug', { title: 'Blockchain Lab - Wallet', sessionId: '' }));
   writeFile('lab/demos.html', renderLabPage('lab/demos.pug', { title: 'Blockchain Lab - Guided Demos', sessionId: '' }));
   writeFile('lab/code.html', renderLabPage('lab/code-editor.pug', { title: 'Blockchain Lab - Code Editor', sessionId: '' }));
-  writeFile('lab/bitcoin.html', renderLabPage('lab/bitcoin.pug', { title: 'Bitcoin rules lab', page: 'bitcoin' }));
+  writeFile('lab/bitcoin.html', renderLabPage('lab/bitcoin.pug', { title: 'Bitcoin Lab', page: 'bitcoin' }));
   writeFile('lab/ethereum.html', renderLabPage('lab/ethereum.pug', { title: 'Ethereum rules lab', page: 'ethereum' }));
 
   // Anders Brownworth learning demos — /hash, /block, … via directory index.html
@@ -129,8 +129,9 @@ function main() {
     writeFile(pageName + '/index.html', renderLearningPage(pageName));
   });
 
-  // Protocol twins at pretty /bitcoin and /ethereum
-  writeFile('bitcoin/index.html', renderLabPage('lab/bitcoin.pug', { title: 'Bitcoin rules lab', page: 'bitcoin' }));
+  // Bitcoin classroom + leftover standalone editor; Ethereum rules page
+  writeFile('bitcoin/index.html', renderLabPage('lab/bitcoin.pug', { title: 'Bitcoin Lab', page: 'bitcoin' }));
+  writeFile('bitcoin/rules/index.html', renderLabPage('lab/bitcoin-rules.pug', { title: 'Bitcoin-like C++ rules', page: 'bitcoin' }));
   writeFile('ethereum/index.html', renderLabPage('lab/ethereum.pug', { title: 'Ethereum rules lab', page: 'ethereum' }));
 
   // Root redirect into the lab
