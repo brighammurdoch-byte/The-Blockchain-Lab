@@ -82,6 +82,48 @@ input {
   text-align: center;
 }
 
+/* Lab chain: grow to fill the panel when there is room */
+.chain-view {
+  width: 100%;
+}
+.chain-level {
+  display: flex;
+  justify-content: flex-start;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 16px;
+  width: 100%;
+  margin: 0 0 4px 0;
+}
+.chain-block-col {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  box-sizing: border-box;
+  flex: 1 1 280px;
+  min-width: min(100%, 240px);
+  max-width: 100%;
+}
+.chain-block-col > .panel {
+  width: 100%;
+}
+.chain-hash {
+  font-size: 10px;
+  word-break: break-all;
+}
+.chain-hash-short {
+  display: none;
+}
+.chain-hash-long {
+  display: inline;
+}
+.chain-block-dl > dt {
+  width: 88px;
+}
+.chain-block-dl > dd {
+  margin-left: 100px;
+}
+
 /* Lab chain: full addresses + names + copy */
 .chain-address-full {
   font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
@@ -107,6 +149,12 @@ table.table-condensed td .chain-id-row {
   margin-left: 4px;
 }
 @media (max-width: 767px) {
+  .chain-hash-short {
+    display: inline;
+  }
+  .chain-hash-long {
+    display: none;
+  }
   .chain-address-short {
     display: inline;
   }

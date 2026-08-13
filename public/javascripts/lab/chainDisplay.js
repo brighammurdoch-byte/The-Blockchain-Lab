@@ -217,7 +217,7 @@
       html +=
         '<div class="chain-level" data-height="' +
         i +
-        '" style="display:flex;justify-content:center;flex-wrap:wrap;gap:16px;align-items:flex-start;margin:0 0 4px 0;">';
+        '">';
 
       for (var li = 0; li < level.length; li++) {
         var block = level[li];
@@ -282,9 +282,22 @@
         }
 
         var minerId = block.miner != null ? block.miner : '';
-        var hashShort = String(block.hash || '').substring(0, 16);
-        var prevShort = String(block.previousHash || '').substring(0, 16);
+        var hashFull = String(block.hash || '');
+        var prevFull = String(block.previousHash || '');
+        var hashShort = hashFull.length > 16 ? hashFull.substring(0, 16) + '…' : hashFull;
+        var prevShort = prevFull.length > 16 ? prevFull.substring(0, 16) + '…' : prevFull;
         var timeStr = block.timestamp ? new Date(block.timestamp).toLocaleTimeString() : '';
+        function hashCode(full, short) {
+          return (
+            '<code class="chain-hash" title="' +
+            escapeAttr(full) +
+            '"><span class="chain-hash-short">' +
+            escapeHtml(short) +
+            '</span><span class="chain-hash-long">' +
+            escapeHtml(full) +
+            '</span></code>'
+          );
+        }
 
         // Children of this block at next existing height (may skip if gap)
         var childCount = 0;
@@ -303,7 +316,7 @@
         html +=
           '<div class="chain-block-col" data-hash="' +
           escapeAttr(block.hash) +
-          '" style="display:flex;flex-direction:column;align-items:center;width:300px;max-width:100%;">';
+          '">';
         html +=
           '<div class="panel ' +
           panelClass +
@@ -322,19 +335,19 @@
         html +=
           '<div class="panel-body" style="padding:10px 15px;">' +
           '<dl class="dl-horizontal chain-block-dl" style="margin-bottom:0;">' +
-          '<dt style="width:80px;">Hash</dt><dd style="margin-left:90px;"><code style="font-size:10px;word-break:break-all;">' +
-          escapeHtml(hashShort) +
-          '…</code></dd>' +
-          '<dt style="width:80px;">Prev</dt><dd style="margin-left:90px;"><code style="font-size:10px;word-break:break-all;">' +
-          escapeHtml(prevShort) +
-          '…</code></dd>' +
-          '<dt style="width:80px;">Miner</dt><dd style="margin-left:90px;">' +
+          '<dt>Hash</dt><dd>' +
+          hashCode(hashFull, hashShort) +
+          '</dd>' +
+          '<dt>Prev</dt><dd>' +
+          hashCode(prevFull, prevShort) +
+          '</dd>' +
+          '<dt>Miner</dt><dd>' +
           fmtAddr(minerId) +
           '</dd>' +
-          '<dt style="width:80px;">Nonce</dt><dd style="margin-left:90px;">' +
+          '<dt>Nonce</dt><dd>' +
           escapeHtml(block.nonce) +
           '</dd>' +
-          '<dt style="width:80px;">Txs</dt><dd style="margin-left:90px;">' +
+          '<dt>Txs</dt><dd>' +
           txHtml +
           '</dd>' +
           '</dl></div></div>';
