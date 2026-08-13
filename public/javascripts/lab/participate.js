@@ -24,6 +24,13 @@ let hubConfirmedHeight = 0;
 /** When set, we submitted hub+1 and are waiting for the hub before mining further. */
 let waitingForHubSince = 0;
 let waitingForHubIndex = null;
+let lastSubmittedBlock = null;
+const submittedSlots = new Set();
+
+function blockSlotKey(block) {
+  if (!block) return '';
+  return String(block.previousHash || '') + '|' + String(block.index) + '|' + String(block.forkId || 'classic');
+}
 let openTxPanels = new Set();
 let originalValidatorCode = '';
 let localChainTipHash = null;
@@ -132,6 +139,7 @@ function trimOptimisticTail() {
 function showWaitingForHub(index) {
   waitingForHubSince = waitingForHubSince || Date.now();
   waitingForHubIndex = index != null ? Number(index) : waitingForHubIndex;
+  currentMiningBlock = null;
   const label = waitingForHubIndex != null ? (' #' + waitingForHubIndex) : '';
   $('#miningActivity').html(
     '<div class="alert alert-warning">' +
@@ -391,11 +399,13 @@ function handleMiningWorkerMessage(ev) {
     const capClassic = myForkChoice !== 'new';
     const foundIndex = block.index != null ? Number(block.index) : 0;
     if (capClassic && foundIndex >= hubConfirmedHeight + 1) {
+      currentMiningBlock = null;
       showWaitingForHub(foundIndex);
       return;
     }
     const nextTmpl = getMiningTemplate();
     if (!nextTmpl || nextTmpl.waitForHub) {
+      currentMiningBlock = null;
       showWaitingForHub((nextTmpl && nextTmpl.waitingOn) || foundIndex);
       return;
     }
@@ -404,6 +414,7 @@ function handleMiningWorkerMessage(ev) {
       nextTmpl.index != null &&
       Number(nextTmpl.index) > hubConfirmedHeight + 1
     ) {
+      currentMiningBlock = null;
       showWaitingForHub(hubConfirmedHeight + 1);
       return;
     }
@@ -471,6 +482,10 @@ function startWorkerMiningJob(block) {
   ) {
     debugWarn('Skip mining job ahead of hub', block.index, 'hub', hubConfirmedHeight);
     showWaitingForHub(hubConfirmedHeight + 1);
+    return;
+  }
+  if (submittedSlots.has(blockSlotKey(block))) {
+    showWaitingForHub(block.index);
     return;
   }
   clearWaitingForHub();
@@ -554,13 +569,14 @@ function startMiningKeepalive() {
       return;
     }
     // Worker/main loop went silent (tab freeze / process kill) — re-kick
-    // Submitted hub+1 and the worker is idle on purpose. If the hub never
-    // confirms, drop the optimistic tail and remine the same height.
-    if (waitingForHubSince && Date.now() - waitingForHubSince > 8000) {
-      debugWarn('Hub confirm timed out — retrying at confirmed tip', hubConfirmedHeight);
-      trimOptimisticTail();
-      clearWaitingForHub();
-      remineOnCanonicalTip({ force: true });
+    // Waiting for hub on purpose — do not remine the same height (that minted
+    // several Block #N siblings from one miner). Re-broadcast the same hash.
+    if (waitingForHubSince) {
+      if (Date.now() - waitingForHubSince > 12000 && lastSubmittedBlock && net) {
+        debugWarn('Re-broadcasting submitted block, not remaking the height', lastSubmittedBlock.index);
+        net.send('block-submitted', { block: lastSubmittedBlock, minerId: userId });
+        waitingForHubSince = Date.now();
+      }
       return;
     }
     if (Date.now() - lastWorkerProgressAt > 12000) {
@@ -2820,6 +2836,10 @@ function fetchDataAndMine() {
       showWaitingForHub(tmpl.waitingOn);
       return;
     }
+    if (submittedSlots.has(blockSlotKey(tmpl))) {
+      showWaitingForHub(tmpl.index);
+      return;
+    }
     clearWaitingForHub();
     const newBlock = {
       index: tmpl.index,
@@ -3012,6 +3032,9 @@ function submitMinedBlock(block, startTime, totalIterations) {
   if (submittedBlockHashes.size > 500) {
     submittedBlockHashes = new Set(Array.from(submittedBlockHashes).slice(-200));
   }
+  const slot = blockSlotKey(block);
+  if (slot) submittedSlots.add(slot);
+  lastSubmittedBlock = block;
   
   // In pure client-relay mode, we bypass the old /lab/mine server POST
   // and directly submit to the admin hub via the relay.

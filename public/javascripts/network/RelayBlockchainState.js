@@ -593,6 +593,30 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       console.warn('[RelayState] Block parent not yet known — storing as orphan until parent arrives');
     }
 
+    // First-seen wins at a given parent + height + fork. Extra hashes at the
+    // same slot are stale (one miner remine-spam, or a late racer).
+    const slotFid = block.forkId || 'classic';
+    const slotIndex = block.index != null ? Number(block.index) : null;
+    if (slotIndex != null) {
+      let sibling = null;
+      this.allBlocks.forEach((existing) => {
+        if (sibling || !existing) return;
+        if (existing.hash === block.hash) return;
+        if (String(existing.previousHash) !== String(block.previousHash)) return;
+        if (Number(existing.index) !== slotIndex) return;
+        if ((existing.forkId || 'classic') !== slotFid) return;
+        sibling = existing;
+      });
+      if (sibling) {
+        return {
+          accepted: false,
+          reason: 'Stale block — already have #' + slotIndex + ' on this parent',
+          chain: this.chain.slice(),
+          newHeight: Math.max(0, this.chain.length - 1)
+        };
+      }
+    }
+
     this.allBlocks.set(block.hash, Object.assign({}, block, {
       miner: block.miner || fromUserId || block.miner
     }));

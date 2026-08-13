@@ -96,6 +96,21 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
     if (!sawSkipLabel) pass('Never showed working-on N+2', 'ok');
     pass('Saw wait-for-hub UI', sawWait ? 'yes (expected after a fast find)' : 'not this run (hub kept up)');
+
+    const dups = await admin.evaluate(() => {
+      const texts = Array.from(document.querySelectorAll('#blockchainView .panel-heading strong, #networkBlockchainView .panel-heading strong'))
+        .map((el) => el.textContent || '');
+      const counts = {};
+      texts.forEach((t) => {
+        const m = t.match(/Block\s*#\s*(\d+)/i);
+        if (!m) return;
+        const n = m[1];
+        counts[n] = (counts[n] || 0) + 1;
+      });
+      return Object.keys(counts).filter((k) => counts[k] > 2).map((k) => '#' + k + 'x' + counts[k]);
+    });
+    if (!dups.length) pass('No height with 3+ copies on admin view', 'ok');
+    else fail('No height with 3+ copies on admin view', dups.join(', '));
   } catch (e) {
     fail('Audit crashed', String(e && e.stack || e));
   } finally {
