@@ -67,6 +67,15 @@ const DEBUG_MODE = localStorage.getItem('blockchainLabDebug') === 'true'; // Ena
 // Client-relay networking (only mode)
 let networkMode = null;
 let net = null;
+let lastToastKey = '';
+let lastToastAt = 0;
+
+/** Fold aliases so retargets / MQTT redelivery are not treated as a mode switch. */
+function canonicalNetworkMode(mode) {
+  const m = String(mode || '').toLowerCase();
+  if (m === 'p2p' || m === 'real-p2p' || m === 'mesh') return 'p2p';
+  return 'admin-relay';
+}
 
 // Controlled logging that respects DEBUG_MODE
 function debugLog(...args) {
@@ -1336,6 +1345,13 @@ function applyCustomValidator(code) {
 
 // Toast notification function (non-intrusive bubble at top)
 function showToastNotification(message, type = 'info') {
+  const now = Date.now();
+  const key = String(type || 'info') + '|' + String(message || '');
+  // Phones re-receive the same settings/pause packets on MQTT reconnect.
+  if (key === lastToastKey && now - lastToastAt < 8000) return;
+  lastToastKey = key;
+  lastToastAt = now;
+
   // Remove existing toast if any
   $('#toastNotification').remove();
   
@@ -1596,6 +1612,9 @@ function initClientSideNetworkingForParticipant(mode) {
   net.on('admin-settings-updated', (msg) => {
     const settings = msg.payload || msg;
     debugLog('Settings updated via relay:', settings);
+    const prevSettings = lastKnownAdminSettings || {};
+    const prevMode = networkMode;
+    const wasLocked = !!prevSettings.parametersLocked;
     lastKnownAdminSettings = normalizeAdminSettings(settings);
 
     if (settings.networkMode) {
@@ -1604,11 +1623,16 @@ function initClientSideNetworkingForParticipant(mode) {
       if (net && typeof net.setRoutingMode === 'function') {
         net.setRoutingMode(networkMode);
       }
-      const note = networkMode === 'p2p'
+      const p2p = canonicalNetworkMode(networkMode) === 'p2p';
+      const note = p2p
         ? 'Full P2P mode — blocks gossip peer-to-peer; longest chain wins locally.'
         : 'Using Admin-hosted relay — keep the instructor tab open.';
       $('#networkModeNote').text(note);
-      showToastNotification(networkMode === 'p2p' ? 'Switched to Full P2P mesh' : 'Switched to Admin-hosted hub', 'info');
+      // Auto-difficulty retargets and MQTT catch-up include networkMode every time.
+      // Only toast when the instructor actually changed hub vs mesh.
+      if (canonicalNetworkMode(prevMode) !== canonicalNetworkMode(networkMode)) {
+        showToastNotification(p2p ? 'Switched to Full P2P mesh' : 'Switched to Admin-hosted hub', 'info');
+      }
     }
 
     // Update UI elements that the old 'settingsUpdated' handler touched
@@ -1616,7 +1640,7 @@ function initClientSideNetworkingForParticipant(mode) {
       $('#difficultyLevel').text(settings.difficultyLeading + ' + 0x' + (settings.difficultySecondary != null ? settings.difficultySecondary : 8).toString(16));
     }
 
-    if (settings.parametersLocked) {
+    if (settings.parametersLocked && !wasLocked) {
       showToastNotification('Admin locked network parameters (difficulty/reward frozen)', 'info');
     }
 
