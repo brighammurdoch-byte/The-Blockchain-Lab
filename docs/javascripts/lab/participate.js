@@ -19,6 +19,9 @@ let miningWakeLock = null;
 let miningKeepaliveTimer = null;
 let mainThreadMineTimer = null;
 let lastRemineAt = 0;
+let lastHubSeenAt = 0;
+let hubResyncAt = 0;
+let hubResyncTimer = null;
 /** Highest block index the hub has confirmed (classic main). Caps optimistic race-ahead. */
 let hubConfirmedHeight = 0;
 /** When set, we submitted hub+1 and are waiting for the hub before mining further. */
@@ -118,6 +121,80 @@ function remineOnCanonicalTip(opts) {
   // Invalidate in-flight worker job; fetchDataAndMine posts a new gen
   miningJobGen++;
   fetchDataAndMine();
+}
+
+function persistMiningIntent(on) {
+  window.lastMiningIntent = !!on;
+  try {
+    if (sessionId) {
+      if (on) sessionStorage.setItem('labMiningIntent_' + sessionId, '1');
+      else sessionStorage.removeItem('labMiningIntent_' + sessionId);
+    }
+  } catch (e) {}
+}
+
+function markHubSeen() {
+  lastHubSeenAt = Date.now();
+  hubResyncAt = 0;
+  if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
+}
+
+function hasTrustedHubChain() {
+  const chain = window.lastRelayedChain || [];
+  if (!chain.length) return false;
+  // Local-only genesis is not the classroom tip
+  if (chain.length === 1 && chain[0] && chain[0].miner === 'genesis' && hubConfirmedHeight < 1) {
+    return lastHubSeenAt > 0 && (Date.now() - lastHubSeenAt) < 15000;
+  }
+  return true;
+}
+
+function showCatchingUpUi() {
+  currentMiningBlock = null;
+  $('#miningActivity').html(
+    '<div class="alert alert-warning">' +
+      '<p><strong>Catching up with the instructor hub…</strong></p>' +
+      '<p class="small" style="margin-bottom:0;">Phone sleep or refresh can drop the live chain. Mining resumes on the current tip — not block #1.</p>' +
+    '</div>'
+  );
+  if ($('#connectionStatusNote').length) {
+    $('#connectionStatusNote').show().html(
+      'Reconnecting to the instructor hub and catching up to the live chain…'
+    );
+  }
+}
+
+function pauseHashingForSync() {
+  miningJobGen++;
+  currentMiningBlock = null;
+  try {
+    if (miningWorker) miningWorker.postMessage({ command: 'stop' });
+  } catch (e) {}
+  if (isMining || window.lastMiningIntent) showCatchingUpUi();
+}
+
+function requestHubResync(reason) {
+  if (!net) return;
+  const now = Date.now();
+  const stale = !lastHubSeenAt || (now - lastHubSeenAt > 4000);
+  const force = reason === 'forced' || reason === 'no-chain' || reason === 'reconnect';
+  if (!stale && !force) {
+    if (isMining && hasTrustedHubChain()) remineOnCanonicalTip();
+    return;
+  }
+  if (hubResyncAt && now - hubResyncAt < 4000) return;
+  hubResyncAt = now;
+  if (stale || reason === 'no-chain' || reason === 'reconnect') {
+    pauseHashingForSync();
+  }
+  try { net.send('request-state', { from: userId }); } catch (e) {}
+  if (hubResyncTimer) clearTimeout(hubResyncTimer);
+  hubResyncTimer = setTimeout(function () {
+    if (!lastHubSeenAt || Date.now() - lastHubSeenAt > 5000) {
+      hubResyncAt = 0;
+      requestHubResync('forced');
+    }
+  }, 7000);
 }
 
 /** Last classic block at or below the hub-confirmed height (ignore optimistic tail). */
@@ -581,9 +658,14 @@ function startMiningKeepalive() {
     // Waiting for hub on purpose — do not remine the same height (that minted
     // several Block #N siblings from one miner). Re-broadcast the same hash.
     if (waitingForHubSince) {
+      if (Date.now() - lastHubSeenAt > 4000) {
+        requestHubResync('forced');
+        return;
+      }
       if (Date.now() - waitingForHubSince > 12000 && lastSubmittedBlock && net) {
         debugWarn('Re-broadcasting submitted block, not remaking the height', lastSubmittedBlock.index);
         net.send('block-submitted', { block: lastSubmittedBlock, minerId: userId });
+        net.send('request-state', { from: userId });
         waitingForHubSince = Date.now();
       }
       return;
@@ -643,15 +725,10 @@ function setupBackgroundMiningGuards() {
   document.addEventListener('visibilitychange', function () {
     syncMiningWorkerPace();
     if (!document.hidden) {
+      requestMiningWakeLock();
       if (window.lastMiningIntent && !networkPaused) {
-        if (!isMining) startMining();
-        else {
-          // Nudge worker after returning to foreground
-          if (Date.now() - lastWorkerProgressAt > 2000) {
-            remineOnCanonicalTip();
-          }
-          requestMiningWakeLock();
-        }
+        requestHubResync('visible');
+        if (!isMining && hasTrustedHubChain()) startMining();
       }
     } else if (isMining) {
       // Backgrounded: switch to max-pace worker hashing
@@ -661,23 +738,28 @@ function setupBackgroundMiningGuards() {
 
   window.addEventListener('pageshow', function () {
     if (window.lastMiningIntent && !networkPaused) {
-      if (!isMining) startMining();
-      else if (Date.now() - lastWorkerProgressAt > 2000) remineOnCanonicalTip();
+      requestHubResync('pageshow');
+      if (!isMining && hasTrustedHubChain()) startMining();
       requestMiningWakeLock();
     }
   });
 
   window.addEventListener('focus', function () {
-    if (window.lastMiningIntent && !networkPaused && !isMining) {
-      startMining();
+    if (window.lastMiningIntent && !networkPaused) {
+      requestHubResync('focus');
+      if (!isMining && hasTrustedHubChain()) startMining();
     }
+  });
+
+  window.addEventListener('online', function () {
+    if (window.lastMiningIntent && !networkPaused) requestHubResync('reconnect');
   });
 
   // Page Lifecycle API (Chrome): resume after freeze
   document.addEventListener('resume', function () {
     if (window.lastMiningIntent && !networkPaused) {
-      if (!isMining) startMining();
-      else remineOnCanonicalTip();
+      requestHubResync('resume');
+      if (!isMining && hasTrustedHubChain()) startMining();
       requestMiningWakeLock();
     }
   });
@@ -764,6 +846,27 @@ function applyCanonicalChain(chain, opts) {
     ? window.lastRelayedChain[window.lastRelayedChain.length - 1]
     : null;
   const newTip = chain[chain.length - 1];
+  const incomingHeight = opts.chainHeight != null
+    ? Number(opts.chainHeight)
+    : (newTip && newTip.index != null ? Number(newTip.index) : chain.length - 1);
+  const local = window.lastRelayedChain || [];
+  // Compact MQTT snapshot of the same tip must not wipe a longer local copy
+  if (
+    opts.truncated &&
+    local.length > chain.length &&
+    newTip &&
+    local.some(function (b) { return b && b.hash === newTip.hash; })
+  ) {
+    if (incomingHeight != null && !isNaN(incomingHeight)) {
+      hubConfirmedHeight = Math.max(hubConfirmedHeight, incomingHeight);
+    }
+    markHubSeen();
+    if (waitingForHubIndex != null && hubConfirmedHeight >= waitingForHubIndex) {
+      clearWaitingForHub();
+    }
+    if (opts.remine !== false && isMining) remineOnCanonicalTip({ force: true });
+    return false;
+  }
   const tipChanged = !oldTip || !newTip || oldTip.hash !== newTip.hash;
 
   // Preserve our previous main blocks as known orphans if the hub tip switched sides
@@ -844,11 +947,14 @@ function applyCanonicalChain(chain, opts) {
   }
 
   // Track hub-confirmed tip height so optimistic mining cannot race dozens of blocks ahead
-  if (newTip && newTip.index != null) {
+  if (incomingHeight != null && !isNaN(incomingHeight)) {
+    hubConfirmedHeight = Math.max(hubConfirmedHeight, incomingHeight);
+  } else if (newTip && newTip.index != null) {
     hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(newTip.index) || 0);
   } else if (chain.length) {
     hubConfirmedHeight = Math.max(hubConfirmedHeight, chain.length - 1);
   }
+  markHubSeen();
   if (waitingForHubIndex != null && hubConfirmedHeight >= waitingForHubIndex) {
     clearWaitingForHub();
   }
@@ -1453,6 +1559,16 @@ $(document).ready(function() {
   $('#blockchainView').prepend('<div class="alert alert-info small" id="networkModeNote" style="margin-bottom:8px">Connecting to instructor hub…</div>');
   $('#blockchainView').prepend('<div class="alert alert-warning small" id="connectionStatusNote" style="margin-bottom:8px; display:none;"></div>');
 
+  try {
+    window.lastMiningIntent = sessionStorage.getItem('labMiningIntent_' + sessionId) === '1';
+  } catch (e) {
+    window.lastMiningIntent = false;
+  }
+  if (window.lastMiningIntent) {
+    setupBackgroundMiningGuards();
+    showCatchingUpUi();
+  }
+
   // Block invalid / inactive session codes (direct URL protection)
   if (window.LabSessionProbe && typeof LabSessionProbe.requireActiveSession === 'function') {
     LabSessionProbe.requireActiveSession(earlyJoinCode).catch(function () {
@@ -1460,18 +1576,15 @@ $(document).ready(function() {
     });
   }
 
-  // If hub is slow but session was verified on landing, seed local genesis so mining can continue
+  // Slow hub: keep waiting — do NOT seed local genesis (that stuck phones on block 1)
   setTimeout(function () {
-    if (window.lastRelayedChain && window.lastRelayedChain.length > 0) return;
-    var verified = window.LabSessionProbe && LabSessionProbe.wasRecentlyVerified(earlyJoinCode);
-    if (!verified) return;
-    seedLocalGenesisChain();
+    if (hasTrustedHubChain()) return;
     $('#connectionStatusNote').show().html(
-      'No response from instructor yet. Mining uses a local genesis tip — keep the <strong>admin tab open</strong> on the same lab URL. ' +
+      'Still waiting for the instructor hub. Keep the <strong>admin tab open</strong> on the same lab URL. ' +
       'On phones, use the QR/share link from the admin page (GitHub Pages), not localhost.'
     );
-    showToastNotification('Waiting for instructor hub — seeded local genesis so you can mine', 'warning');
-  }, 2500);
+    requestHubResync('forced');
+  }, 4000);
 
   loadValidatorCode();
 
@@ -1775,6 +1888,7 @@ function initClientSideNetworkingForParticipant(mode) {
       if (!window.lastRelayedChain) window.lastRelayedChain = [];
 
       // Hub-confirmed height (compact path never called applyCanonicalChain before)
+      markHubSeen();
       if (payload.newHeight != null && !isNaN(Number(payload.newHeight))) {
         hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(payload.newHeight));
       } else if (block.index != null && !isNewForkId(block.forkId) && !payload.isFork) {
@@ -1938,7 +2052,7 @@ function initClientSideNetworkingForParticipant(mode) {
 
   net.on('initial-state', (msg) => {
     const state = msg.payload || msg;
-    if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
+    markHubSeen();
     debugLog('Received initial state from admin relay', state);
     $('#connectionStatusNote').hide();
     $('#networkModeNote').text(
@@ -1954,11 +2068,6 @@ function initClientSideNetworkingForParticipant(mode) {
         (state.adminSettings.difficultyLeading || 4) + ' + 0x' +
         (state.adminSettings.difficultySecondary != null ? state.adminSettings.difficultySecondary : 8).toString(16)
       );
-
-      // Push latest difficulty by restarting the mine loop on the hub tip
-      if (isMining && lastKnownAdminSettings) {
-        remineOnCanonicalTip();
-      }
     }
 
     // If we received a real chain from the admin hub, feed it into local logic
@@ -1968,9 +2077,11 @@ function initClientSideNetworkingForParticipant(mode) {
         networkStats: state.networkStats,
         orphans: state.orphans || [],
         pendingTransactions: state.pendingTransactions || [],
-        remine: true
+        remine: true,
+        truncated: !!state.chainTruncated,
+        chainHeight: state.chainHeight
       });
-      debugLog('Relayed chain length:', state.chain.length);
+      debugLog('Relayed chain length:', state.chain.length, 'height', state.chainHeight);
 
       try {
         const pend = state.pendingTransactions || [];
@@ -1999,11 +2110,32 @@ function initClientSideNetworkingForParticipant(mode) {
       mergeKnownOrphans(state.orphans);
     }
 
+    if (state.chainHeight != null && !isNaN(Number(state.chainHeight))) {
+      hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(state.chainHeight));
+    }
+
+    if (!isMining && window.lastMiningIntent && !networkPaused && hasTrustedHubChain()) {
+      startMining();
+    }
+
     // loadBlockchainState(); // no-op in relay
   });
 
+  net.on('transport-reconnected', function () {
+    debugWarn('MQTT reconnected — requesting hub chain');
+    requestHubResync('reconnect');
+  });
+
+  net.on('transport-disconnected', function () {
+    if (window.lastMiningIntent) {
+      $('#connectionStatusNote').show().html(
+        'Lost the instructor hub (phone sleep / network). Reconnecting…'
+      );
+    }
+  });
+
   net.on('admin-presence', (msg) => {
-    if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
+    markHubSeen();
     debugLog('Admin is present via relay:', msg.adminUserId || (msg.payload && msg.payload.adminUserId));
     // Resync pause from hub heartbeats (phones often miss one-shot toggles)
     const p = msg.payload || msg;
@@ -2034,6 +2166,14 @@ function initClientSideNetworkingForParticipant(mode) {
 
   // Expose for debugging
   window.BlockchainLabNet = net;
+  window.__labMinerSync = {
+    requestHubResync: requestHubResync,
+    hasTrustedHubChain: hasTrustedHubChain,
+    getHubConfirmedHeight: function () { return hubConfirmedHeight; },
+    setHubConfirmedHeight: function (h) { hubConfirmedHeight = Number(h) || 0; },
+    getLastHubSeenAt: function () { return lastHubSeenAt; },
+    setLastHubSeenAt: function (t) { lastHubSeenAt = Number(t) || 0; }
+  };
 }
 
 // Parse unified diff format and display with colors
@@ -2160,7 +2300,7 @@ function setupEventHandlers() {
   $('#mineBtn').click(function() {
     if (networkPaused) {
       // Arm mining so it auto-starts when the network resumes
-      window.lastMiningIntent = true;
+      persistMiningIntent(true);
       updateMiningControlsUI();
       showToastNotification('Mining switch ON — will start when the network resumes', 'info');
       return;
@@ -2171,7 +2311,7 @@ function setupEventHandlers() {
   $('#stopMineBtn').click(function() {
     if (networkPaused) {
       // Disarm auto-resume
-      window.lastMiningIntent = false;
+      persistMiningIntent(false);
       updateMiningControlsUI();
       showToastNotification('Mining switch OFF — will not auto-resume', 'info');
       return;
@@ -2757,7 +2897,7 @@ function handleTeamAttackStarted(data) {
 
 function startMining() {
   if (isMining) return;
-  window.lastMiningIntent = true;
+  persistMiningIntent(true);
   setupBackgroundMiningGuards();
   startMiningKeepalive();
   if (networkPaused) {
@@ -2769,6 +2909,11 @@ function startMining() {
   isMining = true;
   updateMiningControlsUI();
   requestMiningWakeLock();
+  if (!hasTrustedHubChain()) {
+    showCatchingUpUi();
+    requestHubResync('no-chain');
+    return;
+  }
   fetchDataAndMine();
 }
 
@@ -2878,9 +3023,10 @@ function fetchDataAndMine() {
     };
     mineBlock(newBlock, lastKnownAdminSettings);
   } else {
-    // No state yet — seed genesis once, then mine
-    seedLocalGenesisChain();
-    setTimeout(fetchDataAndMine, 200);
+    // No classroom chain yet — wait for the hub. Seeding genesis here
+    // is what left phones hashing block #1 after a refresh.
+    showCatchingUpUi();
+    requestHubResync('no-chain');
   }
 }
 
@@ -3089,7 +3235,7 @@ function stopMining(opts) {
   const preserveIntent = !!(opts && opts.preserveIntent);
   isMining = false;
   if (!preserveIntent) {
-    window.lastMiningIntent = false;
+    persistMiningIntent(false);
     stopMiningKeepalive();
     releaseMiningWakeLock();
   }

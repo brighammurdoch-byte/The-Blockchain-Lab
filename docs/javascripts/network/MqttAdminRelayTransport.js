@@ -151,11 +151,13 @@
         clientId: clientId,
         clean: true,
         connectTimeout: 10000,
-        reconnectPeriod: 3000,
-        keepalive: 30
+        reconnectPeriod: 2500,
+        keepalive: 20,
+        resubscribe: true
       });
 
       var settled = false;
+      var listenersBound = false;
       var timer = setTimeout(function () {
         if (settled) return;
         settled = true;
@@ -163,29 +165,49 @@
         reject(new Error('MQTT connect timeout: ' + url));
       }, 12000);
 
+      function bindClientListeners() {
+        if (listenersBound) return;
+        listenersBound = true;
+        client.on('message', function (_topic, payload) {
+          self._onMqttMessage(payload);
+        });
+        client.on('close', function () {
+          self._connected = false;
+          if (typeof self.onDisconnect === 'function') {
+            try { self.onDisconnect(); } catch (e) {}
+          }
+        });
+        client.on('offline', function () {
+          self._connected = false;
+        });
+        client.on('reconnect', function () {
+          // Attempting reconnect — not live until 'connect' + subscribe
+          self._connected = false;
+        });
+      }
+
       client.on('connect', function () {
-        if (settled) return;
+        bindClientListeners();
         client.subscribe(self._topic(), { qos: 0 }, function (err) {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
           if (err) {
-            try { client.end(true); } catch (e) {}
-            reject(err);
+            console.warn('[MqttRelay] subscribe failed', err && err.message ? err.message : err);
+            if (!settled) {
+              settled = true;
+              clearTimeout(timer);
+              try { client.end(true); } catch (e2) {}
+              reject(err);
+            }
             return;
           }
           self.client = client;
           self._connected = true;
-          client.on('message', function (_topic, payload) {
-            self._onMqttMessage(payload);
-          });
-          client.on('close', function () {
-            self._connected = false;
-          });
-          client.on('reconnect', function () {
-            self._connected = true;
-          });
-          resolve();
+          if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            resolve();
+          } else if (typeof self.onReconnect === 'function') {
+            try { self.onReconnect(); } catch (e) {}
+          }
         });
       });
 

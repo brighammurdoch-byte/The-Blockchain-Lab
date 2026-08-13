@@ -259,9 +259,22 @@ function initClientSideNetworkingForObserver(mode) {
   net.on('initial-state', (msg) => {
     const state = msg.payload || msg;
     if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
-    if (state.chain) window._observerChain = state.chain.slice();
+    if (state.chain && Array.isArray(state.chain) && state.chain.length) {
+      const local = window._observerChain || [];
+      const newTip = state.chain[state.chain.length - 1];
+      const sameTip = newTip && local.some(function (b) { return b && b.hash === newTip.hash; });
+      if (!(state.chainTruncated && local.length > state.chain.length && sameTip)) {
+        window._observerChain = state.chain.slice();
+      }
+    }
     if (typeof state.networkPaused === 'boolean') networkPaused = state.networkPaused;
-    populateObserverUIFromState(state);
+    populateObserverUIFromState(Object.assign({}, state, {
+      chain: window._observerChain || state.chain
+    }));
+  });
+
+  net.on('transport-reconnected', function () {
+    if (net) net.send('request-state', { from: userId });
   });
 
   net.on('network-toggled', function (msg) {

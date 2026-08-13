@@ -722,7 +722,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
         orphans.push(block);
       }
     });
-    return {
+    const tip = this.chain.length ? this.chain[this.chain.length - 1] : null;
+    const full = {
       chain: this.chain,
       orphans: orphans,
       participants: Array.from(this.participants.values()),
@@ -730,7 +731,31 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       networkStats: { ...this.networkStats },
       pendingTransactions: this.pendingTransactions.slice(0, 20),
       networkPaused: !!this.networkPaused,
-      pendingFork: this.pendingFork ? { ...this.pendingFork } : null
+      pendingFork: this.pendingFork ? { ...this.pendingFork } : null,
+      chainHeight: tip && tip.index != null ? tip.index : Math.max(0, this.chain.length - 1),
+      tipHash: tip && tip.hash
+    };
+    // Public MQTT brokers drop ~64–256KB publishes. A long classroom chain
+    // (plus orphans) after a phone refresh never arrives — miner stays on genesis.
+    let size = 0;
+    try { size = JSON.stringify(full).length; } catch (e) { size = 999999; }
+    const MAX = 70000;
+    if (size <= MAX) return full;
+
+    const tail = this.chain.slice(-20);
+    return {
+      chain: tail,
+      chainTruncated: true,
+      chainHeight: full.chainHeight,
+      tipHash: full.tipHash,
+      genesis: this.chain[0] || null,
+      orphans: orphans.slice(-6),
+      participants: full.participants,
+      adminSettings: full.adminSettings,
+      networkStats: full.networkStats,
+      pendingTransactions: full.pendingTransactions,
+      networkPaused: full.networkPaused,
+      pendingFork: full.pendingFork
     };
   }
 

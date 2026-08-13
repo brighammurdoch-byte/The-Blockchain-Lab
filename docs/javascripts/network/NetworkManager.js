@@ -66,6 +66,19 @@ class NetworkManager {
       self._emit(msg.type, msg);
     };
 
+    this.transport.onReconnect = function () {
+      self._emit('transport-reconnected', {
+        roomCode: self.roomCode,
+        userId: self.userId
+      });
+    };
+
+    this.transport.onDisconnect = function () {
+      self._emit('transport-disconnected', {
+        roomCode: self.roomCode
+      });
+    };
+
     if (typeof this.transport.onPeerCountChange !== 'undefined') {
       this.transport.onPeerCountChange = function (count) {
         self.peerCount = count;
