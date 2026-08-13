@@ -112,6 +112,19 @@ $(document).ready(function() {
   // Set up event handlers
   setupEventHandlers();
 
+  // If auto-difficulty overshot, ease down when no block lands for a while
+  setInterval(function () {
+    if (!relayState || !coordinator) return;
+    if (typeof relayState.maybeEaseDifficultyIfStalled !== 'function') return;
+    const eased = relayState.maybeEaseDifficultyIfStalled();
+    if (eased) {
+      coordinator.broadcastSettings(eased);
+      if (typeof coordinator.onDifficultyRetarget === 'function') {
+        try { coordinator.onDifficultyRetarget(eased); } catch (e) {}
+      }
+    }
+  }, 5000);
+
   // Periodically rewire P2P gossip edges (Bitcoin-style peer churn)
   setInterval(function () {
     const mode = typeof resolveVizNetworkMode === 'function'
@@ -1688,8 +1701,17 @@ function updateTopologyModeCaption(mode) {
   $el.text(text);
 }
 
+function stampHubTipOnTransport() {
+  if (!net || !net.transport || !relayState || !relayState.chain || !relayState.chain.length) return;
+  const tip = relayState.chain[relayState.chain.length - 1];
+  if (!tip) return;
+  net.transport.hubTipHash = tip.hash;
+  net.transport.hubTipIndex = tip.index != null ? Number(tip.index) : Math.max(0, relayState.chain.length - 1);
+}
+
 function renderClientRelayChain(opts) {
   opts = opts || {};
+  stampHubTipOnTransport();
   if (!relayState || !relayState.chain || relayState.chain.length === 0) {
     $('#blockchainView').html('<p class="text-muted">Waiting for first blocks...</p>');
     return;

@@ -106,14 +106,31 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     return L * 16 + S;
   }
 
+  _autoMaxScore() {
+    // 3 leading zeros is the classroom ceiling. 4–5 stall every miner.
+    return 3 * 16 + 15;
+  }
+
   _scoreToDifficulty(score) {
     const minScore = 1 * 16 + 0;
-    const maxScore = 5 * 16 + 15; // leading 6 is usually unusable in class
+    const maxScore = this._autoMaxScore();
     const s = Math.max(minScore, Math.min(maxScore, score));
     return {
       difficultyLeading: Math.floor(s / 16),
       difficultySecondary: s % 16
     };
+  }
+
+  hashMeetsDifficulty(hash, leading, secondary) {
+    const h = String(hash || '');
+    const L = Math.max(0, Number(leading) || 0);
+    if (L > 0 && !h.startsWith('0'.repeat(L))) return false;
+    if (L > 0) {
+      const nextChar = h.charAt(L);
+      const secHex = Number(secondary != null ? secondary : 15).toString(16).toLowerCase();
+      if (nextChar && nextChar.toLowerCase() > secHex) return false;
+    }
+    return true;
   }
 
   /**
@@ -129,7 +146,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const intervals = Array.isArray(this.networkStats.blockIntervals)
       ? this.networkStats.blockIntervals
       : [];
-    if (intervals.length < 1) return null;
+    if (intervals.length < 3) return null;
 
     // Responsive window: last few blocks
     const recent = intervals.slice(-5);
@@ -138,14 +155,13 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
     const ratio = avg / targetMs;
     let delta = 0;
-    // Blocks too fast → harder; too slow → easier
-    if (ratio < 0.45) delta = 4;
-    else if (ratio < 0.65) delta = 2;
-    else if (ratio < 0.85) delta = 1;
-    else if (ratio > 2.2) delta = -4;
-    else if (ratio > 1.55) delta = -2;
-    else if (ratio > 1.2) delta = -1;
-    // ~0.85–1.2 of target: hold
+    // One step at a time — jumping +4 landed the class on 5 leading zeros
+    // and every miner stalled with "needs 5 leading zeros".
+    if (ratio < 0.5) delta = 1;
+    else if (ratio < 0.8) delta = 1;
+    else if (ratio > 2.0) delta = -2;
+    else if (ratio > 1.35) delta = -1;
+    // ~0.8–1.35 of target: hold
 
     if (delta === 0) return null;
 
@@ -161,6 +177,10 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       return null;
     }
 
+    this.networkStats.prevDifficulty = {
+      leading: this.settings.difficultyLeading,
+      secondary: this.settings.difficultySecondary
+    };
     this.updateSettings(next);
     this.networkStats.lastRetarget = {
       at: Date.now(),
@@ -170,6 +190,54 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       delta: delta,
       leading: next.difficultyLeading,
       secondary: next.difficultySecondary
+    };
+    return Object.assign({}, this.settings);
+  }
+
+  /**
+   * If no block has landed for well over the target time, step difficulty down.
+   * Otherwise a too-hard auto-retarget (5 zeros) leaves the class stuck forever
+   * because rejected blocks never trigger another retarget.
+   */
+  maybeEaseDifficultyIfStalled() {
+    if (!this.settings || !this.settings.autoDifficulty) return null;
+    if (this.settings.parametersLocked) return null;
+
+    const targetSec = Number(this.settings.targetBlockTimeSec);
+    const targetMs = Math.max(2000, Math.min(120000, (isNaN(targetSec) ? 10 : targetSec) * 1000));
+    const last = this.networkStats && this.networkStats.lastBlockTime;
+    const waitMs = Math.max(targetMs * 2.5, 20000);
+    const since = last || (this.networkStats && this.networkStats.lastRetarget && this.networkStats.lastRetarget.at);
+    if (since && Date.now() - since < waitMs) return null;
+    if (!since && this.chain && this.chain.length <= 1) return null;
+
+    const curScore = this._difficultyScore(
+      this.settings.difficultyLeading,
+      this.settings.difficultySecondary
+    );
+    if (curScore <= 1 * 16 + 0) return null;
+
+    const next = this._scoreToDifficulty(curScore - 2);
+    if (
+      next.difficultyLeading === this.settings.difficultyLeading &&
+      next.difficultySecondary === this.settings.difficultySecondary
+    ) {
+      return null;
+    }
+    this.networkStats.prevDifficulty = {
+      leading: this.settings.difficultyLeading,
+      secondary: this.settings.difficultySecondary
+    };
+    this.updateSettings(next);
+    this.networkStats.lastRetarget = {
+      at: Date.now(),
+      avgMs: since ? Date.now() - since : waitMs,
+      targetMs: targetMs,
+      ratio: 9,
+      delta: -2,
+      leading: next.difficultyLeading,
+      secondary: next.difficultySecondary,
+      stalled: true
     };
     return Object.assign({}, this.settings);
   }
@@ -505,20 +573,22 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     // PoW check: leading zeros + secondary hex nibble (matches miner isValidHash)
     const leading = (this.settings.difficultyLeading != null) ? this.settings.difficultyLeading : 1;
     const secondary = (this.settings.difficultySecondary != null) ? this.settings.difficultySecondary : 8;
-    const requiredPrefix = leading > 0 ? '0'.repeat(leading) : '';
-
-    if (requiredPrefix && !String(block.hash).startsWith(requiredPrefix)) {
-      return { accepted: false, reason: `Block does not meet difficulty (needs ${leading} leading zeros)` };
-    }
-    if (requiredPrefix) {
-      const nextChar = String(block.hash).charAt(leading);
-      const secHex = Number(secondary).toString(16).toLowerCase();
-      if (nextChar && nextChar.toLowerCase() > secHex) {
-        return {
-          accepted: false,
-          reason: `Block does not meet secondary difficulty (need ≤0x${secHex.toUpperCase()} after ${leading} zeros)`
-        };
-      }
+    const meetsNow = this.hashMeetsDifficulty(block.hash, leading, secondary);
+    const prev = this.networkStats && this.networkStats.prevDifficulty;
+    const retargetAt = this.networkStats && this.networkStats.lastRetarget && this.networkStats.lastRetarget.at;
+    const recentRetarget = !!(retargetAt && Date.now() - retargetAt < 20000);
+    const meetsPrev = !!(prev && this.hashMeetsDifficulty(block.hash, prev.leading, prev.secondary));
+    if (!meetsNow && !(recentRetarget && meetsPrev)) {
+      return {
+        accepted: false,
+        reason: `Block does not meet difficulty (needs ${leading} leading zeros)`,
+        difficultyLeading: leading,
+        difficultySecondary: secondary,
+        chain: this.chain.slice(),
+        newHeight: Math.max(0, this.chain.length - 1),
+        tipHash: this.chain.length ? this.chain[this.chain.length - 1].hash : null,
+        tipIndex: this.chain.length ? this.chain[this.chain.length - 1].index : 0
+      };
     }
 
     this.ensureGenesis();

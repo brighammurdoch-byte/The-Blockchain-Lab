@@ -206,8 +206,19 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
         chainHeight: packed ? packed.chainHeight : result.newHeight,
         tipHash: result.tipHash || (tip && tip.hash),
         tipIndex: result.tipIndex != null ? result.tipIndex : result.newHeight,
-        newHeight: result.newHeight
+        newHeight: result.newHeight,
+        difficultyLeading: result.difficultyLeading,
+        difficultySecondary: result.difficultySecondary
       }, from);
+      if (this.lab && typeof this.lab.maybeEaseDifficultyIfStalled === 'function') {
+        const eased = this.lab.maybeEaseDifficultyIfStalled();
+        if (eased) {
+          this.broadcastSettings(eased);
+          if (typeof this.onDifficultyRetarget === 'function') {
+            try { this.onDifficultyRetarget(eased); } catch (e) {}
+          }
+        }
+      }
     }
   }
 

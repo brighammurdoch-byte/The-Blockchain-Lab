@@ -250,11 +250,23 @@
       isAdmin: this.isAdmin,
       timestamp: Date.now()
     };
-    // Hub re-broadcasts pause state on every presence tick so phones that
-    // missed the original network-toggled still stop within a few seconds.
-    if (this.isAdmin && typeof this.networkPaused === 'boolean') {
-      msg.networkPaused = this.networkPaused;
-      msg.payload = { networkPaused: this.networkPaused, paused: this.networkPaused };
+    // Hub re-broadcasts pause + tip on every presence tick so phones that
+    // slept through block-accepted still know the live height.
+    if (this.isAdmin) {
+      var payload = {};
+      if (typeof this.networkPaused === 'boolean') {
+        msg.networkPaused = this.networkPaused;
+        payload.networkPaused = this.networkPaused;
+        payload.paused = this.networkPaused;
+      }
+      if (this.hubTipHash || this.hubTipIndex != null) {
+        msg.tipHash = this.hubTipHash;
+        msg.tipIndex = this.hubTipIndex;
+        payload.tipHash = this.hubTipHash;
+        payload.tipIndex = this.hubTipIndex;
+        payload.chainHeight = this.hubTipIndex;
+      }
+      if (Object.keys(payload).length) msg.payload = payload;
     }
     this.send(msg);
   };

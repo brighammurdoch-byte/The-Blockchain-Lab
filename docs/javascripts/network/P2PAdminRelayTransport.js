@@ -183,7 +183,7 @@
   };
 
   P2PAdminRelayTransport.prototype._announcePresence = function () {
-    this.send({
+    var msg = {
       type: this.isAdmin ? 'admin-presence' : 'peer-hello',
       roomCode: this.roomCode,
       from: this.userId,
@@ -191,7 +191,13 @@
       role: this.role,
       isAdmin: this.isAdmin,
       timestamp: Date.now()
-    });
+    };
+    if (this.isAdmin && (this.hubTipHash || this.hubTipIndex != null)) {
+      msg.tipHash = this.hubTipHash;
+      msg.tipIndex = this.hubTipIndex;
+      msg.payload = { tipHash: this.hubTipHash, tipIndex: this.hubTipIndex, chainHeight: this.hubTipIndex };
+    }
+    this.send(msg);
   };
 
   P2PAdminRelayTransport.prototype._emitPeerCount = function () {

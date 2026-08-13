@@ -203,7 +203,7 @@ function requestHubResync(reason) {
   }
   if (hubResyncAt && now - hubResyncAt < 4000) return;
   hubResyncAt = now;
-  if (chainStale || reason === 'no-chain' || reason === 'reconnect') {
+  if (chainStale || reason === 'no-chain' || reason === 'reconnect' || reason === 'forced') {
     pauseHashingForSync();
   }
   try { net.send('request-state', { from: userId }); } catch (e) {}
@@ -259,9 +259,39 @@ function trimOptimisticTail() {
   trimToHubTip();
 }
 
+function forgetSubmittedSlotsThrough(height) {
+  if (height == null || isNaN(Number(height))) return;
+  const h = Number(height);
+  const keep = [];
+  submittedSlots.forEach(function (key) {
+    const idx = Number(String(key).split('|')[1]);
+    if (isNaN(idx) || idx > h) keep.push(key);
+  });
+  submittedSlots.clear();
+  keep.forEach(function (k) { submittedSlots.add(k); });
+  if (lastSubmittedBlock && lastSubmittedBlock.index != null && Number(lastSubmittedBlock.index) <= h) {
+    lastSubmittedBlock = null;
+  }
+}
+
+function abandonStaleWait() {
+  if (waitingForHubIndex != null) {
+    forgetSubmittedSlotsThrough(waitingForHubIndex);
+  }
+  clearWaitingForHub();
+  if (isMining || window.lastMiningIntent) showCatchingUpUi();
+}
+
 function showWaitingForHub(index) {
+  const idx = index != null ? Number(index) : waitingForHubIndex;
+  // Hub already moved past this height (phone slept). Don't sit on a dead wait.
+  if (idx != null && !isNaN(idx) && hubConfirmedHeight >= idx) {
+    abandonStaleWait();
+    requestHubResync('forced');
+    return;
+  }
   waitingForHubSince = waitingForHubSince || Date.now();
-  waitingForHubIndex = index != null ? Number(index) : waitingForHubIndex;
+  waitingForHubIndex = idx;
   currentMiningBlock = null;
   const label = waitingForHubIndex != null ? (' #' + waitingForHubIndex) : '';
   $('#miningActivity').html(
@@ -275,6 +305,22 @@ function showWaitingForHub(index) {
 function clearWaitingForHub() {
   waitingForHubSince = 0;
   waitingForHubIndex = null;
+}
+
+/** Presence / compact tip: hub is at this hash/height even if we missed the blocks. */
+function noteHubTipHint(tipHash, tipIndex) {
+  markHubSeen();
+  if (tipIndex == null || isNaN(Number(tipIndex))) return;
+  const h = Number(tipIndex);
+  const hashChanged = !!(tipHash && hubConfirmedTipHash && tipHash !== hubConfirmedTipHash);
+  const behind = h > hubConfirmedHeight || hashChanged || (tipHash && !hubConfirmedTipHash);
+  const waitStale = waitingForHubIndex != null && h >= waitingForHubIndex;
+  if (!behind && !waitStale) return;
+  if (waitStale) abandonStaleWait();
+  if (tipHash) hubConfirmedTipHash = tipHash;
+  hubConfirmedHeight = Math.max(hubConfirmedHeight, h);
+  forgetSubmittedSlotsThrough(h);
+  requestHubResync('forced');
 }
 
 /** Absolute URL helpers for the mining worker (blob importScripts needs absolute). */
@@ -696,11 +742,23 @@ function startMiningKeepalive() {
     // Waiting for hub on purpose — do not remine the same height (that minted
     // several Block #N siblings from one miner). Re-broadcast the same hash.
     if (waitingForHubSince) {
-      if (!lastHubChainAt || Date.now() - lastHubChainAt > 8000) {
+      const waitTooLong = Date.now() - waitingForHubSince > 8000;
+      const chainStale = !lastHubChainAt || Date.now() - lastHubChainAt > 8000;
+      const hubPastWait = waitingForHubIndex != null && hubConfirmedHeight >= waitingForHubIndex;
+      if (hubPastWait || waitTooLong || chainStale || !hasTrustedHubChain()) {
+        if (hubPastWait || waitTooLong) abandonStaleWait();
         requestHubResync('forced');
         return;
       }
-      if (Date.now() - waitingForHubSince > 12000 && lastSubmittedBlock && net) {
+      if (lastSubmittedBlock && !hashMeetsLocalDifficulty(lastSubmittedBlock.hash, lastKnownAdminSettings)) {
+        discardInvalidSubmittedWork();
+        remineOnCanonicalTip({ force: true });
+        return;
+      }
+      // Only rebroadcast if we are still racing for hub+1 on the same parent
+      if (lastSubmittedBlock && net &&
+          lastSubmittedBlock.index != null &&
+          Number(lastSubmittedBlock.index) === hubConfirmedHeight + 1) {
         debugWarn('Re-broadcasting submitted block, not remaking the height', lastSubmittedBlock.index);
         net.send('block-submitted', { block: lastSubmittedBlock, minerId: userId });
         net.send('request-state', { from: userId });
@@ -990,8 +1048,9 @@ function applyCanonicalChain(chain, opts) {
     hubConfirmedHeight = Math.max(hubConfirmedHeight, chain.length - 1);
   }
   markHubChainSeen(newTip && newTip.hash, incomingHeight);
+  forgetSubmittedSlotsThrough(hubConfirmedHeight);
   if (waitingForHubIndex != null && hubConfirmedHeight >= waitingForHubIndex) {
-    clearWaitingForHub();
+    abandonStaleWait();
   }
 
   // Always remine after a hub sync while mining — cancels private optimistic forks
@@ -1811,9 +1870,11 @@ function initClientSideNetworkingForParticipant(mode) {
       showToastNotification('Admin locked network parameters (difficulty/reward frozen)', 'info');
     }
 
-    // Re-apply any mining parameter changes if mining
+    // Harder target makes the in-flight solution invalid — do not keep
+    // rebroadcasting it (that is the "needs 5 leading zeros" toast loop).
+    const dropped = discardInvalidSubmittedWork();
     if (isMining && !isColluding) {
-      remineOnCanonicalTip();
+      remineOnCanonicalTip({ force: dropped });
     }
   });
 
@@ -2042,6 +2103,23 @@ function initClientSideNetworkingForParticipant(mode) {
       return;
     }
     debugWarn('Block rejected by hub', reason);
+    if (payload && (payload.difficultyLeading != null || payload.difficultySecondary != null)) {
+      lastKnownAdminSettings = normalizeAdminSettings(Object.assign({}, lastKnownAdminSettings || {}, {
+        difficultyLeading: payload.difficultyLeading,
+        difficultySecondary: payload.difficultySecondary
+      }));
+      if (payload.difficultyLeading !== undefined) {
+        $('#difficultyLevel').text(
+          payload.difficultyLeading + ' + 0x' +
+          (payload.difficultySecondary != null ? Number(payload.difficultySecondary).toString(16) : '8')
+        );
+      }
+    }
+    const difficultyReject = /does not meet difficulty/i.test(reason);
+    if (difficultyReject) {
+      discardInvalidSubmittedWork();
+      abandonStaleWait();
+    }
     if (payload && payload.tipHash) {
       markHubChainSeen(payload.tipHash, payload.tipIndex != null ? payload.tipIndex : payload.newHeight);
       trimToHubTip();
@@ -2052,12 +2130,18 @@ function initClientSideNetworkingForParticipant(mode) {
         truncated: !!payload.chainTruncated,
         chainHeight: payload.chainHeight != null ? payload.chainHeight : payload.newHeight
       });
+    } else if (difficultyReject && isMining) {
+      remineOnCanonicalTip({ force: true });
     } else {
       requestHubResync('forced');
     }
-    showToastNotification(reason
-      ? ('Block rejected: ' + reason)
-      : 'Block rejected — remine on hub tip', 'warning');
+    if (difficultyReject) {
+      showToastNotification('Difficulty went up — remineing on the new target', 'info');
+    } else {
+      showToastNotification(reason
+        ? ('Block rejected: ' + reason)
+        : 'Block rejected — remine on hub tip', 'warning');
+    }
   });
 
   net.on('transaction-accepted', (msg) => {
@@ -2214,6 +2298,9 @@ function initClientSideNetworkingForParticipant(mode) {
     debugLog('Admin is present via relay:', msg.adminUserId || (msg.payload && msg.payload.adminUserId));
     // Resync pause from hub heartbeats (phones often miss one-shot toggles)
     const p = msg.payload || msg;
+    const hintHash = p.tipHash || msg.tipHash;
+    const hintH = p.tipIndex != null ? p.tipIndex : (p.chainHeight != null ? p.chainHeight : msg.tipIndex);
+    if (hintHash || hintH != null) noteHubTipHint(hintHash, hintH);
     if (typeof p.networkPaused === 'boolean' || typeof p.paused === 'boolean') {
       const want = typeof p.networkPaused === 'boolean' ? p.networkPaused : p.paused;
       if (want !== networkPaused) {
@@ -2251,7 +2338,9 @@ function initClientSideNetworkingForParticipant(mode) {
     getLastHubSeenAt: function () { return lastHubSeenAt; },
     setLastHubSeenAt: function (t) { lastHubSeenAt = Number(t) || 0; },
     getLastHubChainAt: function () { return lastHubChainAt; },
-    setLastHubChainAt: function (t) { lastHubChainAt = Number(t) || 0; }
+    setLastHubChainAt: function (t) { lastHubChainAt = Number(t) || 0; },
+    noteHubTipHint: noteHubTipHint,
+    abandonStaleWait: abandonStaleWait
   };
 }
 
@@ -3049,6 +3138,38 @@ function getMiningDifficulty() {
   return normalizeAdminSettings(lastKnownAdminSettings || {}).currentDifficulty;
 }
 
+function hashMeetsLocalDifficulty(hash, settings) {
+  settings = settings || lastKnownAdminSettings || {};
+  const L = settings.difficultyLeading != null
+    ? Number(settings.difficultyLeading)
+    : (settings.currentDifficulty && settings.currentDifficulty.leadingZeros != null
+      ? Number(settings.currentDifficulty.leadingZeros)
+      : 1);
+  const S = settings.difficultySecondary != null
+    ? Number(settings.difficultySecondary)
+    : (settings.currentDifficulty && settings.currentDifficulty.secondaryHex != null
+      ? parseInt(String(settings.currentDifficulty.secondaryHex), 16)
+      : 15);
+  const h = String(hash || '');
+  if (L > 0 && !h.startsWith('0'.repeat(L))) return false;
+  if (L > 0) {
+    const nextChar = h.charAt(L);
+    const secHex = Number(isNaN(S) ? 15 : S).toString(16).toLowerCase();
+    if (nextChar && nextChar.toLowerCase() > secHex) return false;
+  }
+  return true;
+}
+
+function discardInvalidSubmittedWork() {
+  if (!lastSubmittedBlock || hashMeetsLocalDifficulty(lastSubmittedBlock.hash, lastKnownAdminSettings)) {
+    return false;
+  }
+  if (lastSubmittedBlock.index != null) forgetSubmittedSlotsThrough(lastSubmittedBlock.index);
+  lastSubmittedBlock = null;
+  clearWaitingForHub();
+  return true;
+}
+
 function fetchDataAndMine() {
   if (!isMining) return;
   if (networkPaused) {
@@ -3081,13 +3202,21 @@ function fetchDataAndMine() {
       return;
     }
     if (tmpl.waitForHub) {
-      if (tmpl.needResync) requestHubResync('forced');
+      if (tmpl.needResync) {
+        requestHubResync('forced');
+        showCatchingUpUi();
+        return;
+      }
       showWaitingForHub(tmpl.waitingOn);
       return;
     }
     if (submittedSlots.has(blockSlotKey(tmpl))) {
-      showWaitingForHub(tmpl.index);
-      return;
+      if (tmpl.index != null && hubConfirmedHeight >= Number(tmpl.index)) {
+        forgetSubmittedSlotsThrough(hubConfirmedHeight);
+      } else {
+        showWaitingForHub(tmpl.index);
+        return;
+      }
     }
     clearWaitingForHub();
     const newBlock = {

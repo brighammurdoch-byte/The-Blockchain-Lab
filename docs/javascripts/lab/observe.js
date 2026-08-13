@@ -301,6 +301,14 @@ function initClientSideNetworkingForObserver(mode) {
     const p = (msg && (msg.payload || msg)) || {};
     if (typeof p.networkPaused === 'boolean') networkPaused = p.networkPaused;
     else if (typeof p.paused === 'boolean') networkPaused = p.paused;
+    const tipIndex = p.tipIndex != null ? Number(p.tipIndex) : Number(p.chainHeight);
+    const localTip = window._observerChain && window._observerChain.length
+      ? window._observerChain[window._observerChain.length - 1]
+      : null;
+    const localH = localTip && localTip.index != null ? Number(localTip.index) : -1;
+    if (!isNaN(tipIndex) && tipIndex > localH && net) {
+      net.send('request-state', { from: userId });
+    }
   });
 
   net.on('peer-hello', function (msg) {
