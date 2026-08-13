@@ -20,10 +20,14 @@ let miningKeepaliveTimer = null;
 let mainThreadMineTimer = null;
 let lastRemineAt = 0;
 let lastHubSeenAt = 0;
+/** Last time we applied an authoritative hub chain/tip (not just admin-presence). */
+let lastHubChainAt = 0;
 let hubResyncAt = 0;
 let hubResyncTimer = null;
 /** Highest block index the hub has confirmed (classic main). Caps optimistic race-ahead. */
 let hubConfirmedHeight = 0;
+/** Hash of the hub's classic tip. Height alone is not enough after a sleep-orphan. */
+let hubConfirmedTipHash = null;
 /** When set, we submitted hub+1 and are waiting for the hub before mining further. */
 let waitingForHubSince = 0;
 let waitingForHubIndex = null;
@@ -135,18 +139,31 @@ function persistMiningIntent(on) {
 
 function markHubSeen() {
   lastHubSeenAt = Date.now();
+  if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
+}
+
+function markHubChainSeen(tipHash, height) {
+  lastHubSeenAt = Date.now();
+  lastHubChainAt = lastHubSeenAt;
   hubResyncAt = 0;
+  if (tipHash) hubConfirmedTipHash = tipHash;
+  if (height != null && !isNaN(Number(height))) {
+    hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(height));
+  }
   if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
 }
 
 function hasTrustedHubChain() {
   const chain = window.lastRelayedChain || [];
   if (!chain.length) return false;
+  if (hubConfirmedTipHash) {
+    return chain.some(function (b) { return b && b.hash === hubConfirmedTipHash; });
+  }
   // Local-only genesis is not the classroom tip
   if (chain.length === 1 && chain[0] && chain[0].miner === 'genesis' && hubConfirmedHeight < 1) {
-    return lastHubSeenAt > 0 && (Date.now() - lastHubSeenAt) < 15000;
+    return lastHubChainAt > 0 && (Date.now() - lastHubChainAt) < 15000;
   }
-  return true;
+  return lastHubChainAt > 0;
 }
 
 function showCatchingUpUi() {
@@ -176,30 +193,39 @@ function pauseHashingForSync() {
 function requestHubResync(reason) {
   if (!net) return;
   const now = Date.now();
-  const stale = !lastHubSeenAt || (now - lastHubSeenAt > 4000);
+  // Presence ticks stay fresh while the phone's chain is hours behind.
+  // Only an applied hub tip counts as in-sync.
+  const chainStale = !lastHubChainAt || (now - lastHubChainAt > 8000) || !hasTrustedHubChain();
   const force = reason === 'forced' || reason === 'no-chain' || reason === 'reconnect';
-  if (!stale && !force) {
+  if (!chainStale && !force) {
     if (isMining && hasTrustedHubChain()) remineOnCanonicalTip();
     return;
   }
   if (hubResyncAt && now - hubResyncAt < 4000) return;
   hubResyncAt = now;
-  if (stale || reason === 'no-chain' || reason === 'reconnect') {
+  if (chainStale || reason === 'no-chain' || reason === 'reconnect') {
     pauseHashingForSync();
   }
   try { net.send('request-state', { from: userId }); } catch (e) {}
   if (hubResyncTimer) clearTimeout(hubResyncTimer);
   hubResyncTimer = setTimeout(function () {
-    if (!lastHubSeenAt || Date.now() - lastHubSeenAt > 5000) {
+    if (!lastHubChainAt || Date.now() - lastHubChainAt > 5000) {
       hubResyncAt = 0;
       requestHubResync('forced');
     }
   }, 7000);
 }
 
-/** Last classic block at or below the hub-confirmed height (ignore optimistic tail). */
+/** Hub classic tip — must match the hub's tip hash, not just a local height. */
 function getHubConfirmedClassicTip(main) {
   main = main || window.lastRelayedChain || [];
+  if (hubConfirmedTipHash) {
+    for (let i = main.length - 1; i >= 0; i--) {
+      const b = main[i];
+      if (b && b.hash === hubConfirmedTipHash && !isNewForkId(b.forkId)) return b;
+    }
+    return null;
+  }
   for (let i = main.length - 1; i >= 0; i--) {
     const b = main[i];
     if (!b || !b.hash) continue;
@@ -209,9 +235,16 @@ function getHubConfirmedClassicTip(main) {
   return null;
 }
 
-function trimOptimisticTail() {
+function trimToHubTip() {
   const chain = window.lastRelayedChain;
   if (!chain || !chain.length) return;
+  if (hubConfirmedTipHash) {
+    const idx = chain.findIndex(function (b) { return b && b.hash === hubConfirmedTipHash; });
+    if (idx >= 0) {
+      chain.length = idx + 1;
+      return;
+    }
+  }
   while (
     chain.length &&
     chain[chain.length - 1] &&
@@ -220,6 +253,10 @@ function trimOptimisticTail() {
   ) {
     chain.pop();
   }
+}
+
+function trimOptimisticTail() {
+  trimToHubTip();
 }
 
 function showWaitingForHub(index) {
@@ -492,6 +529,7 @@ function handleMiningWorkerMessage(ev) {
     const nextTmpl = getMiningTemplate();
     if (!nextTmpl || nextTmpl.waitForHub) {
       currentMiningBlock = null;
+      if (nextTmpl && nextTmpl.needResync) requestHubResync('forced');
       showWaitingForHub((nextTmpl && nextTmpl.waitingOn) || foundIndex);
       return;
     }
@@ -658,7 +696,7 @@ function startMiningKeepalive() {
     // Waiting for hub on purpose — do not remine the same height (that minted
     // several Block #N siblings from one miner). Re-broadcast the same hash.
     if (waitingForHubSince) {
-      if (Date.now() - lastHubSeenAt > 4000) {
+      if (!lastHubChainAt || Date.now() - lastHubChainAt > 8000) {
         requestHubResync('forced');
         return;
       }
@@ -850,22 +888,19 @@ function applyCanonicalChain(chain, opts) {
     ? Number(opts.chainHeight)
     : (newTip && newTip.index != null ? Number(newTip.index) : chain.length - 1);
   const local = window.lastRelayedChain || [];
-  // Compact MQTT snapshot of the same tip must not wipe a longer local copy
-  if (
-    opts.truncated &&
-    local.length > chain.length &&
-    newTip &&
-    local.some(function (b) { return b && b.hash === newTip.hash; })
-  ) {
-    if (incomingHeight != null && !isNaN(incomingHeight)) {
-      hubConfirmedHeight = Math.max(hubConfirmedHeight, incomingHeight);
+  // Compact snapshot: keep the local prefix through the hub tip, drop any
+  // sleep-orphan tail we mined while disconnected.
+  if (opts.truncated && newTip && newTip.hash) {
+    const idx = local.findIndex(function (b) { return b && b.hash === newTip.hash; });
+    if (idx >= 0) {
+      window.lastRelayedChain = local.slice(0, idx + 1);
+      markHubChainSeen(newTip.hash, incomingHeight);
+      if (waitingForHubIndex != null && hubConfirmedHeight >= waitingForHubIndex) {
+        clearWaitingForHub();
+      }
+      if (opts.remine !== false && isMining) remineOnCanonicalTip({ force: true });
+      return false;
     }
-    markHubSeen();
-    if (waitingForHubIndex != null && hubConfirmedHeight >= waitingForHubIndex) {
-      clearWaitingForHub();
-    }
-    if (opts.remine !== false && isMining) remineOnCanonicalTip({ force: true });
-    return false;
   }
   const tipChanged = !oldTip || !newTip || oldTip.hash !== newTip.hash;
 
@@ -954,7 +989,7 @@ function applyCanonicalChain(chain, opts) {
   } else if (chain.length) {
     hubConfirmedHeight = Math.max(hubConfirmedHeight, chain.length - 1);
   }
-  markHubSeen();
+  markHubChainSeen(newTip && newTip.hash, incomingHeight);
   if (waitingForHubIndex != null && hubConfirmedHeight >= waitingForHubIndex) {
     clearWaitingForHub();
   }
@@ -1280,8 +1315,17 @@ function getMiningTemplate() {
   // lastRelayedChain may include one optimistic local block; using that as
   // parent produced "working on #23" with no #22 while hashing was skipped.
   if (myForkChoice !== 'new' || act == null) {
-    const hubTip = getHubConfirmedClassicTip(main) || classicTip;
-    if (!hubTip) return null;
+    const hubTip = getHubConfirmedClassicTip(main);
+    if (!hubTip) {
+      return {
+        waitForHub: true,
+        needResync: true,
+        waitingOn: hubConfirmedHeight + 1,
+        previousHash: hubConfirmedTipHash || (classicTip && classicTip.hash) || '',
+        index: hubConfirmedHeight + 1,
+        forkId: effectiveForkIdForIndex(hubConfirmedHeight + 1)
+      };
+    }
     const nextIndex = (hubTip.index != null ? Number(hubTip.index) : 0) + 1;
     const tail = main[main.length - 1];
     if (
@@ -1866,8 +1910,11 @@ function initClientSideNetworkingForParticipant(mode) {
         networkStats: payload.networkStats,
         orphans: payload.orphans || lastKnownOrphans,
         pendingTransactions: payload.pendingTransactions,
-        remine: true
+        remine: true,
+        truncated: !!payload.chainTruncated,
+        chainHeight: payload.chainHeight != null ? payload.chainHeight : payload.newHeight
       });
+      if (payload.tipHash) markHubChainSeen(payload.tipHash, payload.tipIndex != null ? payload.tipIndex : payload.newHeight);
       if (payload.reorg) {
         showToastNotification('Chain reorg — following longest chain', 'warning');
       } else if (payload.isFork && block && isNewForkId(block.forkId)) {
@@ -1888,11 +1935,12 @@ function initClientSideNetworkingForParticipant(mode) {
       if (!window.lastRelayedChain) window.lastRelayedChain = [];
 
       // Hub-confirmed height (compact path never called applyCanonicalChain before)
-      markHubSeen();
-      if (payload.newHeight != null && !isNaN(Number(payload.newHeight))) {
-        hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(payload.newHeight));
-      } else if (block.index != null && !isNewForkId(block.forkId) && !payload.isFork) {
-        hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(block.index));
+      if (payload.tipHash) {
+        markHubChainSeen(payload.tipHash, payload.tipIndex != null ? payload.tipIndex : payload.newHeight);
+      } else if (!payload.isFork && block && block.hash && isClassicForkId(block.forkId)) {
+        markHubChainSeen(block.hash, block.index);
+      } else {
+        markHubSeen();
       }
 
       // 1) Refresh mempool FIRST (before remine) so the next template is clean
@@ -1911,26 +1959,34 @@ function initClientSideNetworkingForParticipant(mode) {
       // 2) Extend local main mirror only with classic-side tip extensions
       let shouldRemine = false;
       const tip = window.lastRelayedChain[window.lastRelayedChain.length - 1];
-      if (isNewForkId(block.forkId)) {
-        // Do not pollute lastRelayedChain with NEW blocks
-        noteNewForkBlock(block);
-        shouldRemine = isMining;
+      if (payload.isFork || isNewForkId(block.forkId)) {
+        // Never append a fork/orphan onto our main mirror — that is how a
+        // sleeping phone built a private chain ahead of the hub.
+        if (isNewForkId(block.forkId)) noteNewForkBlock(block);
+        else mergeKnownOrphans([block]);
+        trimToHubTip();
+        if (payload.tipHash) {
+          markHubChainSeen(payload.tipHash, payload.tipIndex != null ? payload.tipIndex : payload.newHeight);
+          trimToHubTip();
+        }
+        shouldRemine = isMining && hasTrustedHubChain();
+        if (!hasTrustedHubChain()) requestHubResync('forced');
       } else if (!tip || tip.hash === block.hash) {
         shouldRemine = isMining;
       } else if (block.previousHash === tip.hash && isClassicForkId(block.forkId)) {
         window.lastRelayedChain.push(block);
+        markHubChainSeen(block.hash, block.index);
         shouldRemine = isMining;
-      } else if (block.previousHash === tip.hash && isNewForkId(block.forkId)) {
-        noteNewForkBlock(block);
+      } else if (block.previousHash === hubConfirmedTipHash && isClassicForkId(block.forkId)) {
+        trimToHubTip();
+        window.lastRelayedChain.push(block);
+        markHubChainSeen(block.hash, block.index);
         shouldRemine = isMining;
       } else {
         // Stale/orphan without chain snapshot — ask hub for canonical state
-        if (!payload.isFork) {
-          net.send('request-state', { from: userId });
-        } else {
-          mergeKnownOrphans([block]);
-          shouldRemine = isMining;
-        }
+        mergeKnownOrphans([block]);
+        requestHubResync('forced');
+        shouldRemine = false;
       }
       if (shouldRemine) {
         remineOnCanonicalTip({ force: true });
@@ -1976,11 +2032,18 @@ function initClientSideNetworkingForParticipant(mode) {
       return;
     }
     debugWarn('Block rejected by hub', reason);
+    if (payload && payload.tipHash) {
+      markHubChainSeen(payload.tipHash, payload.tipIndex != null ? payload.tipIndex : payload.newHeight);
+      trimToHubTip();
+    }
     if (payload && payload.chain && payload.chain.length) {
-      applyCanonicalChain(payload.chain, { remine: true });
+      applyCanonicalChain(payload.chain, {
+        remine: true,
+        truncated: !!payload.chainTruncated,
+        chainHeight: payload.chainHeight != null ? payload.chainHeight : payload.newHeight
+      });
     } else {
-      remineOnCanonicalTip();
-      net.send('request-state', { from: userId });
+      requestHubResync('forced');
     }
     showToastNotification(reason
       ? ('Block rejected: ' + reason)
@@ -2110,7 +2173,9 @@ function initClientSideNetworkingForParticipant(mode) {
       mergeKnownOrphans(state.orphans);
     }
 
-    if (state.chainHeight != null && !isNaN(Number(state.chainHeight))) {
+    if (state.tipHash) {
+      markHubChainSeen(state.tipHash, state.chainHeight != null ? state.chainHeight : state.tipIndex);
+    } else if (state.chainHeight != null && !isNaN(Number(state.chainHeight))) {
       hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(state.chainHeight));
     }
 
@@ -2171,8 +2236,12 @@ function initClientSideNetworkingForParticipant(mode) {
     hasTrustedHubChain: hasTrustedHubChain,
     getHubConfirmedHeight: function () { return hubConfirmedHeight; },
     setHubConfirmedHeight: function (h) { hubConfirmedHeight = Number(h) || 0; },
+    getHubConfirmedTipHash: function () { return hubConfirmedTipHash; },
+    setHubConfirmedTipHash: function (h) { hubConfirmedTipHash = h || null; },
     getLastHubSeenAt: function () { return lastHubSeenAt; },
-    setLastHubSeenAt: function (t) { lastHubSeenAt = Number(t) || 0; }
+    setLastHubSeenAt: function (t) { lastHubSeenAt = Number(t) || 0; },
+    getLastHubChainAt: function () { return lastHubChainAt; },
+    setLastHubChainAt: function (t) { lastHubChainAt = Number(t) || 0; }
   };
 }
 
@@ -3002,6 +3071,7 @@ function fetchDataAndMine() {
       return;
     }
     if (tmpl.waitForHub) {
+      if (tmpl.needResync) requestHubResync('forced');
       showWaitingForHub(tmpl.waitingOn);
       return;
     }

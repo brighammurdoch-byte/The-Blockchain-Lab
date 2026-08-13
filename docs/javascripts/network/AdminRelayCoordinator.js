@@ -154,6 +154,13 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
       const hardForkLive = !!(this.lab && this.lab.pendingFork && this.lab.pendingFork.height != null);
       const needFullChain = !!(result.reorg || result.isFork || !result.tipChanged || hardForkLive);
       const needOrphans = needFullChain || hardForkLive || !!(block && block.forkId && block.forkId !== 'classic');
+      const packed = (needFullChain && this.lab && typeof this.lab.compactChainForTransport === 'function')
+        ? this.lab.compactChainForTransport(50000)
+        : null;
+      const tipHash = result.tipHash || snap.tipHash || (this.lab && this.lab.chain && this.lab.chain.length
+        ? this.lab.chain[this.lab.chain.length - 1].hash
+        : null);
+      const tipIndex = result.tipIndex != null ? result.tipIndex : result.newHeight;
 
       this.net.send('block-accepted', {
         block,
@@ -162,7 +169,11 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
         reorg: !!result.reorg,
         tipChanged: !!result.tipChanged,
         newHeight: result.newHeight,
-        chain: needFullChain ? chain : undefined,
+        tipHash: tipHash,
+        tipIndex: tipIndex,
+        chain: packed ? packed.chain : (needFullChain ? chain : undefined),
+        chainTruncated: packed ? !!packed.chainTruncated : undefined,
+        chainHeight: packed ? packed.chainHeight : result.newHeight,
         orphans: needOrphans ? (snap.orphans || []) : undefined,
         participants: participants,
         pendingTransactions: snap.pendingTransactions || [],
@@ -178,11 +189,24 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
         }
       }
     } else {
-      const chain = this.lab && Array.isArray(this.lab.chain) ? this.lab.chain.slice() : null;
+      const packed = (this.lab && typeof this.lab.compactChainForTransport === 'function')
+        ? this.lab.compactChainForTransport(50000)
+        : null;
+      const chain = packed
+        ? packed.chain
+        : (this.lab && Array.isArray(this.lab.chain) ? this.lab.chain.slice() : null);
+      const tip = this.lab && this.lab.chain && this.lab.chain.length
+        ? this.lab.chain[this.lab.chain.length - 1]
+        : null;
       this.net.send('block-rejected', {
         reason: result.reason || 'Rejected by hub',
         blockHash: block && block.hash,
-        chain: chain
+        chain: chain,
+        chainTruncated: packed ? !!packed.chainTruncated : undefined,
+        chainHeight: packed ? packed.chainHeight : result.newHeight,
+        tipHash: result.tipHash || (tip && tip.hash),
+        tipIndex: result.tipIndex != null ? result.tipIndex : result.newHeight,
+        newHeight: result.newHeight
       }, from);
     }
   }

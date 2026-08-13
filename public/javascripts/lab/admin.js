@@ -681,6 +681,8 @@ function initClientSideNetworking(mode, roomCode) {
         reorg: !!result.reorg,
         tipChanged: !!result.tipChanged,
         newHeight: result.newHeight,
+        tipHash: result.tipHash,
+        tipIndex: result.tipIndex,
         chain: result.chain || relayState.chain.slice(),
         participants: Array.from(relayState.participants.values()),
         networkStats: { ...relayState.networkStats }

@@ -593,6 +593,33 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       console.warn('[RelayState] Block parent not yet known — storing as orphan until parent arrives');
     }
 
+    // Sleeping phones keep hashing a stale parent. Accepting those as orphans
+    // floods the projector and the phone never follows the real tip.
+    // Same-height races and short classroom 51% forks (default 2 back) still pass.
+    if (
+      oldTip &&
+      block.previousHash !== '0' &&
+      block.previousHash !== oldTip.hash &&
+      !(this.pendingFork && this.pendingFork.height != null)
+    ) {
+      const parent = this.allBlocks.get(block.previousHash) ||
+        (this.chain && this.chain.find(function (b) { return b && b.hash === block.previousHash; }));
+      if (parent) {
+        const parentIndex = parent.index != null ? Number(parent.index) : -1;
+        const tipIndex = oldTip.index != null ? Number(oldTip.index) : Math.max(0, this.chain.length - 1);
+        if (parentIndex >= 0 && tipIndex - parentIndex > 4) {
+          return {
+            accepted: false,
+            reason: 'Stale parent — mine on the current hub tip',
+            chain: this.chain.slice(),
+            newHeight: tipIndex,
+            tipHash: oldTip.hash,
+            tipIndex: tipIndex
+          };
+        }
+      }
+    }
+
     // First-seen wins at a given parent + height + fork. Extra hashes at the
     // same slot are stale (one miner remine-spam, or a late racer).
     const slotFid = block.forkId || 'classic';
@@ -659,6 +686,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       retargetSettings = this.maybeRetargetDifficulty();
     }
 
+    const tipOut = this.chain[this.chain.length - 1] || newTip;
     return {
       accepted: true,
       newHeight: Math.max(0, this.chain.length - 1),
@@ -666,8 +694,25 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       reorg: didReorg,
       tipChanged: tipChanged,
       chain: this.chain.slice(),
+      tipHash: tipOut && tipOut.hash,
+      tipIndex: tipOut && tipOut.index != null ? tipOut.index : Math.max(0, this.chain.length - 1),
       retargetSettings: retargetSettings
     };
+  }
+
+  compactChainForTransport(maxBytes) {
+    maxBytes = maxBytes || 70000;
+    const chain = Array.isArray(this.chain) ? this.chain : [];
+    const tip = chain.length ? chain[chain.length - 1] : null;
+    const meta = {
+      chainHeight: tip && tip.index != null ? tip.index : Math.max(0, chain.length - 1),
+      tipHash: tip && tip.hash,
+      tipIndex: tip && tip.index != null ? tip.index : Math.max(0, chain.length - 1)
+    };
+    let size = 0;
+    try { size = JSON.stringify(chain).length; } catch (e) { size = 999999; }
+    if (size <= maxBytes) return Object.assign({ chain: chain, chainTruncated: false }, meta);
+    return Object.assign({ chain: chain.slice(-20), chainTruncated: true }, meta);
   }
   tryAddTransaction(tx) {
     if (!tx) return { accepted: false, reason: 'Empty transaction' };
@@ -722,40 +767,26 @@ if (typeof window.RelayBlockchainState === 'undefined') {
         orphans.push(block);
       }
     });
+    const compact = (typeof this.compactChainForTransport === 'function')
+      ? this.compactChainForTransport(70000)
+      : { chain: this.chain, chainTruncated: false };
     const tip = this.chain.length ? this.chain[this.chain.length - 1] : null;
-    const full = {
-      chain: this.chain,
-      orphans: orphans,
+    return {
+      chain: compact.chain,
+      chainTruncated: !!compact.chainTruncated,
+      chainHeight: compact.chainHeight != null
+        ? compact.chainHeight
+        : (tip && tip.index != null ? tip.index : Math.max(0, this.chain.length - 1)),
+      tipHash: compact.tipHash || (tip && tip.hash),
+      tipIndex: compact.tipIndex,
+      genesis: compact.chainTruncated ? (this.chain[0] || null) : undefined,
+      orphans: compact.chainTruncated ? orphans.slice(-6) : orphans,
       participants: Array.from(this.participants.values()),
       adminSettings: { ...this.settings },
       networkStats: { ...this.networkStats },
       pendingTransactions: this.pendingTransactions.slice(0, 20),
       networkPaused: !!this.networkPaused,
-      pendingFork: this.pendingFork ? { ...this.pendingFork } : null,
-      chainHeight: tip && tip.index != null ? tip.index : Math.max(0, this.chain.length - 1),
-      tipHash: tip && tip.hash
-    };
-    // Public MQTT brokers drop ~64–256KB publishes. A long classroom chain
-    // (plus orphans) after a phone refresh never arrives — miner stays on genesis.
-    let size = 0;
-    try { size = JSON.stringify(full).length; } catch (e) { size = 999999; }
-    const MAX = 70000;
-    if (size <= MAX) return full;
-
-    const tail = this.chain.slice(-20);
-    return {
-      chain: tail,
-      chainTruncated: true,
-      chainHeight: full.chainHeight,
-      tipHash: full.tipHash,
-      genesis: this.chain[0] || null,
-      orphans: orphans.slice(-6),
-      participants: full.participants,
-      adminSettings: full.adminSettings,
-      networkStats: full.networkStats,
-      pendingTransactions: full.pendingTransactions,
-      networkPaused: full.networkPaused,
-      pendingFork: full.pendingFork
+      pendingFork: this.pendingFork ? { ...this.pendingFork } : null
     };
   }
 
