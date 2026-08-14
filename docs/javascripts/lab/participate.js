@@ -4006,7 +4006,7 @@ function updateParticipantList(blockchain) {
     const isSelf = addr && userId && addr === userId;
     const selfBadge = isSelf ? ' <span class="label label-default">You</span>' : '';
     const sendBtn = (!isSelf && addr)
-      ? `<button type="button" class="btn btn-xs btn-primary use-recipient-btn" data-address="${escapeHtml(addr)}" title="Fill send form with this address" style="margin-left: 4px;">Send to</button>`
+      ? `<button type="button" class="btn btn-xs btn-primary use-recipient-btn" data-address="${escapeHtml(addr)}" title="Fill send form with this address">Send to</button>`
       : '';
     const copyBtn = addr
       ? `<button type="button" class="btn btn-xs btn-default copy-btn" data-clipboard-text="${escapeHtml(addr)}" title="Copy address">Copy</button>`
@@ -4014,7 +4014,7 @@ function updateParticipantList(blockchain) {
 
     html += `<li class="list-group-item" style="padding: 8px 10px;">
       <div>${roleLabel}${selfBadge}
-        <span class="pull-right">${copyBtn}${sendBtn}</span>
+        <span class="participant-row-actions pull-right">${copyBtn}${sendBtn}</span>
       </div>
       ${nameHtml}
       <div style="margin-top: 4px; clear: both;">

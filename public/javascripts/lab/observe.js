@@ -701,7 +701,7 @@ function updateParticipantList(blockchain) {
 
     html += `<li class="list-group-item" style="padding: 8px 10px;">
       <div>${roleLabel}${selfBadge}
-        <span class="pull-right">${copyBtn}${sendBtn ? ' ' + sendBtn : ''}</span>
+        <span class="participant-row-actions pull-right">${copyBtn}${sendBtn}</span>
       </div>
       ${nameHtml}
       <div style="margin-top: 4px; clear: both;">

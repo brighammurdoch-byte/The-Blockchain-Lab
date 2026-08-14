@@ -236,10 +236,16 @@ const Relay = loadRelay();
     pass('Legacy 51% helper text removed from admin.pug', '');
   } else fail('Legacy 51% helper text removed from admin.pug', 'still present');
 
-  if (/observe\.js\?v=p2fix4/.test(fs.readFileSync(path.join(__dirname, '..', 'views/lab/observe.pug'), 'utf8')) &&
+  if (/observe\.js\?v=p2fix5/.test(fs.readFileSync(path.join(__dirname, '..', 'views/lab/observe.pug'), 'utf8')) &&
+      /participate\.js\?v=p2fix5/.test(fs.readFileSync(path.join(__dirname, '..', 'views/lab/participate.pug'), 'utf8')) &&
       /landing\.js\?v=p2fix4/.test(fs.readFileSync(path.join(__dirname, '..', 'views/lab/index.pug'), 'utf8'))) {
-    pass('Changed scripts cache-bust to p2fix4', '');
-  } else fail('Changed scripts cache-bust to p2fix4', 'stale ?v=');
+    pass('Changed scripts cache-bust past p2fix3', '');
+  } else fail('Changed scripts cache-bust past p2fix3', 'stale ?v=');
+
+  const theme = fs.readFileSync(path.join(__dirname, '..', 'public/stylesheets/lab-theme.css'), 'utf8');
+  if (/participant-row-actions/.test(participate) && /participant-row-actions/.test(theme) && /gap:\s*8px/.test(theme)) {
+    pass('Copy and Send to have an 8px gap on phone roster rows', '');
+  } else fail('Copy and Send to have an 8px gap on phone roster rows', 'missing class/gap');
 })();
 
 const failed = results.filter((r) => !r.ok).length;
