@@ -77,9 +77,29 @@
     return { valid: true, gas: gas };
   };
 
+  function isPlaceholderAddress(addr) {
+    var a = String(addr || '').trim();
+    if (!a) return true;
+    if (/^0xpeer$/i.test(a) || /^peer$/i.test(a)) return true;
+    if (/^0x0+$/i.test(a)) return true;
+    if (/^0x\.+$/i.test(a) || a === '0x…' || a === '0x...') return true;
+    return false;
+  }
+
+  function isValidLabAddress(addr) {
+    var a = String(addr || '').trim();
+    if (isPlaceholderAddress(a)) return false;
+    if (/^0x[a-zA-Z0-9]{2,40}$/.test(a)) return true;
+    if (/^[A-Za-z][A-Za-z0-9_]{1,31}$/.test(a)) return true;
+    return false;
+  }
+
   EthereumChain.prototype.addTransaction = function (from, to, eth) {
     var value = Math.round(Number(eth) * WEI);
     if (!from || !to || !(value >= 0)) return { ok: false, error: 'invalid tx' };
+    if (isPlaceholderAddress(to) || !isValidLabAddress(to)) {
+      return { ok: false, error: 'invalid recipient address (not the 0xPeer placeholder)' };
+    }
     var acct = this._acct(from);
     var tx = { from: from, to: to, value: value, nonce: acct.nonce, hash: 'etx-' + Date.now() };
     var chk = this.checkTx(tx);
@@ -143,6 +163,8 @@
   global.EthereumLab = {
     WEI: WEI,
     defaultParams: defaultParams,
-    Chain: EthereumChain
+    Chain: EthereumChain,
+    isPlaceholderAddress: isPlaceholderAddress,
+    isValidLabAddress: isValidLabAddress
   };
 })(typeof window !== 'undefined' ? window : globalThis);

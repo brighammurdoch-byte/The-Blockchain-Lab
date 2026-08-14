@@ -61,11 +61,23 @@ $(document).ready(function() {
     LabPaths.applyClassroomTheme();
   }
   
-  // Get userId from localStorage (set by landing.js when joining)
-  userId = localStorage.getItem('userId_' + sessionId);
-  if (!userId) {
-    // Fallback: generate new if not found (for direct navigation)
+  // Prefer the wallet-bound id so a miner tab's userId_SESSION is not reused here.
+  userId = (window.LabPaths && LabPaths.getUserIdForRole)
+    ? LabPaths.getUserIdForRole(sessionId, 'wallet')
+    : '';
+  if (!userId) userId = localStorage.getItem('userId_' + sessionId);
+  const boundRole = (window.LabPaths && LabPaths.getBoundNodeRole)
+    ? LabPaths.getBoundNodeRole(sessionId, userId)
+    : '';
+  if (window.LabPaths && typeof LabPaths.enforceBoundRolePage === 'function') {
+    if (userId && LabPaths.enforceBoundRolePage('wallet', sessionId, userId)) return;
+  }
+  if (!userId || (boundRole && boundRole !== 'wallet')) {
     userId = 'user_' + Math.random().toString(36).substr(2, 9);
+  }
+  if (window.LabPaths && LabPaths.persistNodeRole) {
+    LabPaths.persistNodeRole(sessionId, userId, 'wallet');
+  } else {
     localStorage.setItem('userId_' + sessionId, userId);
   }
   
@@ -205,7 +217,8 @@ function initClientSideNetworkingForObserver(mode) {
         participants: state.participants || [],
         pendingTransactions: state.pendingTransactions,
         networkStats: state.networkStats,
-        newHeight: state.newHeight
+        newHeight: state.newHeight != null ? state.newHeight : state.tipIndex,
+        hubHeight: state.tipIndex != null ? state.tipIndex : state.newHeight
       });
       return;
     }
@@ -213,6 +226,21 @@ function initClientSideNetworkingForObserver(mode) {
     if (state.block) {
       if (!window._observerChain) window._observerChain = [];
       const tip = window._observerChain[window._observerChain.length - 1];
+      if (state.isFork) {
+        // Hub rejected this as main — keep it off the wallet canonical view
+        const orphans = (state.orphans || []).concat([state.block]);
+        const hubH = state.tipIndex != null ? state.tipIndex : state.newHeight;
+        populateObserverUIFromState({
+          chain: window._observerChain,
+          orphans: orphans,
+          participants: state.participants || [],
+          pendingTransactions: state.pendingTransactions,
+          networkStats: state.networkStats,
+          newHeight: hubH,
+          hubHeight: hubH
+        });
+        return;
+      }
       if (!tip || state.block.previousHash === tip.hash) {
         window._observerChain.push(state.block);
       } else if (tip.hash === state.block.hash) {
@@ -224,7 +252,7 @@ function initClientSideNetworkingForObserver(mode) {
       }
       const derivedHeight = (state.newHeight != null)
         ? state.newHeight
-        : Math.max(0, window._observerChain.length - 1);
+        : (state.tipIndex != null ? state.tipIndex : Math.max(0, window._observerChain.length - 1));
       const stats = Object.assign({}, state.networkStats || {}, {
         blockHeight: (state.networkStats && state.networkStats.blockHeight != null)
           ? state.networkStats.blockHeight
@@ -232,10 +260,12 @@ function initClientSideNetworkingForObserver(mode) {
       });
       populateObserverUIFromState({
         chain: window._observerChain,
+        orphans: state.orphans || [],
         participants: state.participants || [],
         pendingTransactions: state.pendingTransactions,
         networkStats: stats,
-        newHeight: derivedHeight
+        newHeight: derivedHeight,
+        hubHeight: derivedHeight
       });
     } else {
       populateObserverUIFromState(state);
@@ -243,23 +273,8 @@ function initClientSideNetworkingForObserver(mode) {
   });
 
   net.on('block-gossip', (msg) => {
-    const block = (msg.payload && msg.payload.block) || msg.block;
-    if (!block) return;
-    if (!window._observerChain) window._observerChain = [];
-    const tip = window._observerChain[window._observerChain.length - 1];
-    if (tip && tip.hash === block.hash) {
-      /* already have it */
-    } else if (!tip || block.previousHash === tip.hash) {
-      window._observerChain.push(block);
-    } else {
-      net.send('request-state', { from: userId });
-      return;
-    }
-    populateObserverUIFromState({
-      chain: window._observerChain.slice(),
-      networkStats: { blockHeight: Math.max(0, window._observerChain.length - 1) },
-      newHeight: Math.max(0, window._observerChain.length - 1)
-    });
+    // Gossip is not hub-canonical. Ask the hub instead of growing a private chain.
+    if (net) net.send('request-state', { from: userId });
   });
 
   net.on('initial-state', (msg) => {
@@ -434,8 +449,18 @@ function populateObserverUIFromState(state) {
       });
     }
 
+    const hubHeight = (state.hubHeight != null)
+      ? Number(state.hubHeight)
+      : (stats.blockHeight != null ? Number(stats.blockHeight) : derivedHeight);
+    window._observerHubHeight = hubHeight;
+    const safeOrphans = (orphans || []).filter(function (b) {
+      if (!b) return false;
+      if (b.index == null) return true;
+      return Number(b.index) <= hubHeight;
+    });
+
     if (typeof updateBlockchainView === 'function') {
-      updateBlockchainView(chain, orphans, participants);
+      updateBlockchainView(chain, safeOrphans, participants);
     }
 
     if (userId && participants.length) {
@@ -466,7 +491,8 @@ function updateBlockchainView(mainChain, orphans, participants) {
         mainChain: mainChain || [],
         orphans: orphans || [],
         participants: parts,
-        openTxPanels: openTxPanels
+        openTxPanels: openTxPanels,
+        hubHeight: window._observerHubHeight
       })
     );
     return;

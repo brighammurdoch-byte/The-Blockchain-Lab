@@ -35,7 +35,7 @@ function showToastNotification(message, type = 'info') {
       padding: 12px 16px;
       border-radius: 5px;
       box-shadow: 0 4px 6px rgba(0,0,0,0.2);
-      z-index: 1030;
+      z-index: 1080;
       max-width: min(400px, calc(100vw - 24px));
       word-wrap: break-word;
       animation: slideIn 0.3s ease-out;
@@ -944,6 +944,7 @@ function setupEventHandlers() {
       <input type="number" id="teamAttackBlocksBack" class="form-control" value="2" min="1" />
     </div>
     <button id="startTeamAttackBtn" class="btn btn-danger btn-block">Initiate Team Collusion</button>
+    <div id="teamAttackFeedback" class="alert" style="display:none; margin-top:12px;"></div>
     <div id="teamAttackStats" style="display:none; margin-top: 15px; padding: 10px; background: #fff3f3; border-radius: 4px;">
       <p class="text-success"><strong>Honest Hashrate:</strong> <span id="honestHashrate">0</span> H/s</p>
       <p class="text-danger"><strong>Collusion Hashrate:</strong> <span id="collusionHashrate">0</span> H/s</p>
@@ -952,6 +953,12 @@ function setupEventHandlers() {
   
   $('#startTeamAttackBtn').click(function(e) {
     e.preventDefault();
+    const why = teamCollusionPreconditionError();
+    if (why) {
+      showAttackPanelFeedback(why, 'error');
+      showToastNotification(why, 'error');
+      return;
+    }
     const blocksBack = Math.max(1, parseInt($('#teamAttackBlocksBack').val(), 10) || 2);
     if (!confirm('Initiate Team 51% attack simulation going back ' + blocksBack + ' blocks?')) return;
     startTeamCollusionAttack(blocksBack);
@@ -984,6 +991,12 @@ function setupEventHandlers() {
   
   $('#proposeForkBtn').click(function(e) {
     e.preventDefault();
+    const why = hardForkPreconditionError();
+    if (why) {
+      showForkPanelFeedback(why, 'error');
+      showToastNotification(why, 'error');
+      return;
+    }
     // On initiate: if they left the default alone, snap to current tip + 10
     if (!$('#forkHeight').data('userEdited')) {
       refreshForkHeightDefault(true);
@@ -991,6 +1004,7 @@ function setupEventHandlers() {
     const height = parseInt($('#forkHeight').val(), 10) || defaultForkActivationHeight();
     const name = ($('#forkName').val() || 'Hard Fork').trim() || 'Hard Fork';
     if (!Number.isFinite(height) || height < 1) {
+      showForkPanelFeedback('Enter a valid activation block height', 'error');
       showToastNotification('Enter a valid activation block height', 'error');
       return;
     }
@@ -1128,7 +1142,8 @@ function updateBlockchainView(mainChain, orphans, participants) {
         mainChain: mainChain || [],
         orphans: orphans || [],
         participants: participants || [],
-        openTxPanels: openTxPanels
+        openTxPanels: openTxPanels,
+        hubHeight: (typeof getHubBlockHeight === 'function') ? getHubBlockHeight() : undefined
       })
     );
     return;
@@ -1253,18 +1268,9 @@ function updateSettingsDisplay(settings) {
  * Team 51% collusion: split miners into colluders vs honest, fork from tip-N.
  * Broadcasts team-attack-started so miner tabs actually enter collusion mode.
  */
-function startTeamCollusionAttack(blocksBack) {
-  blocksBack = Math.max(1, parseInt(blocksBack, 10) || 2);
-  if (!net) {
-    showToastNotification('Network hub not ready', 'error');
-    return;
-  }
-  if (!relayState || !Array.isArray(relayState.chain) || relayState.chain.length === 0) {
-    showToastNotification('No chain yet — wait for genesis / first blocks', 'error');
-    return;
-  }
-
-  const minerIds = Array.from(relayState.participants.values())
+function listLiveMinerIds() {
+  if (!relayState || !relayState.participants) return [];
+  return Array.from(relayState.participants.values())
     .filter(function (p) {
       const id = p.userId || p.id || '';
       if (!id || String(id).indexOf('probe-') === 0) return false;
@@ -1273,11 +1279,69 @@ function startTeamCollusionAttack(blocksBack) {
       return true;
     })
     .map(function (p) { return p.userId || p.id; });
+}
 
-  if (minerIds.length < 2) {
-    showToastNotification('Need at least 2 miners (wallets/admin do not count)', 'error');
+function showAttackPanelFeedback(message, kind) {
+  const $el = $('#teamAttackFeedback');
+  if (!$el.length) {
+    showToastNotification(message, kind || 'error');
     return;
   }
+  $el
+    .removeClass('alert-danger alert-success alert-warning alert-info')
+    .addClass(kind === 'success' ? 'alert-success' : (kind === 'warning' ? 'alert-warning' : 'alert-danger'))
+    .text(message)
+    .show();
+}
+
+function showForkPanelFeedback(message, kind) {
+  const $st = $('#adminForkStatus');
+  if (!$st.length) {
+    showToastNotification(message, kind || 'error');
+    return;
+  }
+  $st
+    .removeClass('alert-danger alert-success alert-warning alert-info')
+    .addClass(kind === 'error' ? 'alert-danger' : 'alert-warning')
+    .html(message)
+    .show();
+}
+
+function teamCollusionPreconditionError() {
+  if (!net) return 'Network hub is not ready yet. Keep this admin tab open and try again.';
+  if (!relayState || !Array.isArray(relayState.chain) || relayState.chain.length === 0) {
+    return 'No chain yet — wait for genesis / the first blocks, then try again.';
+  }
+  const n = listLiveMinerIds().length;
+  if (n < 2) {
+    return 'Team collusion needs at least 2 miners online (you have ' + n +
+      '). Wallets and the admin hub do not count. Open another miner tab, then click again.';
+  }
+  return '';
+}
+
+function hardForkPreconditionError() {
+  if (!net) return 'Network hub is not ready yet. Keep this admin tab open and try again.';
+  if (!relayState || !Array.isArray(relayState.chain) || relayState.chain.length === 0) {
+    return 'No chain yet — wait for genesis / the first blocks, then try again.';
+  }
+  const n = listLiveMinerIds().length;
+  if (n < 1) {
+    return 'Propose Hard Fork needs at least one miner online so someone can choose a chain. Open a miner tab, then click again.';
+  }
+  return '';
+}
+
+function startTeamCollusionAttack(blocksBack) {
+  blocksBack = Math.max(1, parseInt(blocksBack, 10) || 2);
+  const why = teamCollusionPreconditionError();
+  if (why) {
+    showAttackPanelFeedback(why, 'error');
+    showToastNotification(why, 'error');
+    return;
+  }
+
+  const minerIds = listLiveMinerIds();
 
   // Fisher–Yates shuffle
   for (let i = minerIds.length - 1; i > 0; i--) {
@@ -1333,10 +1397,10 @@ function startTeamCollusionAttack(blocksBack) {
   if (typeof renderClientParticipants === 'function') renderClientParticipants();
   if (typeof renderClientRelayChain === 'function') renderClientRelayChain();
 
-  showToastNotification(
-    'Team collusion started: ' + colluders.length + ' colluder(s), ' + honest.length + ' honest — forking from block #' + forkIndex,
-    'warning'
-  );
+  const started = 'Team collusion started: ' + colluders.length + ' colluder(s), ' +
+    honest.length + ' honest — forking from block #' + forkIndex;
+  showAttackPanelFeedback(started, 'warning');
+  showToastNotification(started, 'warning');
 }
 
 /** Current canonical tip height (0 = genesis). */
@@ -1373,6 +1437,12 @@ function refreshForkHeightDefault(force) {
 
 /** Broadcast hard-fork proposal (event name miners listen for). */
 function proposeHardFork(name, height) {
+  const why = hardForkPreconditionError();
+  if (why) {
+    showForkPanelFeedback(why, 'error');
+    showToastNotification(why, 'error');
+    return;
+  }
   if (!net) {
     showToastNotification('Network hub not ready', 'error');
     return;

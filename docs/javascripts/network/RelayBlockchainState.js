@@ -112,6 +112,31 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     return 5 * 16 + 12;
   }
 
+  /** Expected hashes for leading zeros L and next-nibble ≤ S. */
+  _expectedHashes(leading, secondary) {
+    const L = Math.max(1, Math.min(6, Number(leading) || 1));
+    const S = Math.max(0, Math.min(15, Number(secondary) || 0));
+    return Math.pow(16, L + 1) / (S + 1);
+  }
+
+  /** Ladder score whose expected hashes is closest to wantHashes. */
+  _scoreForTargetHashes(wantHashes) {
+    const want = Math.max(16, Number(wantHashes) || 16);
+    let best = 1 * 16 + 0;
+    let bestErr = Infinity;
+    const minScore = 1 * 16 + 0;
+    const maxScore = this._autoMaxScore();
+    for (let s = minScore; s <= maxScore; s++) {
+      const exp = this._expectedHashes(Math.floor(s / 16), s % 16);
+      const err = Math.abs(Math.log(exp) - Math.log(want));
+      if (err < bestErr) {
+        bestErr = err;
+        best = s;
+      }
+    }
+    return best;
+  }
+
   _scoreToDifficulty(score) {
     const minScore = 1 * 16 + 0;
     const maxScore = this._autoMaxScore();
@@ -136,6 +161,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
   /**
    * Nudge difficulty so recent block intervals approach targetBlockTimeSec.
+   * Steps are capped so the classroom climbs toward the target instead of
+   * jumping too-hard and then collapsing back to 1+0x0.
    * Returns updated settings object if changed, else null.
    */
   maybeRetargetDifficulty() {
@@ -149,41 +176,39 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       : [];
     if (intervals.length < 2) return null;
 
-    const recent = intervals.slice(-4);
+    const recent = intervals.slice(-6);
     const avg = recent.reduce((a, b) => a + b, 0) / recent.length;
     if (!(avg > 0)) return null;
 
     const ratio = avg / targetMs;
     let delta = 0;
-    // Close the gap to the target in a few blocks (0.3s → 10s is ~30× too fast).
-    if (ratio < 0.08) delta = 12;
-    else if (ratio < 0.15) delta = 8;
-    else if (ratio < 0.3) delta = 5;
-    else if (ratio < 0.5) delta = 3;
-    else if (ratio < 0.75) delta = 2;
-    else if (ratio < 0.92) delta = 1;
-    else if (ratio > 2.4) delta = -4;
-    else if (ratio > 1.7) delta = -2;
-    else if (ratio > 1.2) delta = -1;
+    if (ratio < 0.25) delta = 3;
+    else if (ratio < 0.5) delta = 2;
+    else if (ratio < 0.8) delta = 1;
+    else if (ratio > 2.2) delta = -3;
+    else if (ratio > 1.6) delta = -2;
+    else if (ratio > 1.25) delta = -1;
 
     const hs = Number(this.networkStats.totalHashrate) || 0;
-    if (hs > 2000 && ratio < 0.6) {
-      const wantHashes = hs * (targetMs / 1000);
-      const wantLeading = Math.max(1, Math.min(5, Math.floor(Math.log(wantHashes) / Math.log(16))));
-      const wantScore = wantLeading * 16 + 8;
-      const cur = this._difficultyScore(
-        this.settings.difficultyLeading,
-        this.settings.difficultySecondary
-      );
-      if (wantScore > cur + delta) delta = Math.min(this._autoMaxScore() - cur, wantScore - cur);
-    }
-
-    if (delta === 0) return null;
-
     const curScore = this._difficultyScore(
       this.settings.difficultyLeading,
       this.settings.difficultySecondary
     );
+    if (hs > 500) {
+      const wantHashes = hs * (targetMs / 1000);
+      const wantScore = this._scoreForTargetHashes(wantHashes);
+      const gap = wantScore - curScore;
+      let toward = 0;
+      if (gap > 0) toward = Math.min(4, gap);
+      else if (gap < 0) toward = Math.max(-4, gap);
+      if (toward > 0 && ratio < 0.9) delta = Math.max(delta, toward);
+      else if (toward < 0 && ratio > 1.1) delta = Math.min(delta, toward);
+      else if (Math.abs(ratio - 1) < 0.25 && Math.abs(toward) <= 2) delta = toward;
+    }
+
+    delta = Math.max(-4, Math.min(4, delta));
+    if (delta === 0) return null;
+
     const next = this._scoreToDifficulty(curScore + delta);
     if (
       next.difficultyLeading === this.settings.difficultyLeading &&
@@ -197,6 +222,10 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       secondary: this.settings.difficultySecondary
     };
     this.updateSettings(next);
+    // Drop stale fast/slow samples so the next retarget measures the new target.
+    if (Math.abs(delta) >= 2 && Array.isArray(this.networkStats.blockIntervals)) {
+      this.networkStats.blockIntervals = this.networkStats.blockIntervals.slice(-2);
+    }
     this.networkStats.lastRetarget = {
       at: Date.now(),
       avgMs: avg,
@@ -221,7 +250,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const targetSec = Number(this.settings.targetBlockTimeSec);
     const targetMs = Math.max(2000, Math.min(120000, (isNaN(targetSec) ? 10 : targetSec) * 1000));
     const last = this.networkStats && this.networkStats.lastBlockTime;
-    const waitMs = Math.max(targetMs * 1.8, 16000);
+    const waitMs = Math.max(targetMs * 2.5, 22000);
     const since = last || (this.networkStats && this.networkStats.lastRetarget && this.networkStats.lastRetarget.at);
     if (since && Date.now() - since < waitMs) return null;
     if (!since && this.chain && this.chain.length <= 1) return null;
@@ -232,7 +261,16 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     );
     if (curScore <= 1 * 16 + 0) return null;
 
-    const next = this._scoreToDifficulty(curScore - 2);
+    // Never collapse past the hashrate-implied target minus a small cushion.
+    let floor = 1 * 16 + 0;
+    const hs = Number(this.networkStats && this.networkStats.totalHashrate) || 0;
+    if (hs > 500) {
+      const wantScore = this._scoreForTargetHashes(hs * (targetMs / 1000));
+      floor = Math.max(floor, wantScore - 8);
+    }
+    if (curScore <= floor) return null;
+
+    const next = this._scoreToDifficulty(Math.max(floor, curScore - 1));
     if (
       next.difficultyLeading === this.settings.difficultyLeading &&
       next.difficultySecondary === this.settings.difficultySecondary
@@ -249,7 +287,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       avgMs: since ? Date.now() - since : waitMs,
       targetMs: targetMs,
       ratio: 9,
-      delta: -2,
+      delta: -1,
       leading: next.difficultyLeading,
       secondary: next.difficultySecondary,
       stalled: true
@@ -456,11 +494,45 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     return best;
   }
 
+  /** Content fingerprint: same send even if a miner dropped or restamped `id`. */
+  _txContentKey(tx) {
+    if (!tx) return '';
+    const from = String(tx.from || '');
+    const to = String(tx.to || '');
+    const amt = String(Number(tx.amount));
+    const ts = String(tx.timestamp || '');
+    if (!from || !to || !ts || !(Number(tx.amount) > 0)) return '';
+    return from + ':' + to + ':' + amt + ':' + ts;
+  }
+
   /** Stable id for a transfer (used for mempool + double-include checks). */
   _txKey(tx) {
     if (!tx) return '';
     if (tx.id) return String(tx.id);
-    return String(tx.from || '') + ':' + String(tx.to || '') + ':' + String(tx.timestamp || '');
+    return this._txContentKey(tx);
+  }
+
+  /** Every identity we treat as "this transfer" — id and content fingerprint. */
+  _txAllKeys(tx) {
+    const keys = [];
+    if (!tx) return keys;
+    if (tx.id) keys.push(String(tx.id));
+    const content = this._txContentKey(tx);
+    if (content) keys.push(content);
+    return keys;
+  }
+
+  _addTxKeys(set, tx) {
+    this._txAllKeys(tx).forEach(function (k) { if (k) set.add(k); });
+  }
+
+  _txMatchesSet(tx, set) {
+    if (!set || !set.size) return false;
+    const keys = this._txAllKeys(tx);
+    for (let i = 0; i < keys.length; i++) {
+      if (set.has(keys[i])) return true;
+    }
+    return false;
   }
 
   /** All transaction keys already present on the current canonical chain. */
@@ -468,10 +540,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const ids = new Set();
     (this.chain || []).forEach((block) => {
       const txs = (block && Array.isArray(block.transactions)) ? block.transactions : [];
-      txs.forEach((tx) => {
-        const k = this._txKey(tx);
-        if (k) ids.add(k);
-      });
+      txs.forEach((tx) => this._addTxKeys(ids, tx));
     });
     return ids;
   }
@@ -500,10 +569,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       if (!b) return;
       if (b.index != null && Number(b.index) >= act) return; // skip post-act main (classic)
       const txs = Array.isArray(b.transactions) ? b.transactions : [];
-      txs.forEach((tx) => {
-        const k = this._txKey(tx);
-        if (k) ids.add(k);
-      });
+      txs.forEach((tx) => this._addTxKeys(ids, tx));
     });
 
     // Same-side post-activation blocks only
@@ -513,10 +579,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       const bNew = bf === 'new' || bf === 'NEW';
       if (bNew !== isNew) return;
       const txs = Array.isArray(b.transactions) ? b.transactions : [];
-      txs.forEach((tx) => {
-        const k = this._txKey(tx);
-        if (k) ids.add(k);
-      });
+      txs.forEach((tx) => this._addTxKeys(ids, tx));
     });
     return ids;
   }
@@ -565,16 +628,15 @@ if (typeof window.RelayBlockchainState === 'undefined') {
         const to = tx.to;
         const amount = Number(tx.amount);
         if (!from || !to || !(amount > 0)) return;
-        const id = tx.id || (String(from) + ':' + String(to) + ':' + String(tx.timestamp));
-        // Same tx can race into two blocks before mempool clears — credit once
-        if (seenTx.has(id)) return;
-        seenTx.add(id);
+        // Same tx can race into two blocks (different ids) — credit once
+        if (this._txMatchesSet(tx, seenTx)) return;
+        this._addTxKeys(seenTx, tx);
 
         if (!this.participants.has(from)) {
-          this.addOrUpdateParticipant(from, 'wallet');
+          this.addOrUpdateParticipant(from, 'wallet', { balance: 0 });
         }
         if (!this.participants.has(to)) {
-          this.addOrUpdateParticipant(to, 'wallet');
+          this.addOrUpdateParticipant(to, 'wallet', { balance: 0 });
         }
         const sender = this.participants.get(from);
         const recipient = this.participants.get(to);
@@ -703,9 +765,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const blockTxs = Array.isArray(block.transactions) ? block.transactions : [];
     const seenInBlock = new Set();
     for (let i = 0; i < blockTxs.length; i++) {
-      const k = this._txKey(blockTxs[i]);
-      if (!k) continue;
-      if (confirmed.has(k)) {
+      const tx = blockTxs[i];
+      if (this._txMatchesSet(tx, confirmed)) {
         return {
           accepted: false,
           reason: 'Duplicate transaction already on chain',
@@ -713,7 +774,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
           newHeight: Math.max(0, this.chain.length - 1)
         };
       }
-      if (seenInBlock.has(k)) {
+      if (this._txMatchesSet(tx, seenInBlock)) {
         return {
           accepted: false,
           reason: 'Duplicate transaction within block',
@@ -721,7 +782,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
           newHeight: Math.max(0, this.chain.length - 1)
         };
       }
-      seenInBlock.add(k);
+      this._addTxKeys(seenInBlock, tx);
     }
 
     const oldTip = this.chain[this.chain.length - 1] || null;
@@ -865,11 +926,11 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       return { accepted: false, reason: 'Invalid transaction' };
     }
     // Already confirmed on chain — never re-enter mempool
-    if (this._confirmedTxIds().has(String(normalized.id))) {
+    if (this._txMatchesSet(normalized, this._confirmedTxIds())) {
       return { accepted: false, reason: 'Transaction already confirmed' };
     }
     // Dedupe in mempool
-    if (this.pendingTransactions.some((t) => this._txKey(t) === String(normalized.id))) {
+    if (this.pendingTransactions.some((t) => this._txMatchesSet(normalized, new Set(this._txAllKeys(t))))) {
       return { accepted: true, duplicate: true };
     }
     this.pendingTransactions.push(normalized);
@@ -882,17 +943,16 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     if (!block || !Array.isArray(block.transactions) || block.transactions.length === 0) {
       return;
     }
-    const keys = new Set(
-      block.transactions.map((t) => this._txKey(t)).filter(Boolean)
-    );
-    this.pendingTransactions = this.pendingTransactions.filter((t) => !keys.has(this._txKey(t)));
+    const keys = new Set();
+    block.transactions.forEach((t) => this._addTxKeys(keys, t));
+    this.pendingTransactions = this.pendingTransactions.filter((t) => !this._txMatchesSet(t, keys));
   }
 
   /** Drop any mempool entry that already appears anywhere on the canonical chain. */
   purgeConfirmedFromMempool() {
     const confirmed = this._confirmedTxIds();
     if (!confirmed.size) return;
-    this.pendingTransactions = this.pendingTransactions.filter((t) => !confirmed.has(this._txKey(t)));
+    this.pendingTransactions = this.pendingTransactions.filter((t) => !this._txMatchesSet(t, confirmed));
   }
 
   // What we send to a newly joined peer
