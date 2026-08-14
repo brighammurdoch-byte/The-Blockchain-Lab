@@ -250,6 +250,38 @@
   }
 
   /**
+   * Identity for THIS browser tab. sessionStorage is per-tab, so a second
+   * wallet/miner join in another tab cannot steal the first tab's userId.
+   * Do not read localStorage userId_SESSION_role for a fresh tab — that is
+   * how Wallet 2 overwrote Wallet 1 on the hub.
+   */
+  function allocateTabUserId(sessionId, role, opts) {
+    var code = String(sessionId || '').toUpperCase();
+    var r = normalizeNodeRole(role) || 'miner';
+    opts = opts || {};
+    var fromQuery = String(opts.uid || '').trim();
+    var ssKey = 'labUserId_' + code;
+    if (fromQuery) {
+      try { if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(ssKey, fromQuery); } catch (e) {}
+      persistNodeRole(code, fromQuery, r);
+      return fromQuery;
+    }
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        var fromTab = sessionStorage.getItem(ssKey);
+        if (fromTab) {
+          persistNodeRole(code, fromTab, r);
+          return fromTab;
+        }
+      }
+    } catch (e2) {}
+    var id = 'user_' + Math.random().toString(36).substr(2, 9);
+    try { if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(ssKey, id); } catch (e3) {}
+    persistNodeRole(code, id, r);
+    return id;
+  }
+
+  /**
    * If this userId is bound to the other classroom role, send them back.
    * @param {'miner'|'wallet'} expectedRole
    * @param {string} sessionId
@@ -283,6 +315,7 @@
     persistNodeRole: persistNodeRole,
     getBoundNodeRole: getBoundNodeRole,
     getUserIdForRole: getUserIdForRole,
+    allocateTabUserId: allocateTabUserId,
     enforceBoundRolePage: enforceBoundRolePage
   };
 })(typeof window !== 'undefined' ? window : globalThis);

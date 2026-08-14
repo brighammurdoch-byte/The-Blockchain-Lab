@@ -7,21 +7,40 @@ let sessionId = null;
 let userId = null;
 let openTxPanels = new Set();
 let networkPaused = false;
+let lastToastKey = '';
+let lastToastAt = 0;
+let toastQueue = [];
+let toastBusy = false;
 
 // Client-relay networking (only mode)
 let networkMode = null;
 let net = null;
 let socket = null; // prevent any stray legacy references
 
-// Toast notification function (non-intrusive bubble at top)
-function showToastNotification(message, type = 'info') {
-  // Remove existing toast if any
+function showToastNotification(message, type = 'info', durationMs) {
+  const now = Date.now();
+  const key = String(type || 'info') + '|' + String(message || '');
+  if (key === lastToastKey && now - lastToastAt < 8000) return;
+  lastToastKey = key;
+  lastToastAt = now;
+  const isResume = /resumed/i.test(String(message || ''));
+  const hold = durationMs != null
+    ? durationMs
+    : (type === 'warning' ? 8000 : (isResume || type === 'success' ? 6000 : 4000));
+  const item = { message: message, type: type, hold: hold };
+  if (isResume) toastQueue.unshift(item);
+  else toastQueue.push(item);
+  drainToastQueue();
+}
+
+function drainToastQueue() {
+  if (toastBusy || !toastQueue.length) return;
+  toastBusy = true;
+  const next = toastQueue.shift();
   $('#toastNotification').remove();
-  
-  const bgColor = type === 'success' ? '#28a745' : type === 'error' ? '#dc3545' : '#17a2b8';
-  
+  const bgColor = next.type === 'success' ? '#28a745' : next.type === 'error' ? '#dc3545' : next.type === 'warning' ? '#d97706' : '#17a2b8';
   const toast = $(`
-    <div id="toastNotification" style="
+    <div id="toastNotification" class="lab-toast lab-toast-${next.type}" style="
       position: fixed;
       top: 20px;
       right: 20px;
@@ -35,16 +54,17 @@ function showToastNotification(message, type = 'info') {
       word-wrap: break-word;
       animation: slideIn 0.3s ease-out;
     ">
-      ${message}
+      ${next.message}
     </div>
   `);
-  
   $('body').append(toast);
-  
-  // Auto-dismiss after 4 seconds
-  setTimeout(function() {
-    toast.fadeOut(300, function() { $(this).remove(); });
-  }, 4000);
+  setTimeout(function () {
+    toast.fadeOut(300, function () {
+      $(this).remove();
+      toastBusy = false;
+      drainToastQueue();
+    });
+  }, next.hold);
 }
 
 // Add CSS animation for toast
@@ -61,24 +81,19 @@ $(document).ready(function() {
     LabPaths.applyClassroomTheme();
   }
   
-  // Prefer the wallet-bound id so a miner tab's userId_SESSION is not reused here.
-  userId = (window.LabPaths && LabPaths.getUserIdForRole)
-    ? LabPaths.getUserIdForRole(sessionId, 'wallet')
-    : '';
-  if (!userId) userId = localStorage.getItem('userId_' + sessionId);
-  const boundRole = (window.LabPaths && LabPaths.getBoundNodeRole)
-    ? LabPaths.getBoundNodeRole(sessionId, userId)
-    : '';
+  // Per-tab wallet id. Do not reuse localStorage userId_SESSION_wallet — that
+  // made a second browser tab steal Wallet 1's address and overwrite the name.
+  if (window.LabPaths && typeof LabPaths.allocateTabUserId === 'function') {
+    userId = LabPaths.allocateTabUserId(sessionId, 'wallet');
+  } else {
+    try { userId = sessionStorage.getItem('labUserId_' + sessionId) || ''; } catch (e) {}
+    if (!userId) userId = 'user_' + Math.random().toString(36).substr(2, 9);
+  }
   if (window.LabPaths && typeof LabPaths.enforceBoundRolePage === 'function') {
     if (userId && LabPaths.enforceBoundRolePage('wallet', sessionId, userId)) return;
   }
-  if (!userId || (boundRole && boundRole !== 'wallet')) {
-    userId = 'user_' + Math.random().toString(36).substr(2, 9);
-  }
   if (window.LabPaths && LabPaths.persistNodeRole) {
     LabPaths.persistNodeRole(sessionId, userId, 'wallet');
-  } else {
-    localStorage.setItem('userId_' + sessionId, userId);
   }
   
   // Display user address
@@ -215,15 +230,15 @@ function initClientSideNetworkingForObserver(mode) {
   net.on('block-accepted', (msg) => {
     const state = msg.payload || msg;
     if (state.chain && Array.isArray(state.chain) && state.chain.length > 0) {
-      window._observerChain = state.chain.slice();
+      adoptObserverHubChain(state.chain, state);
       populateObserverUIFromState({
         chain: window._observerChain,
-        orphans: state.orphans || [],
+        orphans: [],
         participants: state.participants || [],
         pendingTransactions: state.pendingTransactions,
         networkStats: state.networkStats,
         newHeight: state.newHeight != null ? state.newHeight : state.tipIndex,
-        hubHeight: state.tipIndex != null ? state.tipIndex : state.newHeight
+        hubHeight: state.tipIndex != null ? state.tipIndex : (state.chainHeight != null ? state.chainHeight : state.newHeight)
       });
       return;
     }
@@ -237,7 +252,7 @@ function initClientSideNetworkingForObserver(mode) {
         const hubH = state.tipIndex != null ? state.tipIndex : state.newHeight;
         populateObserverUIFromState({
           chain: window._observerChain,
-          orphans: orphans,
+          orphans: [],
           participants: state.participants || [],
           pendingTransactions: state.pendingTransactions,
           networkStats: state.networkStats,
@@ -265,7 +280,7 @@ function initClientSideNetworkingForObserver(mode) {
       });
       populateObserverUIFromState({
         chain: window._observerChain,
-        orphans: state.orphans || [],
+        orphans: [],
         participants: state.participants || [],
         pendingTransactions: state.pendingTransactions,
         networkStats: stats,
@@ -277,25 +292,22 @@ function initClientSideNetworkingForObserver(mode) {
     }
   });
 
-  net.on('block-gossip', (msg) => {
-    // Gossip is not hub-canonical. Ask the hub instead of growing a private chain.
-    if (net) net.send('request-state', { from: userId });
+  net.on('block-gossip', function () {
+    // Gossip is not hub-canonical. Do not request-state on every peer block —
+    // that flood delivered truncated snapshots and rolled the wallet copy back.
   });
 
   net.on('initial-state', (msg) => {
     const state = msg.payload || msg;
     if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
     if (state.chain && Array.isArray(state.chain) && state.chain.length) {
-      const local = window._observerChain || [];
-      const newTip = state.chain[state.chain.length - 1];
-      const sameTip = newTip && local.some(function (b) { return b && b.hash === newTip.hash; });
-      if (!(state.chainTruncated && local.length > state.chain.length && sameTip)) {
-        window._observerChain = state.chain.slice();
-      }
+      adoptObserverHubChain(state.chain, state);
     }
     if (typeof state.networkPaused === 'boolean') networkPaused = state.networkPaused;
     populateObserverUIFromState(Object.assign({}, state, {
-      chain: window._observerChain || state.chain
+      chain: window._observerChain || state.chain,
+      orphans: [],
+      hubHeight: state.tipIndex != null ? state.tipIndex : state.chainHeight
     }));
   });
 
@@ -308,7 +320,8 @@ function initClientSideNetworkingForObserver(mode) {
     networkPaused = !!paused;
     showToastNotification(
       networkPaused ? 'Network paused by admin — transactions blocked' : 'Network resumed by admin',
-      networkPaused ? 'warning' : 'success'
+      networkPaused ? 'warning' : 'success',
+      networkPaused ? 8000 : 6500
     );
   });
   net.on('toggle-network', function (msg) {
@@ -364,7 +377,8 @@ function initClientSideNetworkingForObserver(mode) {
     populateObserverUIFromState({
       chain: window._observerChain || [],
       participants: parts,
-      pendingTransactions: window._observerPending || []
+      pendingTransactions: window._observerPending || [],
+      replaceParticipants: true
     });
   });
 
@@ -374,21 +388,68 @@ function initClientSideNetworkingForObserver(mode) {
     $('#blockchainView').html('<p class="text-muted">Connected to relay hub. Waiting for initial chain state from admin...</p>');
     // Explicitly request the state
     net.send('request-state', { from: userId });
+    window.addEventListener('pagehide', function () {
+      try { if (net) net.send('peer-left', { from: userId }); } catch (e) {}
+    });
   });
 
   window.BlockchainLabNet = net;
 }
 
+function adoptObserverHubChain(incoming, meta) {
+  meta = meta || {};
+  const local = window._observerChain || [];
+  const Merge = window.RelayBlockchainState && RelayBlockchainState.mergeCanonicalCopy;
+  if (typeof Merge === 'function') {
+    const merged = Merge(local, incoming, {
+      truncated: !!meta.chainTruncated,
+      tipHash: meta.tipHash,
+      tipIndex: meta.tipIndex != null ? meta.tipIndex : meta.chainHeight,
+      chainHeight: meta.chainHeight != null ? meta.chainHeight : meta.newHeight
+    });
+    window._observerChain = merged.chain;
+  } else {
+    const newTip = incoming[incoming.length - 1];
+    const sameTip = newTip && local.some(function (b) { return b && b.hash === newTip.hash; });
+    if (!(meta.chainTruncated && local.length > incoming.length && sameTip)) {
+      window._observerChain = incoming.slice();
+    }
+  }
+  const h = (meta.tipIndex != null) ? Number(meta.tipIndex)
+    : (meta.chainHeight != null ? Number(meta.chainHeight)
+      : (meta.newHeight != null ? Number(meta.newHeight) : null));
+  if (h != null && !isNaN(h)) {
+    if (window._observerHubHeight == null || h >= window._observerHubHeight) {
+      window._observerHubHeight = h;
+    }
+  }
+  return window._observerChain;
+}
+
 /** Merge roster so chain re-paints keep miner names when payloads omit them. */
-function rememberObserverParticipants(parts) {
+function rememberObserverParticipants(parts, opts) {
+  opts = opts || {};
   if (!Array.isArray(parts) || !parts.length) {
     return window._observerParticipants || [];
   }
   const byId = new Map();
-  (window._observerParticipants || []).forEach(function (p) {
+  const incomingIds = new Set();
+  parts.forEach(function (p) {
     const id = p && (p.userId || p.address || p.id);
-    if (id) byId.set(String(id), p);
+    if (id && String(id).indexOf('probe-') !== 0) incomingIds.add(String(id));
   });
+  const treatAsFull = !!opts.replace || incomingIds.size >= 2;
+  if (!treatAsFull) {
+    (window._observerParticipants || []).forEach(function (p) {
+      const id = p && (p.userId || p.address || p.id);
+      if (id) byId.set(String(id), p);
+    });
+  } else {
+    (window._observerParticipants || []).forEach(function (p) {
+      const id = p && (p.userId || p.address || p.id);
+      if (id && incomingIds.has(String(id))) byId.set(String(id), p);
+    });
+  }
   parts.forEach(function (p) {
     if (!p) return;
     const id = p.userId || p.address || p.id;
@@ -414,8 +475,10 @@ function populateObserverUIFromState(state) {
   if (!state) return;
   try {
     const chain = state.chain || [];
-    const participants = rememberObserverParticipants(state.participants || []);
-    const orphans = state.orphans || [];
+    const participants = rememberObserverParticipants(state.participants || [], {
+      replace: !!state.replaceParticipants
+    });
+    const orphans = [];
     if (Array.isArray(state.pendingTransactions)) {
       window._observerPending = state.pendingTransactions.slice();
     }
@@ -424,13 +487,14 @@ function populateObserverUIFromState(state) {
       updateAdminSettings(state.adminSettings);
     }
 
-    // Prefer hub networkStats, then newHeight, then derive from local chain length.
-    // Compact MQTT block-accepted often omits full chain but still carries newHeight.
-    const derivedHeight = Math.max(0, chain.length > 0 ? chain.length - 1 : 0);
+    // Prefer hub tip index. Never use truncated-suffix length-1 (that showed 23 while hub was 86).
+    const HeightFn = window.RelayBlockchainState && RelayBlockchainState.canonicalCopyHeight;
     const stats = Object.assign({}, state.networkStats || {});
     if (stats.blockHeight == null) {
-      if (state.newHeight != null) stats.blockHeight = state.newHeight;
-      else if (chain.length > 0) stats.blockHeight = derivedHeight;
+      if (state.hubHeight != null) stats.blockHeight = state.hubHeight;
+      else if (state.newHeight != null) stats.blockHeight = state.newHeight;
+      else if (window._observerHubHeight != null) stats.blockHeight = window._observerHubHeight;
+      else if (typeof HeightFn === 'function') stats.blockHeight = HeightFn(chain, state);
     }
 
     if (typeof updateNetworkStats === 'function') {
@@ -456,16 +520,13 @@ function populateObserverUIFromState(state) {
 
     const hubHeight = (state.hubHeight != null)
       ? Number(state.hubHeight)
-      : (stats.blockHeight != null ? Number(stats.blockHeight) : derivedHeight);
-    window._observerHubHeight = hubHeight;
-    const safeOrphans = (orphans || []).filter(function (b) {
-      if (!b) return false;
-      if (b.index == null) return true;
-      return Number(b.index) <= hubHeight;
-    });
+      : (stats.blockHeight != null ? Number(stats.blockHeight) : window._observerHubHeight);
+    if (hubHeight != null && !isNaN(Number(hubHeight))) {
+      window._observerHubHeight = Math.max(Number(window._observerHubHeight) || 0, Number(hubHeight));
+    }
 
     if (typeof updateBlockchainView === 'function') {
-      updateBlockchainView(chain, safeOrphans, participants);
+      updateBlockchainView(chain, orphans, participants);
     }
 
     if (userId && participants.length) {
@@ -517,9 +578,11 @@ function toggleTransactions(blockIndex) {
 
 function updateNetworkStats(blockchain) {
   const stats = blockchain.networkStats || {};
+  const HeightFn = window.RelayBlockchainState && RelayBlockchainState.canonicalCopyHeight;
   let height = stats.blockHeight;
-  if (height == null && Array.isArray(blockchain.chain) && blockchain.chain.length > 0) {
-    height = Math.max(0, blockchain.chain.length - 1);
+  if (height == null && window._observerHubHeight != null) height = window._observerHubHeight;
+  if (height == null && typeof HeightFn === 'function') {
+    height = HeightFn(blockchain.chain, { tipIndex: window._observerHubHeight });
   }
   if (height == null) height = 0;
   $('#blockHeight').text(height);

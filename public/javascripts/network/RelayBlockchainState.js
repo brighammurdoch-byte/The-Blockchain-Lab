@@ -391,11 +391,14 @@ if (typeof window.RelayBlockchainState === 'undefined') {
   }
 
   /**
-   * Drop join-retry ghosts (0 blocks, no recent presence). Keep anyone who mined
-   * or is in the live MQTT/WebRTC presence set.
+   * Drop students who stopped heartbeating. A frozen positive hashrate is NOT
+   * proof they are still here — phones leave the tab and the last report sticks.
+   * `liveIds` must already be age-filtered (recent MQTT/WebRTC hellos only).
    */
   pruneStaleParticipants(liveIds, now) {
     now = now || Date.now();
+    const STALE_HR_MS = 15000;
+    const DROP_MS = 25000;
     const live = new Set();
     (liveIds || []).forEach(function (id) {
       if (id) live.add(String(id));
@@ -406,19 +409,161 @@ if (typeof window.RelayBlockchainState === 'undefined') {
         drop.push(id);
         return;
       }
+      const r = String(p.role || '').toLowerCase();
+      if (r === 'admin' || r === 'hub') return;
       if (live.has(String(id))) {
         p.lastSeenAt = now;
         return;
       }
-      const r = String(p.role || '').toLowerCase();
-      if (r === 'admin' || r === 'hub') return;
-      const mined = Number(p.blocksMined || p.minedBlocks || 0);
-      const rate = Number(p.hashrate || 0);
       const age = now - (p.lastSeenAt || p.joinedAt || 0);
-      if (mined <= 0 && rate <= 0 && age > 25000) drop.push(id);
+      if (age > STALE_HR_MS) {
+        p.hashrate = 0;
+        if (p.status === 'mining') p.status = 'idle';
+      }
+      if (age > DROP_MS) drop.push(id);
     });
     drop.forEach((id) => this.participants.delete(id));
+    if (drop.length || this.networkPaused) {
+      let total = 0;
+      this.participants.forEach((pp) => { total += (pp.hashrate || 0); });
+      if (this.networkStats) this.networkStats.totalHashrate = this.networkPaused ? 0 : total;
+    }
     return drop.length;
+  }
+
+  /** Pause time is not a mining stall — reset the ease clock on resume. */
+  noteNetworkResumed() {
+    if (!this.networkStats) this.networkStats = {};
+    this.networkStats.lastBlockTime = Date.now();
+    if (this.networkStats.lastRetarget) this.networkStats.lastRetarget.at = Date.now();
+  }
+
+  /**
+   * Merge a hub chain snapshot into a student's displayed canonical copy.
+   * Compact MQTT payloads send only the last ~20 blocks; applying that as the
+   * whole copy made heights jump backward (51→37, 36→23) and mixed orphans in.
+   * Never adopt a shorter/older snapshot as the main list.
+   */
+  static mergeCanonicalCopy(local, incoming, meta) {
+    local = Array.isArray(local) ? local.filter(Boolean) : [];
+    incoming = Array.isArray(incoming) ? incoming.filter(Boolean) : [];
+    meta = meta || {};
+    const incomingTip = incoming.length ? incoming[incoming.length - 1] : null;
+    const tipHash = meta.tipHash || (incomingTip && incomingTip.hash) || null;
+    const tipIndex = (meta.tipIndex != null && !isNaN(Number(meta.tipIndex)))
+      ? Number(meta.tipIndex)
+      : ((meta.chainHeight != null && !isNaN(Number(meta.chainHeight)))
+        ? Number(meta.chainHeight)
+        : (incomingTip && incomingTip.index != null ? Number(incomingTip.index) : null));
+    const truncated = !!meta.truncated;
+    const localTip = local.length ? local[local.length - 1] : null;
+    const localTipIndex = (localTip && localTip.index != null)
+      ? Number(localTip.index)
+      : (local.length ? local.length - 1 : -1);
+
+    function isGenesisRooted(chain) {
+      if (!chain || !chain.length) return false;
+      const b = chain[0];
+      return !!(b && (
+        b.index === 0 ||
+        b.miner === 'genesis' ||
+        b.previousHash === '0' ||
+        b.previousHash === '00'
+      ));
+    }
+
+    function spliceSuffix(base, suffix) {
+      if (!base.length || !suffix.length) return null;
+      const byHash = new Map();
+      base.forEach(function (b) { if (b && b.hash) byHash.set(b.hash, true); });
+      for (let i = 0; i < suffix.length; i++) {
+        const b = suffix[i];
+        if (!b || !b.hash || !byHash.has(b.hash)) continue;
+        const idx = base.findIndex(function (x) { return x && x.hash === b.hash; });
+        if (idx >= 0) return base.slice(0, idx).concat(suffix.slice(i));
+      }
+      const first = suffix[0];
+      if (first && first.previousHash && byHash.has(first.previousHash)) {
+        const idx = base.findIndex(function (x) { return x && x.hash === first.previousHash; });
+        if (idx >= 0) return base.slice(0, idx + 1).concat(suffix);
+      }
+      return null;
+    }
+
+    if (!incoming.length) {
+      return { chain: local, applied: false, reason: 'empty-incoming', tipHash: tipHash, tipIndex: tipIndex };
+    }
+
+    // Hub tip hash is already on the copy.
+    if (tipHash && local.some(function (b) { return b && b.hash === tipHash; })) {
+      const idx = local.findIndex(function (b) { return b && b.hash === tipHash; });
+      const extra = local.length - 1 - idx;
+      // Stale compact/redelivery: old tip sits in the middle of a longer
+      // genesis-rooted copy. Never roll the main list backward (51→37).
+      if (
+        extra > 1 &&
+        tipIndex != null &&
+        localTipIndex > tipIndex &&
+        isGenesisRooted(local)
+      ) {
+        return { chain: local, applied: false, reason: 'stale-tip', tipHash: tipHash, tipIndex: tipIndex };
+      }
+      return {
+        chain: local.slice(0, idx + 1),
+        applied: extra > 0,
+        reason: extra === 0 ? 'same-tip' : 'trim-private-tail',
+        tipHash: tipHash,
+        tipIndex: tipIndex
+      };
+    }
+
+    // Stale compact / redelivered MQTT: older than the copy we already applied.
+    if (
+      tipIndex != null &&
+      localTipIndex >= 0 &&
+      tipIndex < localTipIndex &&
+      isGenesisRooted(local)
+    ) {
+      return { chain: local, applied: false, reason: 'stale-tip', tipHash: tipHash, tipIndex: tipIndex };
+    }
+
+    const incomingRooted = isGenesisRooted(incoming);
+    if (incomingRooted && !truncated) {
+      return { chain: incoming.slice(), applied: true, reason: 'full-replace', tipHash: tipHash, tipIndex: tipIndex };
+    }
+    if (incomingRooted && truncated && incoming.length >= local.length) {
+      return { chain: incoming.slice(), applied: true, reason: 'full-replace', tipHash: tipHash, tipIndex: tipIndex };
+    }
+
+    const spliced = spliceSuffix(local, incoming);
+    if (spliced && spliced.length) {
+      return { chain: spliced, applied: true, reason: 'spliced-suffix', tipHash: tipHash, tipIndex: tipIndex };
+    }
+
+    // Late joiner (no local copy yet): show the hub window, height comes from tipIndex.
+    if (!local.length) {
+      return { chain: incoming.slice(), applied: true, reason: 'late-join-window', tipHash: tipHash, tipIndex: tipIndex };
+    }
+
+    // Private/optimistic local fork and a newer hub window that does not overlap:
+    // adopt the hub window so the copy follows the instructor, never a shorter reorg.
+    if (tipIndex != null && tipIndex > localTipIndex) {
+      return { chain: incoming.slice(), applied: true, reason: 'hub-window-ahead', tipHash: tipHash, tipIndex: tipIndex };
+    }
+
+    // Cannot connect and incoming is not ahead — keep the current copy.
+    return { chain: local, applied: false, reason: 'keep-local', tipHash: tipHash, tipIndex: tipIndex };
+  }
+
+  /** Display height for a (possibly truncated) student copy. Never use length-1 of a suffix. */
+  static canonicalCopyHeight(chain, meta) {
+    meta = meta || {};
+    if (meta.tipIndex != null && !isNaN(Number(meta.tipIndex))) return Number(meta.tipIndex);
+    if (meta.chainHeight != null && !isNaN(Number(meta.chainHeight))) return Number(meta.chainHeight);
+    if (meta.hubHeight != null && !isNaN(Number(meta.hubHeight))) return Number(meta.hubHeight);
+    const tip = Array.isArray(chain) && chain.length ? chain[chain.length - 1] : null;
+    if (tip && tip.index != null && !isNaN(Number(tip.index))) return Number(tip.index);
+    return 0;
   }
 
   /**
@@ -1076,6 +1221,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
   // Update hashrate for a participant (called from client reports)
   updateHashrate(userId, hashrate) {
+    const existing = this.participants.get(userId);
+    if (existing) existing.lastSeenAt = Date.now();
     if (this.networkPaused) {
       this.zeroHashratesForPause();
       return;

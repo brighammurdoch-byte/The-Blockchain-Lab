@@ -17,13 +17,26 @@ let relayState = null;
 let socket = null; // legacy stub
 
 // Toast notification function (non-intrusive bubble at top)
+let toastQueue = [];
+let toastBusy = false;
+
 function showToastNotification(message, type = 'info', durationMs) {
-  // Remove existing toast if any
+  const isResume = /resumed/i.test(String(message || ''));
+  const hold = durationMs != null
+    ? durationMs
+    : (type === 'warning' ? 8000 : (isResume || type === 'success' ? 6000 : 4000));
+  const item = { message: message, type: type, hold: hold };
+  if (isResume) toastQueue.unshift(item);
+  else toastQueue.push(item);
+  drainToastQueue();
+}
+
+function drainToastQueue() {
+  if (toastBusy || !toastQueue.length) return;
+  toastBusy = true;
+  const next = toastQueue.shift();
   $('#toastNotification').remove();
-  
-  const bgColor = type === 'success' ? '#28a745' : type === 'error' ? '#dc3545' : type === 'warning' ? '#d97706' : '#17a2b8';
-  const hold = durationMs != null ? durationMs : (type === 'warning' ? 8000 : 4000);
-  
+  const bgColor = next.type === 'success' ? '#28a745' : next.type === 'error' ? '#dc3545' : next.type === 'warning' ? '#d97706' : '#17a2b8';
   const toast = $(`
     <div id="toastNotification" class="lab-toast" style="
       position: fixed;
@@ -41,15 +54,17 @@ function showToastNotification(message, type = 'info', durationMs) {
       word-wrap: break-word;
       animation: slideIn 0.3s ease-out;
     ">
-      ${message}
+      ${next.message}
     </div>
   `);
-  
   $('body').append(toast);
-  
-  setTimeout(function() {
-    toast.fadeOut(300, function() { $(this).remove(); });
-  }, hold);
+  setTimeout(function () {
+    toast.fadeOut(300, function () {
+      $(this).remove();
+      toastBusy = false;
+      drainToastQueue();
+    });
+  }, next.hold);
 }
 
 function liveClassroomNodes() {
@@ -136,6 +151,9 @@ function applyNetworkPausedUi(paused) {
   if (on && relayState && typeof relayState.zeroHashratesForPause === 'function') {
     relayState.zeroHashratesForPause();
   }
+  if (!on && relayState && typeof relayState.noteNetworkResumed === 'function') {
+    relayState.noteNetworkResumed();
+  }
   $('#totalHashrate').text((on ? 0 : ((relayState && relayState.networkStats && relayState.networkStats.totalHashrate) || 0)).toFixed(0) + ' H/s');
 }
 
@@ -205,12 +223,25 @@ $(document).ready(function() {
     if (!relayState || typeof relayState.pruneStaleParticipants !== 'function') return;
     const live = [];
     if (net && net.userId) live.push(net.userId);
-    if (net && net.transport && net.transport._presence) {
-      net.transport._presence.forEach(function (_ts, id) { if (id) live.push(id); });
+    if (net && net.transport && typeof net.transport.getLivePeerIds === 'function') {
+      net.transport.getLivePeerIds(20000).forEach(function (id) { if (id) live.push(id); });
+    } else if (net && net.transport && net.transport._presence) {
+      const now = Date.now();
+      net.transport._presence.forEach(function (ts, id) {
+        if (id && now - ts < 20000) live.push(id);
+      });
     }
     const n = relayState.pruneStaleParticipants(live);
-    if (n && typeof renderClientParticipants === 'function') renderClientParticipants();
-  }, 8000);
+    if (n) {
+      if (typeof renderClientParticipants === 'function') renderClientParticipants();
+      refreshLiveNodeBadge();
+      try {
+        net.send('participants-roster', {
+          participants: Array.from(relayState.participants.values())
+        });
+      } catch (e) {}
+    }
+  }, 5000);
 
   // If auto-difficulty overshot, ease down when no block lands for a while
   setInterval(function () {
@@ -781,10 +812,32 @@ function initClientSideNetworking(mode, roomCode) {
 
   net.on('peer-hello', (msg) => {
     if (msg && msg.isAdmin) return;
+    const uid = msg.from || (msg.payload && msg.payload.from);
+    if (uid && String(uid).indexOf('probe-') !== 0 && relayState) {
+      if (typeof relayState.touchParticipant === 'function' && relayState.participants.has(uid)) {
+        relayState.touchParticipant(uid);
+      }
+    }
     if (applyInboundDisplayName(msg)) {
       if (typeof renderClientParticipants === 'function') renderClientParticipants();
       refreshLiveNodeBadge();
     }
+  });
+
+  net.on('peer-left', (msg) => {
+    const uid = (msg && (msg.from || (msg.payload && msg.payload.from))) || '';
+    if (!uid || !relayState || String(uid).indexOf('probe-') === 0) return;
+    const r = relayState.participants.get(uid);
+    if (r && (String(r.role || '').toLowerCase() === 'admin' || String(r.role || '').toLowerCase() === 'hub')) return;
+    relayState.participants.delete(uid);
+    if (net && net.transport && net.transport._presence) net.transport._presence.delete(uid);
+    if (typeof renderClientParticipants === 'function') renderClientParticipants();
+    refreshLiveNodeBadge();
+    try {
+      net.send('participants-roster', {
+        participants: Array.from(relayState.participants.values())
+      });
+    } catch (e) {}
   });
 
   net.on('peer-count', function () {
@@ -966,7 +1019,7 @@ function setupEventHandlers() {
     showToastNotification(
       willPause ? 'Network paused — mining and transactions halted' : 'Network resumed',
       willPause ? 'warning' : 'success',
-      willPause ? 12000 : 4000
+      willPause ? 12000 : 6500
     );
     if (typeof renderClientParticipants === 'function') renderClientParticipants();
     if (relayState && net && net.roomCode && window.Persistence) {

@@ -135,24 +135,11 @@ $(document).ready(function () {
     }).then(function (code) {
       if (joinAttempt.cancelled) return;
       localStorage.setItem('joinCode_' + code, code);
-      var roleKey = 'userId_' + code + '_' + role;
-      var tabId = localStorage.getItem(roleKey) || '';
-      if (!tabId) {
-        try { tabId = sessionStorage.getItem('labUserId_' + code) || ''; } catch (e) {}
-      }
-      var existingGeneric = localStorage.getItem('userId_' + code) || '';
-      var existingRole = (window.LabPaths && LabPaths.getBoundNodeRole)
-        ? LabPaths.getBoundNodeRole(code, existingGeneric)
-        : '';
-      if (!tabId && existingGeneric && (!existingRole || existingRole === role)) {
-        tabId = existingGeneric;
-      }
-      if (!tabId) {
-        tabId = 'user_' + Math.random().toString(36).substr(2, 9);
-      }
+      // Per-tab id: a second wallet join must not reuse Wallet 1's localStorage id.
+      var tabId = (window.LabPaths && typeof LabPaths.allocateTabUserId === 'function')
+        ? LabPaths.allocateTabUserId(code, role)
+        : ('user_' + Math.random().toString(36).substr(2, 9));
       try { sessionStorage.setItem('labUserId_' + code, tabId); } catch (e2) {}
-      localStorage.setItem(roleKey, tabId);
-      localStorage.setItem('userId_' + code, tabId);
       if (window.LabPaths && LabPaths.persistNodeRole) {
         LabPaths.persistNodeRole(code, tabId, role);
       }
