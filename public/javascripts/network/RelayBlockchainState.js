@@ -107,8 +107,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
   }
 
   _autoMaxScore() {
-    // 3 leading zeros is the classroom ceiling. 4–5 stall every miner.
-    return 3 * 16 + 15;
+    // ~80 kH/s classroom needs ~5 leading zeros to land near 10s.
+    // Remine-on-reject + stall-ease keep 4–5 from freezing the class.
+    return 5 * 16 + 12;
   }
 
   _scoreToDifficulty(score) {
@@ -146,22 +147,36 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const intervals = Array.isArray(this.networkStats.blockIntervals)
       ? this.networkStats.blockIntervals
       : [];
-    if (intervals.length < 3) return null;
+    if (intervals.length < 2) return null;
 
-    // Responsive window: last few blocks
-    const recent = intervals.slice(-5);
+    const recent = intervals.slice(-4);
     const avg = recent.reduce((a, b) => a + b, 0) / recent.length;
     if (!(avg > 0)) return null;
 
     const ratio = avg / targetMs;
     let delta = 0;
-    // One step at a time — jumping +4 landed the class on 5 leading zeros
-    // and every miner stalled with "needs 5 leading zeros".
-    if (ratio < 0.5) delta = 1;
-    else if (ratio < 0.8) delta = 1;
-    else if (ratio > 2.0) delta = -2;
-    else if (ratio > 1.35) delta = -1;
-    // ~0.8–1.35 of target: hold
+    // Close the gap to the target in a few blocks (0.3s → 10s is ~30× too fast).
+    if (ratio < 0.08) delta = 12;
+    else if (ratio < 0.15) delta = 8;
+    else if (ratio < 0.3) delta = 5;
+    else if (ratio < 0.5) delta = 3;
+    else if (ratio < 0.75) delta = 2;
+    else if (ratio < 0.92) delta = 1;
+    else if (ratio > 2.4) delta = -4;
+    else if (ratio > 1.7) delta = -2;
+    else if (ratio > 1.2) delta = -1;
+
+    const hs = Number(this.networkStats.totalHashrate) || 0;
+    if (hs > 2000 && ratio < 0.6) {
+      const wantHashes = hs * (targetMs / 1000);
+      const wantLeading = Math.max(1, Math.min(5, Math.floor(Math.log(wantHashes) / Math.log(16))));
+      const wantScore = wantLeading * 16 + 8;
+      const cur = this._difficultyScore(
+        this.settings.difficultyLeading,
+        this.settings.difficultySecondary
+      );
+      if (wantScore > cur + delta) delta = Math.min(this._autoMaxScore() - cur, wantScore - cur);
+    }
 
     if (delta === 0) return null;
 
@@ -206,7 +221,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const targetSec = Number(this.settings.targetBlockTimeSec);
     const targetMs = Math.max(2000, Math.min(120000, (isNaN(targetSec) ? 10 : targetSec) * 1000));
     const last = this.networkStats && this.networkStats.lastBlockTime;
-    const waitMs = Math.max(targetMs * 2.5, 20000);
+    const waitMs = Math.max(targetMs * 1.8, 16000);
     const since = last || (this.networkStats && this.networkStats.lastRetarget && this.networkStats.lastRetarget.at);
     if (since && Date.now() - since < waitMs) return null;
     if (!since && this.chain && this.chain.length <= 1) return null;
@@ -286,6 +301,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
         balance: endow,
         endowment: endow,
         joinedAt: Date.now(),
+        lastSeenAt: Date.now(),
         status: 'idle'
       };
       Object.assign(row, extra);
@@ -298,6 +314,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     } else {
       const p = this.participants.get(userId);
       Object.assign(p, extra);
+      p.lastSeenAt = Date.now();
       // Promote a known peer to wallet with starting coins if they never had an endowment
       const r = String(role || p.role || '').toLowerCase();
       if (
@@ -312,6 +329,42 @@ if (typeof window.RelayBlockchainState === 'undefined') {
         p.role = role;
       }
     }
+  }
+
+  touchParticipant(userId) {
+    const p = this.participants.get(userId);
+    if (p) p.lastSeenAt = Date.now();
+  }
+
+  /**
+   * Drop join-retry ghosts (0 blocks, no recent presence). Keep anyone who mined
+   * or is in the live MQTT/WebRTC presence set.
+   */
+  pruneStaleParticipants(liveIds, now) {
+    now = now || Date.now();
+    const live = new Set();
+    (liveIds || []).forEach(function (id) {
+      if (id) live.add(String(id));
+    });
+    const drop = [];
+    this.participants.forEach((p, id) => {
+      if (!id || String(id).indexOf('probe-') === 0) {
+        drop.push(id);
+        return;
+      }
+      if (live.has(String(id))) {
+        p.lastSeenAt = now;
+        return;
+      }
+      const r = String(p.role || '').toLowerCase();
+      if (r === 'admin' || r === 'hub') return;
+      const mined = Number(p.blocksMined || p.minedBlocks || 0);
+      const rate = Number(p.hashrate || 0);
+      const age = now - (p.lastSeenAt || p.joinedAt || 0);
+      if (mined <= 0 && rate <= 0 && age > 25000) drop.push(id);
+    });
+    drop.forEach((id) => this.participants.delete(id));
+    return drop.length;
   }
 
   /**

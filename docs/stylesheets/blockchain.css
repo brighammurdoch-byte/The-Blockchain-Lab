@@ -4,6 +4,34 @@ html {
   height: 100%;
 }
 
+.chain-swipe-hint {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .chain-swipe-hint {
+    display: block;
+    font-size: 13px;
+    color: #5c7380;
+    margin: 0 0 8px;
+    font-weight: 600;
+  }
+  .row-horizon {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x mandatory;
+    padding-bottom: 16px;
+    margin-left: 0;
+    margin-right: 0;
+  }
+  .row-horizon > [class*="col-"] {
+    width: 86% !important;
+    max-width: 86% !important;
+    scroll-snap-align: start;
+  }
+}
+
 body {
   font: 14px "Lucida Grande", Helvetica, Arial, sans-serif;
   height: 100%;

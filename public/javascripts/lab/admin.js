@@ -24,17 +24,19 @@ function showToastNotification(message, type = 'info') {
   const bgColor = type === 'success' ? '#28a745' : type === 'error' ? '#dc3545' : '#17a2b8';
   
   const toast = $(`
-    <div id="toastNotification" style="
+    <div id="toastNotification" class="lab-toast" style="
       position: fixed;
-      top: 20px;
-      right: 20px;
+      top: 72px;
+      left: 12px;
+      right: 12px;
+      margin: 0 auto;
       background: ${bgColor};
       color: white;
-      padding: 15px 25px;
+      padding: 12px 16px;
       border-radius: 5px;
       box-shadow: 0 4px 6px rgba(0,0,0,0.2);
-      z-index: 9999;
-      max-width: 400px;
+      z-index: 1030;
+      max-width: min(400px, calc(100vw - 24px));
       word-wrap: break-word;
       animation: slideIn 0.3s ease-out;
     ">
@@ -111,6 +113,17 @@ $(document).ready(function() {
 
   // Set up event handlers
   setupEventHandlers();
+
+  setInterval(function () {
+    if (!relayState || typeof relayState.pruneStaleParticipants !== 'function') return;
+    const live = [];
+    if (net && net.userId) live.push(net.userId);
+    if (net && net.transport && net.transport._presence) {
+      net.transport._presence.forEach(function (_ts, id) { if (id) live.push(id); });
+    }
+    const n = relayState.pruneStaleParticipants(live);
+    if (n && typeof renderClientParticipants === 'function') renderClientParticipants();
+  }, 8000);
 
   // If auto-difficulty overshot, ease down when no block lands for a while
   setInterval(function () {
@@ -592,6 +605,7 @@ function initClientSideNetworking(mode, roomCode) {
     const hashrate = payload.hashrate;
     if (nackMinerIfPaused(uid) && hashrate > 0) return;
     if (relayState && uid) {
+      if (typeof relayState.touchParticipant === 'function') relayState.touchParticipant(uid);
       relayState.updateHashrate(uid, hashrate);
       if (typeof renderClientParticipants === 'function') renderClientParticipants();
       const viz = window.networkViz || networkViz;
@@ -1977,7 +1991,16 @@ function renderClientParticipants() {
       const roleClass = p.role === 'wallet' ? 'label-info' : (p.role === 'admin' ? 'label-warning' : 'label-success');
       const roleText = p.role === 'wallet' ? 'Wallet' : (p.role === 'admin' ? 'Admin' : 'Miner');
       const mined = p.blocksMined != null ? p.blocksMined : (p.minedBlocks || 0);
-      const name = p.displayName || p.name || '';
+      const rawName = p.displayName || p.name || '';
+      const name = (function () {
+        const base = String(rawName).trim();
+        if (!base) return '';
+        const clash = participants.some(function (o) {
+          return o !== p && ((o.displayName || o.name || '').trim() === base);
+        });
+        if (!clash) return base;
+        return base + ' · ' + String(p.userId || '').replace(/^user[-_]/i, '').slice(-4);
+      })();
       const nameHtml = name ? `<strong style="display:block;margin-bottom:2px;">${name}</strong>` : '';
       const attackerLabel = (p.isAttacker || p.isColluding)
         ? ' <span class="label label-danger">Attacker</span>'

@@ -498,10 +498,27 @@ body.lab-app #blockchainView .panel:hover {
 }
 
 @media (max-width: 767px) {
+  html,
+  body.lab-app {
+    overflow-x: hidden;
+    max-width: 100%;
+  }
+
   body.lab-app > .container,
   body.lab-app > .container-fluid {
     padding-left: 12px;
     padding-right: 12px;
+    overflow-x: hidden;
+  }
+
+  body.lab-app .row {
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  body.lab-app [class*="col-"] {
+    padding-left: 8px;
+    padding-right: 8px;
   }
 
   .lab-landing__brand h1 {
@@ -511,6 +528,21 @@ body.lab-app #blockchainView .panel:hover {
 
   .lab-action {
     padding: 22px 18px;
+  }
+
+  #cpuUsage {
+    height: 44px;
+    min-height: 44px;
+  }
+
+  /* One participant directory on phones — Shared Network copy is the same list */
+  .js-mobile-hide-dup-roster {
+    display: none;
+  }
+
+  .chain-block-col {
+    min-width: 100% !important;
+    flex-basis: 100% !important;
   }
 }
 

@@ -3,6 +3,7 @@ extends layout
 block content
   .container-fluid
     h1 #{__('Distributed Blockchain')}
+    p.chain-swipe-hint Swipe sideways to see the next blocks →
     - var peers = {1: 'A', 2: 'B', 3: 'C'}
       each peer, chain in peers
         h3 #{__('Peer')} #{peer}

@@ -4,7 +4,7 @@ block config
   - bodyClass = 'lab-app'
 
 block extra_css
-  link(rel='stylesheet', href='/stylesheets/lab-theme.css?v=labui1')
+  link(rel='stylesheet', href='/stylesheets/lab-theme.css?v=mobfix1')
 
 block content
   .container-fluid
@@ -35,14 +35,10 @@ block content
                 script.
                   (function() {
                     try {
-                      var sid = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || window.location.pathname.split('/').pop();
-                      var uid = localStorage.getItem('userId_' + sid);
-                      if (!uid) {
-                        uid = 'user_' + Math.random().toString(36).substr(2, 9);
-                        localStorage.setItem('userId_' + sid, uid);
-                      }
+                      var sid = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || '';
+                      var uid = sid ? localStorage.getItem('userId_' + sid) : '';
                       var el = document.getElementById('yourAddress');
-                      if (el) el.textContent = uid;
+                      if (el && uid) el.textContent = uid;
                     } catch (err) {}
                   })();
             .well
@@ -188,7 +184,7 @@ block content
             
           // SHARED NETWORK TAB
           #tabNetwork.tab-pane
-            .panel.panel-default
+            .panel.panel-default.js-mobile-hide-dup-roster
               .panel-heading
                 h3.panel-title Active Miners & Wallets
               .panel-body(style="max-height: 200px; overflow-y: auto;")
@@ -320,11 +316,11 @@ block content
   script(src="/javascripts/network/P2PAdminRelayTransport.js?v=tiphb1")
   script(src="/javascripts/network/AdminRelayCoordinator.js?v=forkfix1")
   script(src="/javascripts/network/Persistence.js?v=fixrelay")
-  script(src="/javascripts/network/RelayBlockchainState.js?v=diffcap1")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=classtune1")
   script(src="/javascripts/network/NetworkManager.js?v=mqtt1")
   script(src="/javascripts/lab/sessionProbe.js?v=probe22")
   script(src="/javascripts/lab/chainDisplay.js?v=wideblk1")
-  script(src="/javascripts/lab/participate.js?v=tiphb1")
+  script(src="/javascripts/lab/participate.js?v=classtune1")
   
   script.
     // Do not redeclare sessionId — participate.js already owns that binding.

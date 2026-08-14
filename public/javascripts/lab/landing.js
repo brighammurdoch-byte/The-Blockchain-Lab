@@ -106,7 +106,15 @@ $(document).ready(function () {
       }
     }).then(function (code) {
       localStorage.setItem('joinCode_' + code, code);
-      localStorage.setItem('userId_' + code, 'user-' + Date.now().toString(36));
+      var tabId = '';
+      try { tabId = sessionStorage.getItem('labUserId_' + code) || ''; } catch (e) {}
+      if (!tabId) {
+        tabId = 'user_' + Math.random().toString(36).substr(2, 9);
+        try { sessionStorage.setItem('labUserId_' + code, tabId); } catch (e2) {}
+      }
+      if (!localStorage.getItem('userId_' + code)) {
+        localStorage.setItem('userId_' + code, tabId);
+      }
       localStorage.setItem('networkingMode_' + code, 'admin-relay');
       if (window.LabPaths && LabPaths.persistChainFlavor) {
         LabPaths.persistChainFlavor(code, chainFlavor);

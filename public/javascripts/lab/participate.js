@@ -203,8 +203,11 @@ function requestHubResync(reason) {
   }
   if (hubResyncAt && now - hubResyncAt < 4000) return;
   hubResyncAt = now;
-  if (chainStale || reason === 'no-chain' || reason === 'reconnect' || reason === 'forced') {
+  const farBehind = !hasTrustedHubChain() || reason === 'no-chain' || reason === 'reconnect';
+  if (farBehind) {
     pauseHashingForSync();
+  } else if (isMining) {
+    remineOnCanonicalTip({ force: true });
   }
   try { net.send('request-state', { from: userId }); } catch (e) {}
   if (hubResyncTimer) clearTimeout(hubResyncTimer);
@@ -279,7 +282,6 @@ function abandonStaleWait() {
     forgetSubmittedSlotsThrough(waitingForHubIndex);
   }
   clearWaitingForHub();
-  if (isMining || window.lastMiningIntent) showCatchingUpUi();
 }
 
 function showWaitingForHub(index) {
@@ -317,9 +319,14 @@ function noteHubTipHint(tipHash, tipIndex) {
   const waitStale = waitingForHubIndex != null && h >= waitingForHubIndex;
   if (!behind && !waitStale) return;
   if (waitStale) abandonStaleWait();
+  const onlyOneAhead = h <= hubConfirmedHeight + 1 && !waitStale;
   if (tipHash) hubConfirmedTipHash = tipHash;
   hubConfirmedHeight = Math.max(hubConfirmedHeight, h);
   forgetSubmittedSlotsThrough(h);
+  if (onlyOneAhead && isMining && hasTrustedHubChain()) {
+    remineOnCanonicalTip({ force: true });
+    return;
+  }
   requestHubResync('forced');
 }
 
@@ -1115,21 +1122,36 @@ function getDisplayOrphans() {
 }
 
 /** Remember roster for name lookup on later paints (don't pass [] and wipe names). */
-function rememberParticipants(parts) {
+function rememberParticipants(parts, opts) {
   if (!Array.isArray(parts) || !parts.length) return lastKnownParticipants;
-  // Merge by userId so a partial roster doesn't drop names we already know
+  opts = opts || {};
   const byId = new Map();
-  (lastKnownParticipants || []).forEach(function (p) {
-    const id = p && (p.userId || p.address || p.id);
-    if (id) byId.set(String(id), p);
-  });
+  const incomingIds = new Set();
   parts.forEach(function (p) {
     if (!p) return;
     const id = p.userId || p.address || p.id;
-    if (!id) return;
+    if (!id || String(id).indexOf('probe-') === 0) return;
+    incomingIds.add(String(id));
+  });
+  // Hub full roster replaces ghosts. Sparse updates still merge.
+  const treatAsFull = !!opts.replace || incomingIds.size >= 2;
+  if (!treatAsFull) {
+    (lastKnownParticipants || []).forEach(function (p) {
+      const id = p && (p.userId || p.address || p.id);
+      if (id) byId.set(String(id), p);
+    });
+  } else {
+    (lastKnownParticipants || []).forEach(function (p) {
+      const id = p && (p.userId || p.address || p.id);
+      if (id && incomingIds.has(String(id))) byId.set(String(id), p);
+    });
+  }
+  parts.forEach(function (p) {
+    if (!p) return;
+    const id = p.userId || p.address || p.id;
+    if (!id || String(id).indexOf('probe-') === 0) return;
     const prev = byId.get(String(id)) || {};
     const merged = Object.assign({}, prev, p);
-    // Never clobber a known display name with null/empty from a sparse MQTT payload
     const prevName = (prev.displayName || prev.name || '').trim();
     const nextName = (p.displayName || p.name || '').trim();
     if (!nextName && prevName) {
@@ -1143,6 +1165,20 @@ function rememberParticipants(parts) {
   });
   lastKnownParticipants = Array.from(byId.values());
   return lastKnownParticipants;
+}
+
+function disambiguateDisplayName(name, userId, all) {
+  const base = String(name || '').trim();
+  if (!base) return '';
+  const clashes = (all || []).filter(function (p) {
+    const id = p.userId || p.address || p.id;
+    if (String(id) === String(userId)) return false;
+    const n = (p.displayName || p.name || '').trim();
+    return n === base;
+  });
+  if (!clashes.length) return base;
+  const short = String(userId || '').replace(/^user[-_]/i, '').slice(-4);
+  return base + ' · ' + short;
 }
 
 /** Redraw Shared Network tab: hub main chain + orphans / competing forks. */
@@ -1567,17 +1603,19 @@ function showToastNotification(message, type = 'info') {
   const bgColor = type === 'success' ? '#28a745' : type === 'error' ? '#dc3545' : '#17a2b8';
   
   const toast = $(`
-    <div id="toastNotification" style="
+    <div id="toastNotification" class="lab-toast lab-toast-${type}" style="
       position: fixed;
-      top: 20px;
-      right: 20px;
+      top: 72px;
+      left: 12px;
+      right: 12px;
+      margin: 0 auto;
       background: ${bgColor};
       color: white;
-      padding: 15px 25px;
+      padding: 12px 16px;
       border-radius: 5px;
       box-shadow: 0 4px 6px rgba(0,0,0,0.2);
-      z-index: 9999;
-      max-width: 400px;
+      z-index: 1030;
+      max-width: min(400px, calc(100vw - 24px));
       word-wrap: break-word;
       animation: slideIn 0.3s ease-out;
     ">
@@ -2169,7 +2207,7 @@ function initClientSideNetworkingForParticipant(mode) {
     const payload = msg.payload || msg;
     const parts = payload.participants || [];
     if (!parts.length) return;
-    rememberParticipants(parts);
+    rememberParticipants(parts, { replace: true });
     try { updateParticipantList({ participants: lastKnownParticipants }); } catch (e) {}
     try { applyMyBalanceFromParticipants(lastKnownParticipants); } catch (e) {}
     // Re-paint chains so miner names appear on blocks (mobile often only had addresses)
@@ -2228,6 +2266,9 @@ function initClientSideNetworkingForParticipant(mode) {
     }
 
     // If we received a real chain from the admin hub, feed it into local logic
+    if (Array.isArray(state.participants) && state.participants.length) {
+      rememberParticipants(state.participants, { replace: true });
+    }
     if (state.chain && Array.isArray(state.chain) && state.chain.length > 0) {
       applyCanonicalChain(state.chain, {
         participants: state.participants || [],
@@ -2321,6 +2362,13 @@ function initClientSideNetworkingForParticipant(mode) {
   net.joinRoom(joinCode, userId, 'miner').then(() => {
     console.log('[ParticipantNet] Joined client-relay room:', joinCode, 'as', userId);
     showToastNotification('Connected via browser relay (no server)', 'success');
+    var savedName = '';
+    try { savedName = localStorage.getItem('nodeName_' + sessionId + '_' + userId) || ''; } catch (e) {}
+    if (savedName) {
+      $('#nodeName').val(savedName);
+      net.send('node-name-changed', { userId: userId, name: savedName });
+      rememberParticipants([{ userId: userId, address: userId, name: savedName, displayName: savedName, role: 'miner' }]);
+    }
     $('#blockchainView').html('<p class="text-muted">Connected to relay hub. Waiting for initial chain state from admin...</p>');
     // Explicitly request the state in case the automatic peer-joined didn't trigger it
     net.send('request-state', { from: userId });
@@ -2504,6 +2552,7 @@ function setupEventHandlers() {
     }
     
     // Emit node name change via relay if possible
+    try { localStorage.setItem('nodeName_' + sessionId + '_' + userId, nodeName); } catch (e) {}
     if (net) {
       net.send('node-name-changed', { userId: userId, name: nodeName });
     } else if (socket) {
@@ -3776,7 +3825,7 @@ function updateParticipantList(blockchain) {
       : (role === 'admin' || role === 'hub'
         ? '<span class="label label-warning">Admin</span>'
         : '<span class="label label-success">Miner</span>');
-    const displayName = (p.displayName || p.name || '').trim();
+    const displayName = disambiguateDisplayName(p.displayName || p.name, addr, participants);
     const nameHtml = displayName
       ? `<strong style="display: block; margin-top: 4px;">${escapeHtml(displayName)}</strong>`
       : '';
@@ -3805,8 +3854,10 @@ function updateParticipantList(blockchain) {
     html = '<li class="list-group-item text-muted"><em>Waiting for miners and wallets...</em></li>';
   }
 
-  $('#participantList').html(html);
   $('#participantDirectory').html(html);
+  if ($('#participantList').length && $('#participantList')[0] !== $('#participantDirectory')[0]) {
+    $('#participantList').html(html);
+  }
 }
 
 function updatePendingTransactions(blockchain) {
