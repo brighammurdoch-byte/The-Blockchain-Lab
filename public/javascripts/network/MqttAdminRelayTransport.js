@@ -49,13 +49,18 @@
     this.userId = userId;
     await this._initAll();
     this._announcePresence();
-    this.send({
+    var joinMsg = {
       type: 'peer-joined',
       roomCode: this.roomCode,
       from: userId,
       role: this.role,
       timestamp: Date.now()
-    });
+    };
+    if (this.nodeDisplayName) {
+      joinMsg.name = this.nodeDisplayName;
+      joinMsg.payload = { name: this.nodeDisplayName, role: this.role };
+    }
+    this.send(joinMsg);
     console.log('[MqttRelay] Joined room', this.roomCode, 'as', userId, this.role, 'via', this._brokerUrl);
   };
 
@@ -252,6 +257,10 @@
     };
     // Hub re-broadcasts pause + tip on every presence tick so phones that
     // slept through block-accepted still know the live height.
+    if (!this.isAdmin && this.nodeDisplayName) {
+      msg.name = this.nodeDisplayName;
+      msg.payload = Object.assign({}, msg.payload || {}, { name: this.nodeDisplayName });
+    }
     if (this.isAdmin) {
       var payload = {};
       if (typeof this.networkPaused === 'boolean') {

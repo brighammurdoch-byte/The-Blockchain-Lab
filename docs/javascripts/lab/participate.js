@@ -619,11 +619,37 @@ function handleMiningWorkerMessage(ev) {
   }
 }
 
+function currentNodeDisplayName() {
+  try {
+    const typed = ($('#nodeName').val() || '').trim();
+    if (typed) return typed;
+    return localStorage.getItem('nodeName_' + sessionId + '_' + userId) || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+function persistAndBroadcastNodeName(nodeName) {
+  const name = String(nodeName || '').trim();
+  try { localStorage.setItem('nodeName_' + sessionId + '_' + userId, name); } catch (e) {}
+  if (net && typeof net.setDisplayName === 'function') net.setDisplayName(name);
+  else if (net && net.transport) net.transport.nodeDisplayName = name;
+  if (net) {
+    net.send('node-name-changed', { userId: userId, name: name, role: 'miner' });
+    // Repeat once — QoS 0 MQTT often drops the one-shot while miners flood hashrate
+    setTimeout(function () {
+      if (net) net.send('node-name-changed', { userId: userId, name: name, role: 'miner' });
+    }, 800);
+  }
+}
+
 function emitHashrate(hashrate) {
   if (net) {
+    const nm = currentNodeDisplayName();
     net.send('hashrate-update', {
       userId: userId,
-      hashrate: hashrate
+      hashrate: hashrate,
+      name: nm || undefined
     });
   } else if (typeof socket !== 'undefined' && socket) {
     socket.emit('hashrate-update', {
@@ -2407,6 +2433,10 @@ function initClientSideNetworkingForParticipant(mode) {
 
   // Now join (after listeners attached)
   const joinCode = localStorage.getItem('joinCode_' + sessionId) || sessionId;
+  try {
+    const earlyName = localStorage.getItem('nodeName_' + sessionId + '_' + userId) || '';
+    if (earlyName && typeof net.setDisplayName === 'function') net.setDisplayName(earlyName);
+  } catch (e) {}
   net.joinRoom(joinCode, userId, 'miner').then(() => {
     console.log('[ParticipantNet] Joined client-relay room:', joinCode, 'as', userId);
     showToastNotification('Connected via browser relay (no server)', 'success');
@@ -2414,7 +2444,7 @@ function initClientSideNetworkingForParticipant(mode) {
     try { savedName = localStorage.getItem('nodeName_' + sessionId + '_' + userId) || ''; } catch (e) {}
     if (savedName) {
       $('#nodeName').val(savedName);
-      net.send('node-name-changed', { userId: userId, name: savedName });
+      persistAndBroadcastNodeName(savedName);
       rememberParticipants([{ userId: userId, address: userId, name: savedName, displayName: savedName, role: 'miner' }]);
     }
     $('#blockchainView').html('<p class="text-muted">Connected to relay hub. Waiting for initial chain state from admin...</p>');
@@ -2599,11 +2629,8 @@ function setupEventHandlers() {
       return;
     }
     
-    // Emit node name change via relay if possible
-    try { localStorage.setItem('nodeName_' + sessionId + '_' + userId, nodeName); } catch (e) {}
-    if (net) {
-      net.send('node-name-changed', { userId: userId, name: nodeName });
-    } else if (socket) {
+    persistAndBroadcastNodeName(nodeName);
+    if (!net && socket) {
       socket.emit('node-name-changed', {
         sessionId: sessionId,
         userId: userId,

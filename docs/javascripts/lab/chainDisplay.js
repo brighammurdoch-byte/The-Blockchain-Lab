@@ -297,13 +297,15 @@
         var prevShort = prevFull.length > 16 ? prevFull.substring(0, 16) + '…' : prevFull;
         var timeStr = block.timestamp ? new Date(block.timestamp).toLocaleTimeString() : '';
         function hashCode(full, short) {
+          var shown = full || '—';
+          var shownShort = short || shown;
           return (
             '<code class="chain-hash" title="' +
-            escapeAttr(full) +
+            escapeAttr(shown) +
             '"><span class="chain-hash-short">' +
-            escapeHtml(short) +
+            escapeHtml(shownShort) +
             '</span><span class="chain-hash-long">' +
-            escapeHtml(full) +
+            escapeHtml(shown) +
             '</span></code>'
           );
         }

@@ -4,7 +4,7 @@ block config
   - bodyClass = 'lab-app'
 
 block extra_css
-  link(rel='stylesheet', href='/stylesheets/lab-theme.css?v=cons13')
+  link(rel='stylesheet', href='/stylesheets/lab-theme.css?v=p1fix1')
 
 block content
   .container-fluid
@@ -22,10 +22,9 @@ block content
                   code#sessionCode.text-center(style="display: block; font-size: 2em; letter-spacing: 0.12em; padding: 12px; background: #f5f5f5;") #{sessionId}
                 p
                   strong Share link (laptops / chat):
-                  .input-group
-                    input.form-control#joinShareLink(type="text", readonly, value="", style="font-size: 12px;")
-                    span.input-group-btn
-                      button.btn.btn-default#copyJoinLinkBtn(type="button") Copy
+                  .lab-share-link-wrap
+                    textarea.form-control#joinShareLink(readonly, rows="2", spellcheck="false")
+                    button.btn.btn-default.btn-block#copyJoinLinkBtn(type="button") Copy full link
                 small.text-muted Students open the link, pick Miner or Wallet, then Join. <strong>Keep this admin tab open</strong> — it is the classroom hub. For phones, create the session on the <strong>GitHub Pages</strong> URL (not localhost).
               .col-sm-5.text-center
                 strong#joinQrLabel Scan to join (phones)
@@ -83,8 +82,12 @@ block content
                 option(value="p2p") Full P2P (mesh gossip)
               small.form-text.text-muted#networkModeHelp Admin-hosted is most reliable for class. Full P2P shows decentralized gossip.
               p#connectionStatus(style="margin-top:8px;")
-                span.label.label-default#peerCountBadge Peers: 0
+                span.label.label-default#peerCountBadge Live nodes: 1
                 |  
+                span.label.label-success#networkPausedBadge Network live
+                |  
+                small.text-muted#peerCountHint Includes this hub. Students connected: 0.
+              p
                 small.text-muted Keep this tab open — you are the classroom hub.
 
             .form-group
@@ -218,7 +221,9 @@ block content
                 small Block Height
               .col-md-3
                 h4#participantCount 0
-                small Participants
+                small Live nodes
+                br
+                small.text-muted (hub + students)
               .col-md-3
                 h4#totalHashrate 0 H/s
                 small Network Hashrate
@@ -311,12 +316,12 @@ block content
   script(src="/javascripts/lib/mqtt.min.js?v=mqtt1")
   script(src="/javascripts/lab/labPaths.js?v=cons13")
   script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=fixrelay")
-  script(src="/javascripts/network/MqttAdminRelayTransport.js?v=tiphb1")
+  script(src="/javascripts/network/MqttAdminRelayTransport.js?v=p1fix1")
   script(src="/javascripts/network/P2PAdminRelayTransport.js?v=tiphb1")
-  script(src="/javascripts/network/AdminRelayCoordinator.js?v=classtune1")
+  script(src="/javascripts/network/AdminRelayCoordinator.js?v=p1fix1")
   script(src="/javascripts/network/Persistence.js?v=fixrelay")
-  script(src="/javascripts/network/RelayBlockchainState.js?v=cons13")
-  script(src="/javascripts/network/NetworkManager.js?v=mqtt1")
-  script(src="/javascripts/lab/chainDisplay.js?v=cons13")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=p1fix1")
+  script(src="/javascripts/network/NetworkManager.js?v=p1fix1")
+  script(src="/javascripts/lab/chainDisplay.js?v=p1fix1")
   script(src="/javascripts/lab/networkVisualization.js?v=gossip1")
-  script(src="/javascripts/lab/admin.js?v=cons13")
+  script(src="/javascripts/lab/admin.js?v=p1fix1")
