@@ -98,6 +98,8 @@ $(document).ready(function() {
   
   // Display user address
   $('#yourAddress').text(userId);
+  const earlyName = loadLocalWalletName();
+  if (earlyName && $('#nodeName').length) $('#nodeName').val(earlyName);
   
   // Display session code (from storage or the one passed from server/URL)
   const joinCode = localStorage.getItem('joinCode_' + sessionId) || sessionId;
@@ -185,6 +187,7 @@ function setupEventHandlers() {
       showToastNotification('Display name must be 50 characters or less', 'error');
       return;
     }
+    persistLocalWalletName(nodeName);
     if (net) {
       if (typeof net.setDisplayName === 'function') net.setDisplayName(nodeName);
       else if (net.transport) net.transport.nodeDisplayName = nodeName;
@@ -383,9 +386,14 @@ function initClientSideNetworkingForObserver(mode) {
   });
 
   const joinCode = localStorage.getItem('joinCode_' + sessionId) || sessionId;
+  const savedName = loadLocalWalletName();
+  if (savedName && typeof net.setDisplayName === 'function') net.setDisplayName(savedName);
   net.joinRoom(joinCode, userId, 'wallet').then(() => {
     console.log('[ObserveNet] Joined relay room as observer');
     $('#blockchainView').html('<p class="text-muted">Connected to relay hub. Waiting for initial chain state from admin...</p>');
+    if (savedName) {
+      net.send('node-name-changed', { userId: userId, name: savedName, role: 'wallet' });
+    }
     // Explicitly request the state
     net.send('request-state', { from: userId });
     window.addEventListener('pagehide', function () {
@@ -394,6 +402,28 @@ function initClientSideNetworkingForObserver(mode) {
   });
 
   window.BlockchainLabNet = net;
+}
+
+function walletNameStorageKey() {
+  return 'nodeName_' + sessionId + '_' + userId;
+}
+
+function loadLocalWalletName() {
+  try {
+    return sessionStorage.getItem(walletNameStorageKey())
+      || localStorage.getItem(walletNameStorageKey())
+      || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+function persistLocalWalletName(name) {
+  const n = String(name || '').trim();
+  try {
+    sessionStorage.setItem(walletNameStorageKey(), n);
+    localStorage.setItem(walletNameStorageKey(), n);
+  } catch (e) {}
 }
 
 function adoptObserverHubChain(incoming, meta) {
@@ -534,9 +564,18 @@ function populateObserverUIFromState(state) {
       if (me && me.balance !== undefined && me.balance !== null) {
         $('#yourBalance').text(me.balance);
       }
+      const localName = loadLocalWalletName();
+      if (me && localName) {
+        me.name = localName;
+        me.displayName = localName;
+      }
       const $nodeName = $('#nodeName');
-      if ($nodeName.length && !$nodeName.is(':focus') && me && (me.name || me.displayName)) {
-        $nodeName.val(me.displayName || me.name);
+      if ($nodeName.length && !$nodeName.is(':focus')) {
+        if (localName) {
+          $nodeName.val(localName);
+        } else if (me && (me.name || me.displayName)) {
+          $nodeName.val(me.displayName || me.name);
+        }
       }
     }
   } catch (e) {

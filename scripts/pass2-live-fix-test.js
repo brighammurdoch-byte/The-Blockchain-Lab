@@ -221,6 +221,39 @@ const Relay = loadRelay();
   else fail('Resume resets stall clock (no instant difficulty ease)', JSON.stringify(eased));
 })();
 
+// --- 9a. L3T0NE repro: later join/name on the same id must not rename Wallet 1 ---
+(function () {
+  const lab = new Relay('L3T0NE');
+  lab.addOrUpdateParticipant('user_jpo9nfhqt', 'wallet', {
+    name: 'Wallet 1',
+    displayName: 'Wallet 1',
+    endowment: 100
+  });
+  // Later tab join / hello / hashrate with the stolen id
+  lab.addOrUpdateParticipant('user_jpo9nfhqt', 'wallet', {
+    name: 'Wallet 2',
+    displayName: 'Wallet 2'
+  });
+  const w = lab.participants.get('user_jpo9nfhqt');
+  if (w && w.displayName === 'Wallet 1' && w.name === 'Wallet 1') {
+    pass('Later join does not overwrite Wallet 1 name on same id', w.displayName);
+  } else {
+    fail('Later join does not overwrite Wallet 1 name on same id', w ? w.displayName : 'missing');
+  }
+  // Explicit Save Name from the owner is still allowed
+  lab.addOrUpdateParticipant('user_jpo9nfhqt', 'wallet', {
+    name: 'Wallet 1b',
+    displayName: 'Wallet 1b',
+    rename: true
+  });
+  const w2 = lab.participants.get('user_jpo9nfhqt');
+  if (w2 && w2.displayName === 'Wallet 1b') {
+    pass('Explicit Save Name can still rename that wallet', w2.displayName);
+  } else {
+    fail('Explicit Save Name can still rename that wallet', w2 ? w2.displayName : 'missing');
+  }
+})();
+
 // --- 9. Two tab joins get two wallet ids ---
 (function () {
   const a = loadLabPaths();
@@ -282,6 +315,11 @@ const Relay = loadRelay();
     pass('Wallet uses per-tab id and hub-only canonical copy', '');
   } else {
     fail('Wallet uses per-tab id and hub-only canonical copy', 'missing adopt/hide orphans');
+  }
+  if (/persistLocalWalletName/.test(observe) && /loadLocalWalletName/.test(observe) && /rename: true/.test(admin)) {
+    pass('Wallet 1 pins its own name; hub rename requires Save Name', '');
+  } else {
+    fail('Wallet 1 pins its own name; hub rename requires Save Name', 'missing pin/rename gate');
   }
   if (/getLivePeerIds/.test(admin) && /peer-left/.test(admin)) {
     pass('Hub prunes by fresh presence and handles peer-left', '');

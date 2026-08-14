@@ -97,8 +97,9 @@ function refreshLiveNodeBadge() {
   }
 }
 
-function applyInboundDisplayName(msg) {
+function applyInboundDisplayName(msg, opts) {
   if (!msg || !relayState) return false;
+  opts = opts || {};
   const payload = msg.payload || msg;
   const uid = payload.userId || payload.from || msg.from;
   const name = String(
@@ -107,7 +108,10 @@ function applyInboundDisplayName(msg) {
   if (!uid || !name || String(uid).indexOf('probe-') === 0) return false;
   const existing = relayState.participants.get(uid);
   const role = (existing && existing.role) || payload.role || msg.role || 'miner';
-  relayState.addOrUpdateParticipant(uid, role, { name: name, displayName: name });
+  const extra = { name: name, displayName: name };
+  // Join/hello/hashrate must not rename an occupied id. Save Name may.
+  if (opts.rename) extra.rename = true;
+  relayState.addOrUpdateParticipant(uid, role, extra);
   const viz = window.networkViz || networkViz;
   if (viz && typeof viz.setNodeName === 'function') {
     viz.setNodeName(uid, name);
@@ -787,7 +791,7 @@ function initClientSideNetworking(mode, roomCode) {
   // Student display-name changes → topology + participant lists
   net.on('node-name-changed', (msg) => {
     if (!relayState) return;
-    applyInboundDisplayName(msg);
+    applyInboundDisplayName(msg, { rename: true });
     const payload = msg.payload || msg;
     const uid = payload.userId || msg.from;
     const existing = uid ? relayState.participants.get(uid) : null;

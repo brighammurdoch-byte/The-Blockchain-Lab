@@ -361,8 +361,19 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       this.participants.set(userId, row);
     } else {
       const p = this.participants.get(userId);
-      Object.assign(p, extra);
-      if (incomingName) {
+      const existingName = String(p.displayName || p.name || '').trim();
+      // A later join / hello / hashrate for the same id must not rename a live
+      // wallet (L3T0NE: Wallet 1's own page flipped to "Wallet 2").
+      // Only an explicit Save Name (extra.rename) may replace a known name.
+      const allowRename = !!extra.rename || !existingName;
+      const clean = Object.assign({}, extra);
+      delete clean.rename;
+      if (incomingName && !allowRename) {
+        delete clean.name;
+        delete clean.displayName;
+      }
+      Object.assign(p, clean);
+      if (incomingName && allowRename) {
         p.name = incomingName;
         p.displayName = incomingName;
       } else if (!p.displayName && p.name) {
