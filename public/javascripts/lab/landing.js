@@ -13,11 +13,13 @@ $(document).ready(function () {
     LabPaths.applyClassroomTheme();
   }
 
-  function go(page, code) {
+  function go(page, code, uid) {
     if (window.LabPaths && typeof LabPaths.labUrl === 'function') {
-      window.location.href = LabPaths.labUrl(page, code);
+      window.location.href = LabPaths.labUrl(page, code, uid ? { uid: uid } : {});
     } else {
-      window.location.href = '/lab/' + page + '/' + code;
+      var url = '/lab/' + page + '/' + code;
+      if (uid) url += '?uid=' + encodeURIComponent(uid);
+      window.location.href = url;
     }
   }
 
@@ -135,24 +137,12 @@ $(document).ready(function () {
     }).then(function (code) {
       if (joinAttempt.cancelled) return;
       localStorage.setItem('joinCode_' + code, code);
-      var roleKey = 'userId_' + code + '_' + role;
-      var tabId = localStorage.getItem(roleKey) || '';
-      if (!tabId) {
-        try { tabId = sessionStorage.getItem('labUserId_' + code) || ''; } catch (e) {}
-      }
-      var existingGeneric = localStorage.getItem('userId_' + code) || '';
-      var existingRole = (window.LabPaths && LabPaths.getBoundNodeRole)
-        ? LabPaths.getBoundNodeRole(code, existingGeneric)
-        : '';
-      if (!tabId && existingGeneric && (!existingRole || existingRole === role)) {
-        tabId = existingGeneric;
-      }
-      if (!tabId) {
-        tabId = 'user_' + Math.random().toString(36).substr(2, 9);
-      }
+      // Always mint a new id (Open Test Miner Tab pattern). A second Join on
+      // the same origin must not adopt localStorage userId_SESSION_wallet.
+      var tabId = (window.LabPaths && typeof LabPaths.mintJoinUserId === 'function')
+        ? LabPaths.mintJoinUserId(code, role)
+        : ('user_' + Math.random().toString(36).substr(2, 9));
       try { sessionStorage.setItem('labUserId_' + code, tabId); } catch (e2) {}
-      localStorage.setItem(roleKey, tabId);
-      localStorage.setItem('userId_' + code, tabId);
       if (window.LabPaths && LabPaths.persistNodeRole) {
         LabPaths.persistNodeRole(code, tabId, role);
       }
@@ -160,7 +150,7 @@ $(document).ready(function () {
       if (window.LabPaths && LabPaths.persistChainFlavor) {
         LabPaths.persistChainFlavor(code, chainFlavor);
       }
-      go(role === 'wallet' ? 'observe' : 'participate', code);
+      go(role === 'wallet' ? 'observe' : 'participate', code, tabId);
     }).catch(function (err) {
       if (joinAttempt.cancelled || (err && err.cancelled)) {
         hideJoinError();

@@ -146,10 +146,14 @@ function markHubChainSeen(tipHash, height) {
   lastHubSeenAt = Date.now();
   lastHubChainAt = lastHubSeenAt;
   hubResyncAt = 0;
-  if (tipHash) hubConfirmedTipHash = tipHash;
-  if (height != null && !isNaN(Number(height))) {
-    hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(height));
+  const h = (height != null && !isNaN(Number(height))) ? Number(height) : null;
+  // Ignore stale MQTT redeliveries that would move the confirmed tip backward.
+  if (h != null && h < hubConfirmedHeight && tipHash && tipHash !== hubConfirmedTipHash) {
+    if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
+    return;
   }
+  if (tipHash) hubConfirmedTipHash = tipHash;
+  if (h != null) hubConfirmedHeight = Math.max(hubConfirmedHeight, h);
   if (window.LabSessionProbe) LabSessionProbe.notifyHubSeen();
 }
 
@@ -1004,8 +1008,48 @@ function applyCanonicalChain(chain, opts) {
   const newTip = chain[chain.length - 1];
   const incomingHeight = opts.chainHeight != null
     ? Number(opts.chainHeight)
-    : (newTip && newTip.index != null ? Number(newTip.index) : chain.length - 1);
+    : (opts.tipIndex != null ? Number(opts.tipIndex)
+      : (newTip && newTip.index != null ? Number(newTip.index) : null));
   const local = window.lastRelayedChain || [];
+  const Merge = window.RelayBlockchainState && RelayBlockchainState.mergeCanonicalCopy;
+  if (typeof Merge === 'function') {
+    const merged = Merge(local, chain, {
+      truncated: !!opts.truncated,
+      tipHash: opts.tipHash || (newTip && newTip.hash),
+      tipIndex: incomingHeight,
+      chainHeight: incomingHeight
+    });
+    const prevMain = local.slice();
+    window.lastRelayedChain = merged.chain;
+    chain.forEach(function (b) {
+      if (b && b.hash) seenBlocks.add(b.hash);
+    });
+    if (prevMain.length) {
+      const mainHashes = new Set((window.lastRelayedChain || []).map(function (b) { return b && b.hash; }));
+      const displaced = prevMain.filter(function (b) {
+        return b && b.hash && !mainHashes.has(b.hash);
+      });
+      if (displaced.length) mergeKnownOrphans(displaced);
+      displaced.forEach(function (b) {
+        if (isNewForkId(b.forkId)) noteNewForkBlock(b);
+        else if (isClassicForkId(b.forkId)) noteClassicForkBlock(b);
+      });
+    }
+    const appliedTip = window.lastRelayedChain.length
+      ? window.lastRelayedChain[window.lastRelayedChain.length - 1]
+      : newTip;
+    const tipChanged = !oldTip || !appliedTip || oldTip.hash !== appliedTip.hash;
+    if (incomingHeight != null && !isNaN(incomingHeight)) {
+      hubConfirmedHeight = Math.max(hubConfirmedHeight, incomingHeight);
+    }
+    markHubChainSeen(
+      opts.tipHash || (appliedTip && appliedTip.hash),
+      incomingHeight != null ? incomingHeight : (appliedTip && appliedTip.index)
+    );
+    // Fall through to the shared UI update below using lastRelayedChain
+    chain = window.lastRelayedChain;
+    opts._mergeTipChanged = tipChanged;
+  } else {
   // Compact snapshot: keep the local prefix through the hub tip, drop any
   // sleep-orphan tail we mined while disconnected.
   if (opts.truncated && newTip && newTip.hash) {
@@ -1020,12 +1064,18 @@ function applyCanonicalChain(chain, opts) {
       return false;
     }
   }
-  const tipChanged = !oldTip || !newTip || oldTip.hash !== newTip.hash;
+  }
+
+  const tipChanged = opts._mergeTipChanged != null
+    ? opts._mergeTipChanged
+    : (!oldTip || !newTip || oldTip.hash !== newTip.hash);
 
   // Preserve our previous main blocks as known orphans if the hub tip switched sides
   // (hard fork / reorg) so sticky classic/NEW tips are not wiped.
   const prevMain = (window.lastRelayedChain || []).slice();
-  window.lastRelayedChain = chain.slice();
+  if (opts._mergeTipChanged == null) {
+    window.lastRelayedChain = chain.slice();
+  }
   chain.forEach(function (b) {
     if (b && b.hash) seenBlocks.add(b.hash);
   });
@@ -1092,22 +1142,28 @@ function applyCanonicalChain(chain, opts) {
     console.error('Error applying canonical chain UI', e);
   }
 
-  if (newTip) {
-    const h = (newTip.index != null)
-      ? newTip.index
-      : Math.max(0, window.lastRelayedChain.length - 1);
-    $('#blockHeight').text(h);
-  }
-
   // Track hub-confirmed tip height so optimistic mining cannot race dozens of blocks ahead
   if (incomingHeight != null && !isNaN(incomingHeight)) {
     hubConfirmedHeight = Math.max(hubConfirmedHeight, incomingHeight);
-  } else if (newTip && newTip.index != null) {
-    hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(newTip.index) || 0);
-  } else if (chain.length) {
-    hubConfirmedHeight = Math.max(hubConfirmedHeight, chain.length - 1);
+  } else {
+    const appliedTip = window.lastRelayedChain && window.lastRelayedChain.length
+      ? window.lastRelayedChain[window.lastRelayedChain.length - 1]
+      : newTip;
+    if (appliedTip && appliedTip.index != null) {
+      hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(appliedTip.index) || 0);
+    }
   }
-  markHubChainSeen(newTip && newTip.hash, incomingHeight);
+  const HeightFn = window.RelayBlockchainState && RelayBlockchainState.canonicalCopyHeight;
+  const displayH = (typeof HeightFn === 'function')
+    ? HeightFn(window.lastRelayedChain, { tipIndex: hubConfirmedHeight, chainHeight: incomingHeight })
+    : hubConfirmedHeight;
+  $('#blockHeight').text(displayH);
+  markHubChainSeen(
+    opts.tipHash || (window.lastRelayedChain && window.lastRelayedChain.length
+      ? window.lastRelayedChain[window.lastRelayedChain.length - 1].hash
+      : (newTip && newTip.hash)),
+    incomingHeight != null ? incomingHeight : displayH
+  );
   forgetSubmittedSlotsThrough(hubConfirmedHeight);
   if (waitingForHubIndex != null && hubConfirmedHeight >= waitingForHubIndex) {
     abandonStaleWait();
@@ -1644,8 +1700,12 @@ function applyCustomValidator(code) {
   }
 }
 
-// Toast notification function (non-intrusive bubble at top)
-function showToastNotification(message, type = 'info') {
+// Toast notification function (non-intrusive bubble at top). Queued so a
+// difficulty retarget cannot instantly replace "Network resumed".
+let toastQueue = [];
+let toastBusy = false;
+
+function showToastNotification(message, type = 'info', durationMs) {
   const now = Date.now();
   const key = String(type || 'info') + '|' + String(message || '');
   // Phones re-receive the same settings/pause packets on MQTT reconnect.
@@ -1653,13 +1713,24 @@ function showToastNotification(message, type = 'info') {
   lastToastKey = key;
   lastToastAt = now;
 
-  // Remove existing toast if any
+  const isResume = /resumed/i.test(String(message || ''));
+  const hold = durationMs != null
+    ? durationMs
+    : (type === 'warning' ? 8000 : (isResume || type === 'success' ? 6000 : 4000));
+  const item = { message: message, type: type, hold: hold, resume: isResume };
+  if (isResume) toastQueue.unshift(item);
+  else toastQueue.push(item);
+  drainToastQueue();
+}
+
+function drainToastQueue() {
+  if (toastBusy || !toastQueue.length) return;
+  toastBusy = true;
+  const next = toastQueue.shift();
   $('#toastNotification').remove();
-  
-  const bgColor = type === 'success' ? '#28a745' : type === 'error' ? '#dc3545' : '#17a2b8';
-  
+  const bgColor = next.type === 'success' ? '#28a745' : next.type === 'error' ? '#dc3545' : next.type === 'warning' ? '#d97706' : '#17a2b8';
   const toast = $(`
-    <div id="toastNotification" class="lab-toast lab-toast-${type}" style="
+    <div id="toastNotification" class="lab-toast lab-toast-${next.type}" style="
       position: fixed;
       top: 72px;
       left: 12px;
@@ -1675,16 +1746,17 @@ function showToastNotification(message, type = 'info') {
       word-wrap: break-word;
       animation: slideIn 0.3s ease-out;
     ">
-      ${message}
+      ${next.message}
     </div>
   `);
-  
   $('body').append(toast);
-  
-  // Auto-dismiss after 4 seconds
-  setTimeout(function() {
-    toast.fadeOut(300, function() { $(this).remove(); });
-  }, 4000);
+  setTimeout(function () {
+    toast.fadeOut(300, function () {
+      $(this).remove();
+      toastBusy = false;
+      drainToastQueue();
+    });
+  }, next.hold);
 }
 
 // Add CSS animation for toast
@@ -1705,6 +1777,16 @@ function resolveParticipantUserId(sessionId) {
     fromQuery = (params.get('uid') || params.get('userId') || '').trim();
   } catch (e) {}
 
+  if (window.LabPaths && typeof LabPaths.allocateTabUserId === 'function') {
+    const id = LabPaths.allocateTabUserId(sessionId, 'miner', { uid: fromQuery });
+    // Same userId is already a wallet — keep that identity so the caller can redirect.
+    const boundRole = LabPaths.getBoundNodeRole
+      ? LabPaths.getBoundNodeRole(sessionId, id)
+      : '';
+    if (fromQuery && boundRole && boundRole !== 'miner') return fromQuery;
+    return id;
+  }
+
   if (fromQuery) {
     try { sessionStorage.setItem('labUserId_' + sessionId, fromQuery); } catch (e) {}
     return fromQuery;
@@ -1715,31 +1797,7 @@ function resolveParticipantUserId(sessionId) {
     if (fromTab) return fromTab;
   } catch (e) {}
 
-  const roleBound = (window.LabPaths && LabPaths.getUserIdForRole)
-    ? LabPaths.getUserIdForRole(sessionId, 'miner')
-    : '';
-  if (roleBound) {
-    try { sessionStorage.setItem('labUserId_' + sessionId, roleBound); } catch (e) {}
-    return roleBound;
-  }
-
-  let fromLocal = localStorage.getItem('userId_' + sessionId);
-  const boundRole = (window.LabPaths && LabPaths.getBoundNodeRole)
-    ? LabPaths.getBoundNodeRole(sessionId, fromLocal)
-    : '';
-  // Same userId is already a wallet — keep that identity so the caller can redirect.
-  if (fromLocal && boundRole && boundRole !== 'miner') {
-    return fromLocal;
-  }
-  if (!fromLocal) {
-    fromLocal = 'user_' + Math.random().toString(36).substr(2, 9);
-  }
-  localStorage.setItem('userId_' + sessionId + '_miner', fromLocal);
-  if (window.LabPaths && LabPaths.persistNodeRole) {
-    LabPaths.persistNodeRole(sessionId, fromLocal, 'miner');
-  } else {
-    localStorage.setItem('userId_' + sessionId, fromLocal);
-  }
+  let fromLocal = 'user_' + Math.random().toString(36).substr(2, 9);
   try { sessionStorage.setItem('labUserId_' + sessionId, fromLocal); } catch (e) {}
   return fromLocal;
 }
@@ -2095,6 +2153,8 @@ function initClientSideNetworkingForParticipant(mode) {
         pendingTransactions: payload.pendingTransactions,
         remine: true,
         truncated: !!payload.chainTruncated,
+        tipHash: payload.tipHash,
+        tipIndex: payload.tipIndex != null ? payload.tipIndex : payload.newHeight,
         chainHeight: payload.chainHeight != null ? payload.chainHeight : payload.newHeight
       });
       if (payload.tipHash) markHubChainSeen(payload.tipHash, payload.tipIndex != null ? payload.tipIndex : payload.newHeight);
@@ -2193,10 +2253,12 @@ function initClientSideNetworkingForParticipant(mode) {
         updateParticipantBlockchainView({ chain: getPersonalChainBlocks() }, lastKnownParticipants);
         refreshSharedNetworkView(lastKnownParticipants);
       } catch (e) {}
-      if (payload.newHeight != null) {
-        $('#blockHeight').text(payload.newHeight);
-      } else if (block.index != null && !payload.isFork) {
-        $('#blockHeight').text(block.index);
+      const compactH = payload.tipIndex != null ? payload.tipIndex
+        : (payload.newHeight != null ? payload.newHeight
+          : (payload.chainHeight != null ? payload.chainHeight : hubConfirmedHeight));
+      if (compactH != null && !isNaN(Number(compactH))) {
+        hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(compactH));
+        $('#blockHeight').text(hubConfirmedHeight);
       }
     }
   });
@@ -2240,6 +2302,8 @@ function initClientSideNetworkingForParticipant(mode) {
       applyCanonicalChain(payload.chain, {
         remine: true,
         truncated: !!payload.chainTruncated,
+        tipHash: payload.tipHash,
+        tipIndex: payload.tipIndex != null ? payload.tipIndex : payload.newHeight,
         chainHeight: payload.chainHeight != null ? payload.chainHeight : payload.newHeight
       });
     } else if (difficultyReject && isMining) {
@@ -2351,6 +2415,8 @@ function initClientSideNetworkingForParticipant(mode) {
         pendingTransactions: state.pendingTransactions || [],
         remine: true,
         truncated: !!state.chainTruncated,
+        tipHash: state.tipHash,
+        tipIndex: state.tipIndex != null ? state.tipIndex : state.chainHeight,
         chainHeight: state.chainHeight
       });
       debugLog('Relayed chain length:', state.chain.length, 'height', state.chainHeight);
@@ -2450,6 +2516,9 @@ function initClientSideNetworkingForParticipant(mode) {
     $('#blockchainView').html('<p class="text-muted">Connected to relay hub. Waiting for initial chain state from admin...</p>');
     // Explicitly request the state in case the automatic peer-joined didn't trigger it
     net.send('request-state', { from: userId });
+    window.addEventListener('pagehide', function () {
+      try { if (net) net.send('peer-left', { from: userId }); } catch (e) {}
+    });
   });
 
   // Expose for debugging
@@ -2877,7 +2946,7 @@ function applyNetworkPaused(msgOrPaused, opts) {
     }
   } else {
     if (!opts.silent || prev) {
-      showToastNotification('Network resumed by admin', 'success');
+      showToastNotification('Network resumed by admin', 'success', 6500);
     }
     if (window.lastMiningIntent && !isMining && !isColluding) {
       setTimeout(startMining, 100);
@@ -3747,9 +3816,12 @@ function updateParticipantBlockchainView(chainData, participants) {
     myForkChoice === 'new' && pendingForkHeight != null
       ? ' <span class="label label-info">Following NEW chain</span>'
       : '';
+  const copyHeight = (window.RelayBlockchainState && typeof RelayBlockchainState.canonicalCopyHeight === 'function')
+    ? RelayBlockchainState.canonicalCopyHeight(blocks, { tipIndex: hubConfirmedHeight })
+    : hubConfirmedHeight;
   let html =
     '<h4>Your Blockchain Copy (Height: ' +
-    Math.max(0, blocks.length ? (blocks[blocks.length - 1].index != null ? blocks[blocks.length - 1].index : blocks.length - 1) : 0) +
+    Math.max(0, copyHeight) +
     ')' +
     sideNote +
     '</h4>';
@@ -3973,13 +4045,16 @@ function updatePendingTransactions(blockchain) {
 
 function updateNetworkStats(blockchain) {
   const stats = blockchain.networkStats || {};
+  const HeightFn = window.RelayBlockchainState && RelayBlockchainState.canonicalCopyHeight;
   let height = stats.blockHeight;
-  if (height == null && Array.isArray(blockchain.chain) && blockchain.chain.length > 0) {
-    height = Math.max(0, blockchain.chain.length - 1);
+  if (height == null && blockchain.hubHeight != null) height = blockchain.hubHeight;
+  if (height == null && typeof HeightFn === 'function') {
+    height = HeightFn(window.lastRelayedChain || blockchain.chain, {
+      tipIndex: hubConfirmedHeight,
+      chainHeight: blockchain.chainHeight
+    });
   }
-  if (height == null && window.lastRelayedChain && window.lastRelayedChain.length > 0) {
-    height = Math.max(0, window.lastRelayedChain.length - 1);
-  }
+  if (height == null) height = hubConfirmedHeight;
   if (height == null) height = 0;
   $('#blockHeight').text(height);
   $('#participantCount').text(blockchain.participants ? blockchain.participants.length : 0);

@@ -68,16 +68,31 @@
     this.routingMode = mode === 'mesh' ? 'mesh' : 'hub';
   };
 
-  MqttAdminRelayTransport.prototype.getPeerCount = function () {
+  MqttAdminRelayTransport.prototype.prunePresence = function (maxAgeMs) {
+    maxAgeMs = maxAgeMs || 20000;
     var now = Date.now();
-    var n = 0;
+    var dead = [];
     this._presence.forEach(function (ts, id) {
-      if (now - ts < 20000) n += 1;
+      if (!id || now - ts > maxAgeMs) dead.push(id);
     });
-    // Exclude self
-    if (this.userId && this._presence.has(this.userId) && (now - this._presence.get(this.userId) < 20000)) {
-      n = Math.max(0, n - 1);
-    }
+    for (var i = 0; i < dead.length; i++) this._presence.delete(dead[i]);
+    return dead;
+  };
+
+  MqttAdminRelayTransport.prototype.getLivePeerIds = function (maxAgeMs) {
+    maxAgeMs = maxAgeMs || 20000;
+    this.prunePresence(maxAgeMs);
+    var ids = [];
+    this._presence.forEach(function (_ts, id) {
+      if (id) ids.push(id);
+    });
+    return ids;
+  };
+
+  MqttAdminRelayTransport.prototype.getPeerCount = function () {
+    var ids = this.getLivePeerIds(20000);
+    var n = ids.length;
+    if (this.userId && ids.indexOf(this.userId) >= 0) n = Math.max(0, n - 1);
     return n;
   };
 
@@ -90,6 +105,7 @@
     await this._initMqtt();
     var self = this;
     this._announceTimer = setInterval(function () {
+      self.prunePresence(20000);
       self._announcePresence();
       self._emitPeerCount();
     }, 4000);
