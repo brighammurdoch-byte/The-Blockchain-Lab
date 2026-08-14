@@ -878,10 +878,38 @@ function scheduleRemineForMempool() {
   }, 350);
 }
 
+function txContentKey(tx) {
+  if (!tx) return '';
+  const from = String(tx.from || '');
+  const to = String(tx.to || '');
+  const amt = String(Number(tx.amount));
+  const ts = String(tx.timestamp || '');
+  if (!from || !to || !ts || !(Number(tx.amount) > 0)) return '';
+  return from + ':' + to + ':' + amt + ':' + ts;
+}
+
 function txKey(tx) {
   if (!tx) return '';
   if (tx.id) return String(tx.id);
-  return String(tx.from || '') + ':' + String(tx.to || '') + ':' + String(tx.timestamp || '');
+  return txContentKey(tx);
+}
+
+function txAllKeys(tx) {
+  const keys = [];
+  if (!tx) return keys;
+  if (tx.id) keys.push(String(tx.id));
+  const content = txContentKey(tx);
+  if (content) keys.push(content);
+  return keys;
+}
+
+function txMatchesConfirmed(tx, confirmed) {
+  if (!confirmed || !confirmed.size) return false;
+  const keys = txAllKeys(tx);
+  for (let i = 0; i < keys.length; i++) {
+    if (confirmed.has(keys[i])) return true;
+  }
+  return false;
 }
 
 /** Keys of transfers already present on a chain (or a single block). */
@@ -891,8 +919,7 @@ function confirmedTxKeysFromChain(chainOrBlocks) {
   blocks.forEach(function (b) {
     const txs = (b && Array.isArray(b.transactions)) ? b.transactions : [];
     txs.forEach(function (t) {
-      const k = txKey(t);
-      if (k) ids.add(k);
+      txAllKeys(t).forEach(function (k) { if (k) ids.add(k); });
     });
   });
   return ids;
@@ -910,7 +937,7 @@ function pruneLocalMempool(extraBlocks) {
   }
   if (!confirmed.size) return confirmed;
   localPendingTxs = localPendingTxs.filter(function (t) {
-    return !confirmed.has(txKey(t));
+    return !txMatchesConfirmed(t, confirmed);
   });
   return confirmed;
 }
@@ -1117,7 +1144,10 @@ function getDisplayOrphans() {
     }
   });
   return Array.from(byHash.values()).filter(function (b) {
-    return b && b.hash && !main.has(b.hash);
+    if (!b || !b.hash || main.has(b.hash)) return false;
+    // Private / sleep-mined tails must not paint as ORPHAN #N ahead of the hub.
+    if (b.index != null && Number(b.index) > hubConfirmedHeight) return false;
+    return true;
   });
 }
 
@@ -1659,9 +1689,29 @@ function resolveParticipantUserId(sessionId) {
     if (fromTab) return fromTab;
   } catch (e) {}
 
+  const roleBound = (window.LabPaths && LabPaths.getUserIdForRole)
+    ? LabPaths.getUserIdForRole(sessionId, 'miner')
+    : '';
+  if (roleBound) {
+    try { sessionStorage.setItem('labUserId_' + sessionId, roleBound); } catch (e) {}
+    return roleBound;
+  }
+
   let fromLocal = localStorage.getItem('userId_' + sessionId);
+  const boundRole = (window.LabPaths && LabPaths.getBoundNodeRole)
+    ? LabPaths.getBoundNodeRole(sessionId, fromLocal)
+    : '';
+  // Same userId is already a wallet — keep that identity so the caller can redirect.
+  if (fromLocal && boundRole && boundRole !== 'miner') {
+    return fromLocal;
+  }
   if (!fromLocal) {
     fromLocal = 'user_' + Math.random().toString(36).substr(2, 9);
+  }
+  localStorage.setItem('userId_' + sessionId + '_miner', fromLocal);
+  if (window.LabPaths && LabPaths.persistNodeRole) {
+    LabPaths.persistNodeRole(sessionId, fromLocal, 'miner');
+  } else {
     localStorage.setItem('userId_' + sessionId, fromLocal);
   }
   try { sessionStorage.setItem('labUserId_' + sessionId, fromLocal); } catch (e) {}
@@ -1681,6 +1731,12 @@ $(document).ready(function() {
   // Set address and session code as early as possible from localStorage or URL to avoid "Loading..." flash/stuck
   const earlyUserId = resolveParticipantUserId(sessionId);
   userId = earlyUserId;
+  if (window.LabPaths && typeof LabPaths.enforceBoundRolePage === 'function') {
+    if (LabPaths.enforceBoundRolePage('miner', sessionId, userId)) return;
+  }
+  if (window.LabPaths && LabPaths.persistNodeRole) {
+    LabPaths.persistNodeRole(sessionId, userId, 'miner');
+  }
   $('#yourAddress').text(userId);
 
   const earlyJoinCode = localStorage.getItem('joinCode_' + sessionId) || sessionId;
@@ -1920,12 +1976,11 @@ function initClientSideNetworkingForParticipant(mode) {
     const block = (msg.payload && msg.payload.block) || msg.block;
     const minerId = (msg.payload && msg.payload.minerId) || msg.from;
     const chain = (msg.payload && msg.payload.chain) || msg.chain;
+    // A peer's private chain is not the hub tip — do not adopt it as canonical.
     if (chain && Array.isArray(chain) && chain.length > 0) {
-      applyCanonicalChain(chain, {
-        orphans: (msg.payload && msg.payload.orphans) || lastKnownOrphans,
-        remine: true
-      });
-      return;
+      mergeKnownOrphans(chain.filter(function (b) {
+        return b && b.miner !== 'genesis';
+      }));
     }
     if (!block) return;
     if (block.hash) seenBlocks.add(block.hash);
@@ -1939,17 +1994,10 @@ function initClientSideNetworkingForParticipant(mode) {
       return;
     }
 
-    const tip = getClassicMiningTip(window.lastRelayedChain);
-    if (!tip || block.previousHash === tip.hash) {
-      // Only append classic extensions to local main mirror
-      const last = window.lastRelayedChain[window.lastRelayedChain.length - 1];
-      if (last && last.hash === tip.hash && block.previousHash === tip.hash) {
-        window.lastRelayedChain.push(block);
-      } else if (!last) {
-        window.lastRelayedChain.push(block);
-      }
-      if (isMining) remineOnCanonicalTip();
-    }
+    // Gossip is not canonical. Appending peer blocks here let replicas race
+    // a private chain (height 1000+) while the hub sat at ~200.
+    if (block && block.hash) mergeKnownOrphans([block]);
+    if (isMining && hasTrustedHubChain()) remineOnCanonicalTip();
   });
 
   net.on('hard-fork-proposed', (msg) => {
@@ -3598,10 +3646,13 @@ function loadBlockchainState() {
 function getPersonalChainBlocks() {
   const main = window.lastRelayedChain || [];
   if (myForkChoice !== 'new' || pendingForkHeight == null) {
-    // Classic (or no fork): hub main is our chain; prefer sticky classic tip path if longer
+    // Classic (or no fork): hub main is our chain. A sticky classic tip that
+    // ran ahead of the hub is a private orphan tail — do not display it as main.
     if (localClassicForkTip && localClassicForkTip.hash) {
       const path = pathFromTipHash(localClassicForkTip.hash);
-      if (path && path.length >= main.length) return path;
+      const pathTip = path && path.length ? path[path.length - 1] : null;
+      const pathH = pathTip && pathTip.index != null ? Number(pathTip.index) : -1;
+      if (path && path.length >= main.length && pathH <= hubConfirmedHeight) return path;
     }
     return main.slice();
   }
@@ -3745,7 +3796,8 @@ function updateNetworkBlockchainView(mainChain, orphans, participants) {
       mainChain: main,
       orphans: orphanList,
       participants: parts,
-      openTxPanels: openTxPanels
+      openTxPanels: openTxPanels,
+      hubHeight: hubConfirmedHeight
     });
     const newSide = (orphanList || []).filter(function (b) {
       return b && (b.forkId === 'new' || b.forkId === 'NEW');

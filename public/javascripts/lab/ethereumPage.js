@@ -79,8 +79,20 @@
     });
 
     $('ethSendBtn').addEventListener('click', function () {
-      var to = $('ethSendTo').value.trim() || '0xPeer';
+      var to = $('ethSendTo').value.trim();
       var amt = parseFloat($('ethSendAmt').value);
+      if (!to || (window.EthereumLab && EthereumLab.isPlaceholderAddress && EthereumLab.isPlaceholderAddress(to))) {
+        setNotes(['Enter a real recipient address — “0xPeer” is only a placeholder.'], 'error');
+        return;
+      }
+      if (window.EthereumLab && EthereumLab.isValidLabAddress && !EthereumLab.isValidLabAddress(to)) {
+        setNotes(['Invalid recipient address. Use a 0x… address or a demo name like 0xStudent.'], 'error');
+        return;
+      }
+      if (!(amt > 0)) {
+        setNotes(['Enter a transfer amount greater than 0.'], 'error');
+        return;
+      }
       var r = chain.addTransaction(me, to, amt);
       if (!r.ok) setNotes([r.error], 'error');
       else setNotes(['Queued ' + amt + ' ETH to ' + to + ' — mine to include it']);

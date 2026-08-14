@@ -201,6 +201,73 @@
     return base + path;
   }
 
+  function normalizeNodeRole(role) {
+    var r = String(role || '').toLowerCase();
+    if (r === 'observer') return 'wallet';
+    if (r === 'participant') return 'miner';
+    if (r === 'wallet' || r === 'miner' || r === 'admin' || r === 'hub') return r;
+    return '';
+  }
+
+  function persistNodeRole(sessionId, userId, role) {
+    var code = String(sessionId || '').toUpperCase();
+    var r = normalizeNodeRole(role);
+    if (!code || !r) return;
+    try {
+      if (typeof localStorage === 'undefined') return;
+      localStorage.setItem('userRole_' + code, r);
+      if (userId) {
+        localStorage.setItem('userRole_' + code + '_' + userId, r);
+        localStorage.setItem('userId_' + code + '_' + r, String(userId));
+      }
+    } catch (e) {}
+  }
+
+  function getBoundNodeRole(sessionId, userId) {
+    var code = String(sessionId || '').toUpperCase();
+    try {
+      if (typeof localStorage === 'undefined') return '';
+      if (userId) {
+        var specific = localStorage.getItem('userRole_' + code + '_' + userId);
+        if (specific) return normalizeNodeRole(specific);
+      }
+      return normalizeNodeRole(localStorage.getItem('userRole_' + code) || '');
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function getUserIdForRole(sessionId, role) {
+    var code = String(sessionId || '').toUpperCase();
+    var r = normalizeNodeRole(role);
+    if (!code || !r) return '';
+    try {
+      if (typeof localStorage === 'undefined') return '';
+      return localStorage.getItem('userId_' + code + '_' + r) || '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  /**
+   * If this userId is bound to the other classroom role, send them back.
+   * @param {'miner'|'wallet'} expectedRole
+   * @param {string} sessionId
+   * @param {string} userId
+   * @returns {boolean} true if a redirect was started
+   */
+  function enforceBoundRolePage(expectedRole, sessionId, userId) {
+    var want = normalizeNodeRole(expectedRole);
+    var bound = getBoundNodeRole(sessionId, userId);
+    if (!bound || !want || bound === want) return false;
+    if (bound === 'admin' || bound === 'hub') return false;
+    var page = bound === 'wallet' ? 'observe' : 'participate';
+    if (typeof global.location !== 'undefined') {
+      global.location.replace(labUrl(page, sessionId));
+    }
+    return true;
+  }
+
   global.LabPaths = {
     getBasePath: getBasePath,
     getSessionIdFromLocation: getSessionIdFromLocation,
@@ -211,6 +278,11 @@
     labUrl: labUrl,
     joinUrl: joinUrl,
     absoluteJoinUrl: absoluteJoinUrl,
-    assetUrl: assetUrl
+    assetUrl: assetUrl,
+    normalizeNodeRole: normalizeNodeRole,
+    persistNodeRole: persistNodeRole,
+    getBoundNodeRole: getBoundNodeRole,
+    getUserIdForRole: getUserIdForRole,
+    enforceBoundRolePage: enforceBoundRolePage
   };
 })(typeof window !== 'undefined' ? window : globalThis);

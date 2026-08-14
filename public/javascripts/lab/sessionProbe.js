@@ -3,7 +3,7 @@
  * Cross-device (phone QR) requires WebRTC via public trackers — allow a long wait.
  */
 (function (global) {
-  var JOIN_PROBE_MS = 22000;
+  var JOIN_PROBE_MS = 10000;
   var VERIFIED_PREFIX = 'sessionVerified_';
 
   function markVerified(code) {
@@ -60,6 +60,7 @@
     opts = opts || {};
     var timeoutMs = opts.timeoutMs || JOIN_PROBE_MS;
     var onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : function () {};
+    var shouldAbort = typeof opts.shouldAbort === 'function' ? opts.shouldAbort : function () { return false; };
 
     return new Promise(function (resolve, reject) {
       if (!global.NetworkManager) {
@@ -68,8 +69,12 @@
       }
 
       var code = String(joinCode || '').trim().toUpperCase();
+      if (!code) {
+        reject(new Error('Enter the session code from your instructor.'));
+        return;
+      }
       if (!/^[A-Z0-9]{4,8}$/.test(code)) {
-        reject(new Error('Enter a valid session code from your instructor.'));
+        reject(new Error('That is not a valid session code. Use the 4–6 character code from your instructor.'));
         return;
       }
 
@@ -137,11 +142,16 @@
       }, timeoutMs);
 
       progressTimer = setInterval(function () {
+        if (shouldAbort()) {
+          finish(false, new Error('Join cancelled.'));
+          return;
+        }
         var secs = Math.floor((Date.now() - startedAt) / 1000);
+        var left = Math.max(0, Math.ceil((timeoutMs - (Date.now() - startedAt)) / 1000));
         if (sawPeer) {
-          onProgress('Connected to a peer — waiting for instructor confirmation… (' + secs + 's)');
+          onProgress('Connected to a peer — waiting for instructor confirmation… (' + left + 's left)');
         } else {
-          onProgress('Searching for instructor hub over the network… (' + secs + 's)');
+          onProgress('Searching for instructor hub… (' + left + 's left)');
         }
       }, 1000);
 
@@ -152,6 +162,10 @@
         pingHub();
         // Keep pinging — WebRTC often connects a few seconds after joinRoom resolves
         retryTimer = setInterval(function () {
+          if (shouldAbort()) {
+            finish(false, new Error('Join cancelled.'));
+            return;
+          }
           pingHub();
           if (net.transport && net.transport.p2pt && typeof net.transport.p2pt.requestMorePeers === 'function') {
             net.transport.p2pt.requestMorePeers().catch(function () {});
@@ -175,8 +189,10 @@
     var doRedirect = opts.redirect !== false;
 
     return new Promise(function (resolve, reject) {
-      if (!/^[A-Z0-9]{4,8}$/.test(code)) {
-        var bad = new Error('Invalid session code.');
+      if (!code || !/^[A-Z0-9]{4,8}$/.test(code)) {
+        var bad = new Error(code
+          ? 'That is not a valid session code.'
+          : 'That link is missing a session code. Enter the code from your instructor.');
         clearVerified(code);
         if (doRedirect) redirectToJoin(bad.message);
         reject(bad);

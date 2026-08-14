@@ -557,3 +557,33 @@ body.lab-app #blockchainView .panel:hover {
   border: none;
   border-left: 4px solid var(--lab-amber);
 }
+
+/* Narrow sidebar: don't use Bootstrap dl-horizontal (clips "Unlocked") */
+.lab-settings-list {
+  margin: 0;
+}
+.lab-settings-list > dt {
+  float: none !important;
+  width: auto !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  white-space: normal !important;
+  text-align: left !important;
+  font-size: 12px;
+  color: var(--lab-muted);
+  margin-top: 10px;
+}
+.lab-settings-list > dt:first-child {
+  margin-top: 0;
+}
+.lab-settings-list > dd {
+  margin-left: 0 !important;
+  overflow: visible !important;
+  white-space: normal !important;
+  word-break: break-word;
+}
+.lab-settings-list .label {
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+}

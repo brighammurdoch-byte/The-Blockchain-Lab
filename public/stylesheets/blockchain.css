@@ -218,3 +218,35 @@ table.table-condensed td .chain-id-row {
     max-width: none;
   }
 }
+
+/* Tokens / Coinbase: don't squeeze $ / From / To into 2-character fields */
+.row-horizon > [class*="col-"] {
+  min-width: 320px;
+}
+.row-horizon .well .input-group {
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+}
+.row-horizon .well .input-group > .input-group-addon,
+.row-horizon .well .input-group > .form-control {
+  float: none;
+  width: auto;
+}
+.row-horizon .well .input-group > .form-control {
+  flex: 1 1 140px;
+  min-width: 140px;
+  max-width: 100%;
+}
+.row-horizon .well .input-group > .input-group-addon {
+  flex: 0 0 auto;
+}
+@media (max-width: 767px) {
+  .row-horizon > [class*="col-"] {
+    min-width: 86%;
+  }
+  .row-horizon .well .input-group > .form-control {
+    flex-basis: 100%;
+    min-width: 100%;
+  }
+}

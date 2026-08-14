@@ -47,6 +47,14 @@ $(document).ready(function () {
     $('#joinError').hide().text('').removeClass('alert-info').addClass('alert-danger');
   }
 
+  var joinAttempt = null;
+
+  function resetJoinButton($btn, text) {
+    $btn.prop('disabled', false).text(text || ($('#roleSelect').val() === 'observer' ? 'Join as Wallet' : 'Join as Miner'));
+    $('#joinCancelBtn').hide();
+    joinAttempt = null;
+  }
+
   $('#createSessionBtn').click(function () {
     const mode = 'admin-relay';
     const net = new NetworkManager(mode);
@@ -98,22 +106,42 @@ $(document).ready(function () {
     }
 
     $btn.prop('disabled', true).text('Finding instructor…');
+    $('#joinCancelBtn').show();
+    joinAttempt = { cancelled: false };
 
     LabSessionProbe.probeActiveSession(joinCode, {
+      timeoutMs: 10000,
       onProgress: function (msg) {
+        if (joinAttempt && joinAttempt.cancelled) return;
         showJoinProgress(msg);
         $btn.text('Finding instructor…');
+      },
+      shouldAbort: function () {
+        return !!(joinAttempt && joinAttempt.cancelled);
       }
     }).then(function (code) {
+      if (joinAttempt && joinAttempt.cancelled) return;
       localStorage.setItem('joinCode_' + code, code);
-      var tabId = '';
-      try { tabId = sessionStorage.getItem('labUserId_' + code) || ''; } catch (e) {}
+      var roleKey = 'userId_' + code + '_' + role;
+      var tabId = localStorage.getItem(roleKey) || '';
+      if (!tabId) {
+        try { tabId = sessionStorage.getItem('labUserId_' + code) || ''; } catch (e) {}
+      }
+      var existingGeneric = localStorage.getItem('userId_' + code) || '';
+      var existingRole = (window.LabPaths && LabPaths.getBoundNodeRole)
+        ? LabPaths.getBoundNodeRole(code, existingGeneric)
+        : '';
+      if (!tabId && existingGeneric && (!existingRole || existingRole === role)) {
+        tabId = existingGeneric;
+      }
       if (!tabId) {
         tabId = 'user_' + Math.random().toString(36).substr(2, 9);
-        try { sessionStorage.setItem('labUserId_' + code, tabId); } catch (e2) {}
       }
-      if (!localStorage.getItem('userId_' + code)) {
-        localStorage.setItem('userId_' + code, tabId);
+      try { sessionStorage.setItem('labUserId_' + code, tabId); } catch (e2) {}
+      localStorage.setItem(roleKey, tabId);
+      localStorage.setItem('userId_' + code, tabId);
+      if (window.LabPaths && LabPaths.persistNodeRole) {
+        LabPaths.persistNodeRole(code, tabId, role);
       }
       localStorage.setItem('networkingMode_' + code, 'admin-relay');
       if (window.LabPaths && LabPaths.persistChainFlavor) {
@@ -121,10 +149,18 @@ $(document).ready(function () {
       }
       go(role === 'wallet' ? 'observe' : 'participate', code);
     }).catch(function (err) {
+      if (joinAttempt && joinAttempt.cancelled) return;
       console.warn('[Join] probe failed', err);
-      showJoinError(err && err.message ? err.message : 'Invalid or inactive session code.');
-      $btn.prop('disabled', false).text(originalText);
+      showJoinError(err && err.message ? err.message : 'Invalid or inactive session code. Check the code and try again.');
+      resetJoinButton($btn, originalText);
     });
+  });
+
+  $('#joinCancelBtn').on('click', function () {
+    if (joinAttempt) joinAttempt.cancelled = true;
+    hideJoinError();
+    showJoinError('Join cancelled. Check the session code and try again.');
+    resetJoinButton($('#joinForm button[type="submit"]'));
   });
 
   $('#roleSelect').change(function () {

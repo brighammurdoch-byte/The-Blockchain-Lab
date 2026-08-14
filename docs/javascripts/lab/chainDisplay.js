@@ -147,6 +147,15 @@
     opts = opts || {};
     var mainChain = opts.mainChain || [];
     var orphans = opts.orphans || [];
+    var hubHeight = opts.hubHeight;
+    if (hubHeight != null && !isNaN(Number(hubHeight))) {
+      var cap = Number(hubHeight);
+      orphans = orphans.filter(function (b) {
+        if (!b) return false;
+        if (b.index == null) return true;
+        return Number(b.index) <= cap;
+      });
+    }
     var participants = opts.participants || [];
     var openTxPanels = opts.openTxPanels || null;
     var nameLookup = buildParticipantNameLookup(participants);

@@ -4,7 +4,7 @@ block config
   - bodyClass = 'lab-app'
 
 block extra_css
-  link(rel='stylesheet', href='/stylesheets/lab-theme.css?v=mobfix1')
+  link(rel='stylesheet', href='/stylesheets/lab-theme.css?v=cons13')
 
 block content
   .container-fluid
@@ -108,7 +108,7 @@ block content
           .panel-heading
             h3.panel-title Admin Settings
           .panel-body
-            dl.dl-horizontal
+            dl.lab-settings-list
               dt Leading Zeros
               dd#adminDifficultyLeading N/A
               dt Secondary
@@ -116,7 +116,8 @@ block content
               dt Mining Reward
               dd#adminMiningReward N/A
               dt Parameters
-              dd#adminParams Unlocked
+              dd#adminParams
+                span.label.label-success Unlocked
 
       .col-md-9
         .panel.panel-default
@@ -146,7 +147,7 @@ block content
 
   script(src="/javascripts/lib/p2pt.bundle.js?v=fixrelay")
   script(src="/javascripts/lib/mqtt.min.js?v=mqtt1")
-  script(src="/javascripts/lab/labPaths.js?v=btcclass1")
+  script(src="/javascripts/lab/labPaths.js?v=cons13")
   script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=fixrelay")
   script(src="/javascripts/network/MqttAdminRelayTransport.js?v=tiphb1")
   script(src="/javascripts/network/P2PAdminRelayTransport.js?v=tiphb1")
@@ -154,6 +155,6 @@ block content
   script(src="/javascripts/network/Persistence.js?v=fixrelay")
   script(src="/javascripts/network/RelayBlockchainState.js?v=diffcap1")
   script(src="/javascripts/network/NetworkManager.js?v=mqtt1")
-  script(src="/javascripts/lab/sessionProbe.js?v=probe22")
-  script(src="/javascripts/lab/chainDisplay.js?v=wideblk1")
-  script(src="/javascripts/lab/observe.js?v=tiphb1")
+  script(src="/javascripts/lab/sessionProbe.js?v=cons13")
+  script(src="/javascripts/lab/chainDisplay.js?v=cons13")
+  script(src="/javascripts/lab/observe.js?v=cons13")

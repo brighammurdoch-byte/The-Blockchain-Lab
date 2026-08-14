@@ -5,7 +5,7 @@ block config
   - page = 'bitcoin'
 
 block extra_css
-  link(rel='stylesheet', href='/stylesheets/lab-theme.css?v=labui2')
+  link(rel='stylesheet', href='/stylesheets/lab-theme.css?v=cons13')
 
 block content
   .container.lab-landing
@@ -29,6 +29,7 @@ block content
         h2 Student
         p Join with the session code (or the shared link / QR). Miners also have a wallet. Wallets watch and send.
         form#joinForm
+          #joinError.alert.alert-danger(style="display:none; margin-bottom:12px;")
           .form-group
             label(for="joinCode") Session code
             input.form-control(type="text", id="joinCode", name="joinCode", placeholder="ABC123", required, maxlength="6", autocomplete="off")
@@ -38,6 +39,15 @@ block content
               option(value="participant" selected) Miner — find blocks &amp; hold BTC
               option(value="observer") Wallet — watch &amp; send
           button.btn.btn-success.btn-lg.btn-block(type="submit") Join as Miner
+          button.btn.btn-default.btn-block#joinCancelBtn(type="button" style="display:none; margin-top:8px;") Cancel
+          script.
+            (function () {
+              try {
+                var m = new URLSearchParams(window.location.search || '').get('joinError');
+                var el = document.getElementById('joinError');
+                if (m && el) { el.textContent = m; el.style.display = 'block'; }
+              } catch (e) {}
+            })();
 
     .lab-about
       h3 What this classroom shows
@@ -64,7 +74,7 @@ block content
 
   script(src="/javascripts/lib/p2pt.bundle.js?v=fixrelay")
   script(src="/javascripts/lib/mqtt.min.js?v=mqtt1")
-  script(src="/javascripts/lab/labPaths.js?v=btcclass1")
+  script(src="/javascripts/lab/labPaths.js?v=cons13")
   script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=fixrelay")
   script(src="/javascripts/network/MqttAdminRelayTransport.js?v=pause2")
   script(src="/javascripts/network/P2PAdminRelayTransport.js?v=mobjoin1")
@@ -72,5 +82,5 @@ block content
   script(src="/javascripts/network/Persistence.js?v=fixrelay")
   script(src="/javascripts/network/RelayBlockchainState.js?v=btcclass1")
   script(src="/javascripts/network/NetworkManager.js?v=mqtt1")
-  script(src="/javascripts/lab/sessionProbe.js?v=probe22")
-  script(src="/javascripts/lab/landing.js?v=classtune1")
+  script(src="/javascripts/lab/sessionProbe.js?v=cons13")
+  script(src="/javascripts/lab/landing.js?v=cons13")
