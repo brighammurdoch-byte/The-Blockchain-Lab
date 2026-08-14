@@ -636,8 +636,10 @@ function currentNodeDisplayName() {
 function persistAndBroadcastNodeName(nodeName) {
   const name = String(nodeName || '').trim();
   try { localStorage.setItem('nodeName_' + sessionId + '_' + userId, name); } catch (e) {}
+  try { sessionStorage.setItem('nodeName_' + sessionId + '_' + userId, name); } catch (e2) {}
   if (net && typeof net.setDisplayName === 'function') net.setDisplayName(name);
   else if (net && net.transport) net.transport.nodeDisplayName = name;
+  restoreNodeNameInput(name);
   if (net) {
     net.send('node-name-changed', { userId: userId, name: name, role: 'miner' });
     // Repeat once — QoS 0 MQTT often drops the one-shot while miners flood hashrate
@@ -645,6 +647,22 @@ function persistAndBroadcastNodeName(nodeName) {
       if (net) net.send('node-name-changed', { userId: userId, name: name, role: 'miner' });
     }, 800);
   }
+}
+
+/** Phone-width Save can clear the input after blur; put the saved name back. */
+function restoreNodeNameInput(preferred) {
+  const $el = $('#nodeName');
+  if (!$el.length) return;
+  let name = String(preferred || '').trim();
+  if (!name) {
+    try { name = sessionStorage.getItem('nodeName_' + sessionId + '_' + userId) || ''; } catch (e) {}
+  }
+  if (!name) {
+    try { name = localStorage.getItem('nodeName_' + sessionId + '_' + userId) || ''; } catch (e2) {}
+  }
+  if (!name) return;
+  if ($el.is(':focus') && String($el.val() || '').trim()) return;
+  $el.val(name);
 }
 
 function emitHashrate(hashrate) {
@@ -1134,6 +1152,7 @@ function applyCanonicalChain(chain, opts) {
       if (me.blocksMined !== undefined) $('#blocksMined').text(me.blocksMined);
       else if (me.minedBlocks !== undefined) $('#blocksMined').text(me.minedBlocks);
     }
+    restoreNodeNameInput();
     applyMyBalanceFromParticipants(parts);
     // Personal view = own tip path (fork-aware); Shared Network = main + side chains
     updateParticipantBlockchainView({ chain: getPersonalChainBlocks() }, parts);
@@ -1153,9 +1172,9 @@ function applyCanonicalChain(chain, opts) {
       hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(appliedTip.index) || 0);
     }
   }
-  const HeightFn = window.RelayBlockchainState && RelayBlockchainState.canonicalCopyHeight;
-  const displayH = (typeof HeightFn === 'function')
-    ? HeightFn(window.lastRelayedChain, { tipIndex: hubConfirmedHeight, chainHeight: incomingHeight })
+  const ResolveFn = window.RelayBlockchainState && RelayBlockchainState.resolveOverviewHeight;
+  const displayH = (typeof ResolveFn === 'function')
+    ? ResolveFn(window.lastRelayedChain, { tipIndex: hubConfirmedHeight, chainHeight: incomingHeight }, hubConfirmedHeight)
     : hubConfirmedHeight;
   $('#blockHeight').text(displayH);
   markHubChainSeen(
@@ -2356,6 +2375,7 @@ function initClientSideNetworkingForParticipant(mode) {
       );
     } catch (e) {}
     try { refreshSharedNetworkView(lastKnownParticipants); } catch (e) {}
+    restoreNodeNameInput();
   });
 
   net.on('participant-updated', (msg) => {
@@ -2378,6 +2398,7 @@ function initClientSideNetworkingForParticipant(mode) {
           lastKnownParticipants
         );
       } catch (e) {}
+      restoreNodeNameInput();
     }
     // Soft refresh — ask hub for full roster with balances
     if (net) net.send('request-state', { from: userId });
@@ -2428,8 +2449,7 @@ function initClientSideNetworkingForParticipant(mode) {
         if (state.adminSettings) {
           updateDifficultyInfo(state.adminSettings);
         }
-        const me = parts.find(p => p.address === userId || p.userId === userId);
-        if (me && me.name) $('#nodeName').val(me.name);
+        restoreNodeNameInput();
       } catch (e) {
         console.error('Error updating participant UI from initial relayed state', e);
       }
@@ -2513,6 +2533,7 @@ function initClientSideNetworkingForParticipant(mode) {
       persistAndBroadcastNodeName(savedName);
       rememberParticipants([{ userId: userId, address: userId, name: savedName, displayName: savedName, role: 'miner' }]);
     }
+    restoreNodeNameInput(savedName);
     $('#blockchainView').html('<p class="text-muted">Connected to relay hub. Waiting for initial chain state from admin...</p>');
     // Explicitly request the state in case the automatic peer-joined didn't trigger it
     net.send('request-state', { from: userId });
@@ -2699,6 +2720,7 @@ function setupEventHandlers() {
     }
     
     persistAndBroadcastNodeName(nodeName);
+    restoreNodeNameInput(nodeName);
     if (!net && socket) {
       socket.emit('node-name-changed', {
         sessionId: sessionId,
@@ -2722,6 +2744,7 @@ function setupEventHandlers() {
       } catch (e) {}
       try { refreshSharedNetworkView(lastKnownParticipants); } catch (e) {}
     }
+    restoreNodeNameInput(nodeName);
 
     showToastNotification('Node name updated!', 'success');
   });
@@ -4045,17 +4068,20 @@ function updatePendingTransactions(blockchain) {
 
 function updateNetworkStats(blockchain) {
   const stats = blockchain.networkStats || {};
-  const HeightFn = window.RelayBlockchainState && RelayBlockchainState.canonicalCopyHeight;
-  let height = stats.blockHeight;
-  if (height == null && blockchain.hubHeight != null) height = blockchain.hubHeight;
-  if (height == null && typeof HeightFn === 'function') {
-    height = HeightFn(window.lastRelayedChain || blockchain.chain, {
+  const ResolveFn = window.RelayBlockchainState && RelayBlockchainState.resolveOverviewHeight;
+  const chain = window.lastRelayedChain || blockchain.chain;
+  let height = (typeof ResolveFn === 'function')
+    ? ResolveFn(chain, {
       tipIndex: hubConfirmedHeight,
-      chainHeight: blockchain.chainHeight
-    });
-  }
+      hubHeight: blockchain.hubHeight,
+      chainHeight: blockchain.chainHeight,
+      networkStats: stats
+    }, hubConfirmedHeight)
+    : stats.blockHeight;
+  if (height == null && blockchain.hubHeight != null) height = blockchain.hubHeight;
   if (height == null) height = hubConfirmedHeight;
   if (height == null) height = 0;
+  height = Math.max(Number(height) || 0, Number(hubConfirmedHeight) || 0);
   $('#blockHeight').text(height);
   $('#participantCount').text(blockchain.participants ? blockchain.participants.length : 0);
   $('#totalHashrate').text((stats.totalHashrate || 0).toFixed(0) + ' H/s');
