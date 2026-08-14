@@ -13,11 +13,13 @@ $(document).ready(function () {
     LabPaths.applyClassroomTheme();
   }
 
-  function go(page, code) {
+  function go(page, code, uid) {
     if (window.LabPaths && typeof LabPaths.labUrl === 'function') {
-      window.location.href = LabPaths.labUrl(page, code);
+      window.location.href = LabPaths.labUrl(page, code, uid ? { uid: uid } : {});
     } else {
-      window.location.href = '/lab/' + page + '/' + code;
+      var url = '/lab/' + page + '/' + code;
+      if (uid) url += '?uid=' + encodeURIComponent(uid);
+      window.location.href = url;
     }
   }
 
@@ -135,9 +137,10 @@ $(document).ready(function () {
     }).then(function (code) {
       if (joinAttempt.cancelled) return;
       localStorage.setItem('joinCode_' + code, code);
-      // Per-tab id: a second wallet join must not reuse Wallet 1's localStorage id.
-      var tabId = (window.LabPaths && typeof LabPaths.allocateTabUserId === 'function')
-        ? LabPaths.allocateTabUserId(code, role)
+      // Always mint a new id (Open Test Miner Tab pattern). A second Join on
+      // the same origin must not adopt localStorage userId_SESSION_wallet.
+      var tabId = (window.LabPaths && typeof LabPaths.mintJoinUserId === 'function')
+        ? LabPaths.mintJoinUserId(code, role)
         : ('user_' + Math.random().toString(36).substr(2, 9));
       try { sessionStorage.setItem('labUserId_' + code, tabId); } catch (e2) {}
       if (window.LabPaths && LabPaths.persistNodeRole) {
@@ -147,7 +150,7 @@ $(document).ready(function () {
       if (window.LabPaths && LabPaths.persistChainFlavor) {
         LabPaths.persistChainFlavor(code, chainFlavor);
       }
-      go(role === 'wallet' ? 'observe' : 'participate', code);
+      go(role === 'wallet' ? 'observe' : 'participate', code, tabId);
     }).catch(function (err) {
       if (joinAttempt.cancelled || (err && err.cancelled)) {
         hideJoinError();

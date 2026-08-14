@@ -290,16 +290,49 @@ const Relay = loadRelay();
   else fail('Same tab refresh keeps wallet id', id1 + ' → ' + id1b);
 })();
 
+// --- 9b. L3T0NE second Join on same origin: leftover localStorage must be ignored ---
+(function () {
+  const leftover = loadLabPaths();
+  leftover.store.local['userId_L3T0NE_wallet'] = 'user_jpo9nfhqt';
+  leftover.store.local['userId_L3T0NE'] = 'user_jpo9nfhqt';
+  leftover.store.local['userRole_L3T0NE'] = 'wallet';
+  leftover.store.local['userRole_L3T0NE_user_jpo9nfhqt'] = 'wallet';
+  leftover.store.local['nodeName_L3T0NE_user_jpo9nfhqt'] = 'Wallet 1';
+  Object.keys(leftover.store.session).forEach(function (k) { delete leftover.store.session[k]; });
+  if (typeof leftover.LabPaths.mintJoinUserId !== 'function') {
+    fail('Landing mintJoinUserId exists', 'missing');
+    return;
+  }
+  const minted = leftover.LabPaths.mintJoinUserId('L3T0NE', 'wallet');
+  if (minted && minted !== 'user_jpo9nfhqt') {
+    pass('Second landing Join mints a new id despite persisted Wallet 1', minted);
+  } else {
+    fail('Second landing Join mints a new id despite persisted Wallet 1', String(minted));
+  }
+  if (leftover.store.local['userId_L3T0NE_wallet'] === 'user_jpo9nfhqt') {
+    pass('Shared userId_SESSION_wallet key is not overwritten by the new join', '');
+  } else {
+    fail('Shared userId_SESSION_wallet key is not overwritten by the new join',
+      String(leftover.store.local['userId_L3T0NE_wallet']));
+  }
+  const url = leftover.LabPaths.labUrl('observe', 'L3T0NE', { uid: minted });
+  if (url && /uid=/.test(url) && url.indexOf(minted) >= 0) {
+    pass('Observe URL carries the minted uid', url);
+  } else {
+    fail('Observe URL carries the minted uid', url);
+  }
+})();
+
 // --- 10. Source checks: toast queue + no localStorage wallet reuse on landing ---
 (function () {
   const landing = fs.readFileSync(path.join(__dirname, '..', 'public/javascripts/lab/landing.js'), 'utf8');
   const admin = fs.readFileSync(path.join(__dirname, '..', 'public/javascripts/lab/admin.js'), 'utf8');
   const participate = fs.readFileSync(path.join(__dirname, '..', 'public/javascripts/lab/participate.js'), 'utf8');
   const observe = fs.readFileSync(path.join(__dirname, '..', 'public/javascripts/lab/observe.js'), 'utf8');
-  if (/allocateTabUserId/.test(landing) && !/existingGeneric/.test(landing)) {
-    pass('Landing allocates a per-tab userId', '');
+  if (/mintJoinUserId/.test(landing) && /uid/.test(landing) && !/existingGeneric/.test(landing)) {
+    pass('Landing mints a fresh id and passes uid= on Join', '');
   } else {
-    fail('Landing allocates a per-tab userId', 'still reuses localStorage generic id');
+    fail('Landing mints a fresh id and passes uid= on Join', 'missing mint/uid');
   }
   if (/drainToastQueue/.test(admin) && /unshift/.test(admin) && /resumed/i.test(admin)) {
     pass('Admin toasts are queued; resume is prioritized', '');

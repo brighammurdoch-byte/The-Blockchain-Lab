@@ -108,11 +108,12 @@
    * @param {'index'|'admin'|'participate'|'observe'|'demos'|'code'|'bitcoin'|'ethereum'|'bitcoin-rules'} page
    * @param {string} [sessionId]
    */
-  function labUrl(page, sessionId) {
+  function labUrl(page, sessionId, extra) {
     var base = getBasePath();
     var code = sessionId ? String(sessionId).toUpperCase() : '';
     var staticMode = isStaticMode();
     var chain = getChainFlavor();
+    extra = extra || {};
 
     if (page === 'bitcoin-rules') {
       return staticMode ? (base + '/bitcoin/rules/') : (base + '/bitcoin/rules');
@@ -143,6 +144,10 @@
 
     if (chain && chain !== 'classic' && page !== 'index' && page !== 'demos') {
       url = withQuery(url, 'chain', chain);
+    }
+    // Per-join identity (same pattern as admin "Open Test Miner Tab")
+    if (extra.uid && (page === 'observe' || page === 'participate')) {
+      url = withQuery(url, 'uid', extra.uid);
     }
     return url;
   }
@@ -218,7 +223,8 @@
       localStorage.setItem('userRole_' + code, r);
       if (userId) {
         localStorage.setItem('userRole_' + code + '_' + userId, r);
-        localStorage.setItem('userId_' + code + '_' + r, String(userId));
+        // Do NOT write userId_CODE_role / userId_CODE. That shared key is how a
+        // second wallet join on the same origin adopted Wallet 1 (L3T0NE).
       }
     } catch (e) {}
   }
@@ -275,8 +281,20 @@
         }
       }
     } catch (e2) {}
+    return mintJoinUserId(code, r);
+  }
+
+  /**
+   * Always mint a brand-new classroom id. Used on landing Join so a second
+   * wallet on the same browser profile cannot adopt userId_SESSION_wallet.
+   */
+  function mintJoinUserId(sessionId, role) {
+    var code = String(sessionId || '').toUpperCase();
+    var r = normalizeNodeRole(role) || 'miner';
     var id = 'user_' + Math.random().toString(36).substr(2, 9);
-    try { if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(ssKey, id); } catch (e3) {}
+    try {
+      if (typeof sessionStorage !== 'undefined') sessionStorage.setItem('labUserId_' + code, id);
+    } catch (e) {}
     persistNodeRole(code, id, r);
     return id;
   }
@@ -316,6 +334,8 @@
     getBoundNodeRole: getBoundNodeRole,
     getUserIdForRole: getUserIdForRole,
     allocateTabUserId: allocateTabUserId,
+    mintJoinUserId: mintJoinUserId,
+    withQuery: withQuery,
     enforceBoundRolePage: enforceBoundRolePage
   };
 })(typeof window !== 'undefined' ? window : globalThis);

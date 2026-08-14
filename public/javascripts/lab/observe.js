@@ -81,10 +81,16 @@ $(document).ready(function() {
     LabPaths.applyClassroomTheme();
   }
   
-  // Per-tab wallet id. Do not reuse localStorage userId_SESSION_wallet — that
-  // made a second browser tab steal Wallet 1's address and overwrite the name.
+  // Prefer ?uid= from landing Join (minted per click). Never read
+  // localStorage userId_SESSION_wallet — that reused Wallet 1 on a new tab.
+  var joinUid = '';
+  try {
+    joinUid = (new URLSearchParams(window.location.search || '')).get('uid') || '';
+  } catch (eUid) {}
   if (window.LabPaths && typeof LabPaths.allocateTabUserId === 'function') {
-    userId = LabPaths.allocateTabUserId(sessionId, 'wallet');
+    userId = LabPaths.allocateTabUserId(sessionId, 'wallet', { uid: joinUid });
+  } else if (joinUid) {
+    userId = joinUid;
   } else {
     try { userId = sessionStorage.getItem('labUserId_' + sessionId) || ''; } catch (e) {}
     if (!userId) userId = 'user_' + Math.random().toString(36).substr(2, 9);
