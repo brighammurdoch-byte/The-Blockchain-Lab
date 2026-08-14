@@ -159,6 +159,50 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     return true;
   }
 
+  /** Median of positive samples. More stable than the mean for classroom bursts/stalls. */
+  _medianMs(values) {
+    const xs = (values || []).filter(function (v) { return v > 0 && isFinite(v); }).slice().sort(function (a, b) { return a - b; });
+    if (!xs.length) return 0;
+    const mid = Math.floor(xs.length / 2);
+    return xs.length % 2 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;
+  }
+
+  _targetMs() {
+    const targetSec = Number(this.settings && this.settings.targetBlockTimeSec);
+    return Math.max(2000, Math.min(120000, (isNaN(targetSec) ? 10 : targetSec) * 1000));
+  }
+
+  /**
+   * Bound one observed interval so a 0.1s burst or a 101s stall recovery
+   * cannot snap the controller. Floor keeps "too fast" visible; cap is 2.5× target.
+   */
+  _capIntervalMs(intervalMs) {
+    const targetMs = this._targetMs();
+    const raw = Number(intervalMs);
+    if (!(raw > 0) || !isFinite(raw)) return 0;
+    return Math.max(250, Math.min(targetMs * 2.5, raw));
+  }
+
+  /**
+   * Displayed / controller pace. If the tip has been frozen longer than the
+   * claimed average, report the wait — never keep advertising 0.1s.
+   */
+  observedPaceMs() {
+    const targetMs = this._targetMs();
+    const intervals = Array.isArray(this.networkStats && this.networkStats.blockIntervals)
+      ? this.networkStats.blockIntervals
+      : [];
+    const median = this._medianMs(intervals.slice(-6));
+    const stored = Number(this.networkStats && this.networkStats.averageBlockTimeMs);
+    const last = this.networkStats && this.networkStats.lastBlockTime;
+    const since = last ? Math.max(0, Date.now() - last) : 0;
+    const claimed = (median > 0) ? median : (stored > 0 ? stored : 0);
+    if (since > 0 && since > Math.max(targetMs, claimed * 1.5, 4000)) {
+      return since;
+    }
+    return claimed;
+  }
+
   /**
    * Nudge difficulty so recent block intervals approach targetBlockTimeSec.
    * Steps are capped so the classroom climbs toward the target instead of
@@ -169,15 +213,14 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     if (!this.settings || !this.settings.autoDifficulty) return null;
     if (this.settings.parametersLocked) return null;
 
-    const targetSec = Number(this.settings.targetBlockTimeSec);
-    const targetMs = Math.max(2000, Math.min(120000, (isNaN(targetSec) ? 10 : targetSec) * 1000));
+    const targetMs = this._targetMs();
     const intervals = Array.isArray(this.networkStats.blockIntervals)
       ? this.networkStats.blockIntervals
       : [];
     if (intervals.length < 2) return null;
 
     const recent = intervals.slice(-6);
-    const avg = recent.reduce((a, b) => a + b, 0) / recent.length;
+    const avg = this._medianMs(recent);
     if (!(avg > 0)) return null;
 
     const ratio = avg / targetMs;
@@ -235,6 +278,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       leading: next.difficultyLeading,
       secondary: next.difficultySecondary
     };
+    this.networkStats.averageBlockTimeMs = avg;
     return Object.assign({}, this.settings);
   }
 
@@ -247,13 +291,22 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     if (!this.settings || !this.settings.autoDifficulty) return null;
     if (this.settings.parametersLocked) return null;
 
-    const targetSec = Number(this.settings.targetBlockTimeSec);
-    const targetMs = Math.max(2000, Math.min(120000, (isNaN(targetSec) ? 10 : targetSec) * 1000));
+    const targetMs = this._targetMs();
     const last = this.networkStats && this.networkStats.lastBlockTime;
     const waitMs = Math.max(targetMs * 2.5, 22000);
     const since = last || (this.networkStats && this.networkStats.lastRetarget && this.networkStats.lastRetarget.at);
     if (since && Date.now() - since < waitMs) return null;
     if (!since && this.chain && this.chain.length <= 1) return null;
+
+    // A freeze after blocks that were already too fast is a sync/mining stall,
+    // not "difficulty too hard". Easing here caused 4+0x1 → 3+0x6 after a 101s snap.
+    const recent = Array.isArray(this.networkStats && this.networkStats.blockIntervals)
+      ? this.networkStats.blockIntervals.slice(-6)
+      : [];
+    const recentMedian = this._medianMs(recent);
+    if (recentMedian > 0 && recentMedian < targetMs * 0.8) {
+      return null;
+    }
 
     const curScore = this._difficultyScore(
       this.settings.difficultyLeading,
@@ -284,9 +337,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     this.updateSettings(next);
     this.networkStats.lastRetarget = {
       at: Date.now(),
-      avgMs: since ? Date.now() - since : waitMs,
+      avgMs: recentMedian > 0 ? recentMedian : targetMs,
       targetMs: targetMs,
-      ratio: 9,
+      ratio: recentMedian > 0 ? recentMedian / targetMs : 9,
       delta: -1,
       leading: next.difficultyLeading,
       secondary: next.difficultySecondary,
@@ -301,7 +354,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     // Skip genesis→first (genesis timestamp is synthetic and skews the average)
     if (prev.miner === 'genesis' || prev.index === 0) return;
 
-    const interval = Math.max(0, (block.timestamp || 0) - (prev.timestamp || 0));
+    const raw = Math.max(0, (block.timestamp || 0) - (prev.timestamp || 0));
+    if (!(raw > 0)) return;
+    const interval = this._capIntervalMs(raw);
     if (!(interval > 0)) return;
     if (!Array.isArray(this.networkStats.blockIntervals)) this.networkStats.blockIntervals = [];
     this.networkStats.blockIntervals.push(interval);
@@ -309,8 +364,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     if (this.networkStats.blockIntervals.length > 20) {
       this.networkStats.blockIntervals = this.networkStats.blockIntervals.slice(-20);
     }
-    const sum = this.networkStats.blockIntervals.reduce((a, b) => a + b, 0);
-    this.networkStats.averageBlockTimeMs = sum / this.networkStats.blockIntervals.length;
+    this.networkStats.averageBlockTimeMs = this._medianMs(this.networkStats.blockIntervals);
   }
 
   /**
@@ -569,12 +623,111 @@ if (typeof window.RelayBlockchainState === 'undefined') {
   /** Display height for a (possibly truncated) student copy. Never use length-1 of a suffix. */
   static canonicalCopyHeight(chain, meta) {
     meta = meta || {};
-    if (meta.tipIndex != null && !isNaN(Number(meta.tipIndex))) return Number(meta.tipIndex);
-    if (meta.chainHeight != null && !isNaN(Number(meta.chainHeight))) return Number(meta.chainHeight);
-    if (meta.hubHeight != null && !isNaN(Number(meta.hubHeight))) return Number(meta.hubHeight);
+    const copyTip = RelayBlockchainState.copyTipIndex(chain);
+    if (meta.tipIndex != null && !isNaN(Number(meta.tipIndex))) {
+      const t = Number(meta.tipIndex);
+      // Compact last-20 windows have length-1 ≈ 19 while block.index is 45+.
+      if (copyTip == null || t >= copyTip || !RelayBlockchainState._looksLikeSuffixLength(chain, t)) {
+        return Math.max(t, copyTip || 0);
+      }
+    }
+    if (meta.chainHeight != null && !isNaN(Number(meta.chainHeight))) {
+      const t = Number(meta.chainHeight);
+      if (copyTip == null || t >= copyTip || !RelayBlockchainState._looksLikeSuffixLength(chain, t)) {
+        return Math.max(t, copyTip || 0);
+      }
+    }
+    if (meta.hubHeight != null && !isNaN(Number(meta.hubHeight))) {
+      const t = Number(meta.hubHeight);
+      if (copyTip == null || t >= copyTip || !RelayBlockchainState._looksLikeSuffixLength(chain, t)) {
+        return Math.max(t, copyTip || 0);
+      }
+    }
+    if (copyTip != null) return copyTip;
+    return 0;
+  }
+
+  /** Last painted block.index. Null if the copy is empty or lacks index. */
+  static copyTipIndex(chain) {
     const tip = Array.isArray(chain) && chain.length ? chain[chain.length - 1] : null;
     if (tip && tip.index != null && !isNaN(Number(tip.index))) return Number(tip.index);
-    return 0;
+    return null;
+  }
+
+  /**
+   * True when `value` is the array length-1 of a compact suffix, not a real
+   * hub height. CVV1U8 wallets showed Overview 22/28/31 while the panel tip
+   * was 45/46/51 — a persistent ~20-block gap, the last-20 transport window.
+   */
+  static _looksLikeSuffixLength(chain, value) {
+    if (!Array.isArray(chain) || !chain.length) return false;
+    const n = Number(value);
+    if (isNaN(n)) return false;
+    const suffixLen = chain.length - 1;
+    const copyTip = RelayBlockchainState.copyTipIndex(chain);
+    if (copyTip == null) return n === suffixLen;
+    return n === suffixLen && copyTip > n + 1;
+  }
+
+  /**
+   * Network Overview height must equal the painted copy tip / hub tip.
+   * Never use chain.length-1 or a stale networkStats.blockHeight — those
+   * stayed ~20 behind on CVV1U8 (22→45, 28→51) and never converged.
+   */
+  static resolveOverviewHeight(chain, meta, previousHeight) {
+    meta = meta || {};
+    const nums = [];
+    function push(v) {
+      if (v == null || v === '') return;
+      const n = Number(v);
+      if (!isNaN(n) && isFinite(n) && n >= 0) nums.push(n);
+    }
+    const copyTip = RelayBlockchainState.copyTipIndex(chain);
+    push(copyTip);
+
+    function pushHub(v) {
+      if (v == null || v === '') return;
+      if (RelayBlockchainState._looksLikeSuffixLength(chain, v)) return;
+      push(v);
+    }
+    pushHub(meta.tipIndex);
+    pushHub(meta.chainHeight);
+    pushHub(meta.hubHeight);
+    pushHub(meta.newHeight);
+    // networkStats.blockHeight is chain.length-1 on the hub. When a stale
+    // snapshot rides along with a last-20 window it is ~20 behind the panel.
+    // Only use it when we have no copy tip and it is not a suffix length.
+    if (copyTip == null && meta.networkStats) {
+      pushHub(meta.networkStats.blockHeight);
+    }
+    if (copyTip == null) pushHub(meta.blockHeight);
+    push(previousHeight);
+    if (!nums.length) return 0;
+    return Math.max.apply(null, nums);
+  }
+
+  /**
+   * Stronger half of live miners by hashrate. Team 51% is only honest if that
+   * half actually has more than 50% of miner hashrate (and someone is hashing).
+   */
+  static collusionTeamHashrate(participants) {
+    const miners = (participants || []).filter(function (p) {
+      if (!p) return false;
+      const id = p.userId || p.id || '';
+      if (!id || String(id).indexOf('probe-') === 0) return false;
+      const role = String(p.role || 'miner').toLowerCase();
+      return role !== 'admin' && role !== 'wallet' && role !== 'observer' && role !== 'hub';
+    });
+    const n = miners.length;
+    const totalHr = miners.reduce(function (sum, p) { return sum + (Number(p.hashrate) || 0); }, 0);
+    const ranked = miners.slice().sort(function (a, b) {
+      return (Number(b.hashrate) || 0) - (Number(a.hashrate) || 0);
+    });
+    const teamN = Math.max(1, Math.ceil(n / 2));
+    const team = ranked.slice(0, teamN);
+    const teamHr = team.reduce(function (sum, p) { return sum + (Number(p.hashrate) || 0); }, 0);
+    const share = totalHr > 0 ? teamHr / totalHr : 0;
+    return { n: n, teamN: teamN, teamHr: teamHr, totalHr: totalHr, share: share };
   }
 
   /**
@@ -1030,7 +1183,10 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const onBest = bestChain.some((b) => b.hash === block.hash);
 
     this.chain = bestChain;
-    this.networkStats.blockHeight = Math.max(0, this.chain.length - 1);
+    const heightTip = this.chain[this.chain.length - 1];
+    this.networkStats.blockHeight = (heightTip && heightTip.index != null)
+      ? Number(heightTip.index)
+      : Math.max(0, this.chain.length - 1);
     if (newTip && (isDirectExtension || (onBest && block.hash === newTip.hash))) {
       this.networkStats.lastBlockTime = newTip.timestamp || Date.now();
       if (isDirectExtension) {
@@ -1206,7 +1362,10 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
     // Re-run fork choice in case orphans are longer
     this.chain = this._selectBestChain();
-    this.networkStats.blockHeight = Math.max(0, this.chain.length - 1);
+    const restoredTip = this.chain[this.chain.length - 1];
+    this.networkStats.blockHeight = (restoredTip && restoredTip.index != null)
+      ? Number(restoredTip.index)
+      : Math.max(0, this.chain.length - 1);
     this._recomputeMiningRewards();
 
     return true;

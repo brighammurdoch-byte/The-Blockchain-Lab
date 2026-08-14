@@ -250,6 +250,7 @@ $(document).ready(function() {
   // If auto-difficulty overshot, ease down when no block lands for a while
   setInterval(function () {
     if (!relayState || !coordinator) return;
+    if (typeof refreshBlockPaceDisplay === 'function') refreshBlockPaceDisplay();
     if (typeof relayState.maybeEaseDifficultyIfStalled !== 'function') return;
     const eased = relayState.maybeEaseDifficultyIfStalled();
     if (eased) {
@@ -444,8 +445,15 @@ function initClientSideNetworking(mode, roomCode) {
       }
     }
 
-    // Try to restore previous session (admin refresh survival)
-    const restored = Persistence.loadAdminState(roomCode);
+    // Restore only on refresh of THIS admin tab for THIS room.
+    // A landing "Create Session" click sets labAdminFreshCreate_* and must start empty
+    // — leftover Persistence for an unused code (91G5M2) used to hijack the new hub.
+    const allowRestore = !Persistence.consumeFreshAdminCreate(roomCode) &&
+      (typeof Persistence.shouldRestoreAdminState !== 'function' || Persistence.shouldRestoreAdminState(roomCode));
+    const restored = allowRestore ? Persistence.loadAdminState(roomCode) : null;
+    if (!allowRestore && typeof Persistence.clearAdminState === 'function') {
+      Persistence.clearAdminState(roomCode);
+    }
     if (restored) {
       const success = relayState.restoreFromPersisted(restored);
       if (success) {
@@ -558,10 +566,17 @@ function initClientSideNetworking(mode, roomCode) {
       if (!window.__lastRetargetToast || Date.now() - window.__lastRetargetToast > 8000) {
         window.__lastRetargetToast = Date.now();
         const t = settings.targetBlockTimeSec || (relayState && relayState.settings && relayState.settings.targetBlockTimeSec) || 10;
-        const avgMs = relayState && relayState.networkStats && relayState.networkStats.averageBlockTimeMs;
-        const avgBit = (avgMs != null && !isNaN(avgMs) && avgMs > 0)
-          ? ('; observed avg ' + (avgMs >= 10000 ? (avgMs / 1000).toFixed(0) : (avgMs / 1000).toFixed(1)) + 's')
-          : '';
+        const lastRt = relayState && relayState.networkStats && relayState.networkStats.lastRetarget;
+        const avgMs = (lastRt && lastRt.stalled)
+          ? (lastRt.avgMs || t * 1000)
+          : (relayState && typeof relayState.observedPaceMs === 'function'
+            ? relayState.observedPaceMs()
+            : (relayState && relayState.networkStats && relayState.networkStats.averageBlockTimeMs));
+        const avgBit = (lastRt && lastRt.stalled)
+          ? '; easing after a stall'
+          : ((avgMs != null && !isNaN(avgMs) && avgMs > 0)
+            ? ('; observed avg ' + (avgMs >= 10000 ? (avgMs / 1000).toFixed(0) : (avgMs / 1000).toFixed(1)) + 's')
+            : '');
         showToastNotification(
           'Difficulty now ' + formatDifficultyLabel(settings.difficultyLeading, settings.difficultySecondary) +
           ' (target ' + t + 's' + avgBit + ')',
@@ -1073,12 +1088,12 @@ function setupEventHandlers() {
   const $attackContainer = $('#startAttackBtn').parent();
   $('#attackerSelect').closest('.form-group').remove();
   $('#attackBlockIndex').closest('.form-group').remove();
-  $('#startAttackBtn').siblings('p').remove(); // Remove legacy description
+  $('#startAttackBtn').siblings('p, small').remove(); // leftover "Only enabled if attacker has 51% hashrate"
   $('#startAttackBtn').remove();
   
   $attackContainer.append(`
     <h4>Team 51% Collusion Attack</h4>
-    <p class="small text-muted">Requires at least two miners. Assigns ~50% of miners to a collusion team that privately extends the chain from a parent block <em>blocks back</em> from the tip, producing a visible fork once they publish blocks.</p>
+    <p class="small text-muted">Only enabled if the collusion team would have more than 50% of miner hashrate. Requires at least two miners who are hashing. Assigns about half the miners to a collusion team that privately extends the chain from a parent block <em>blocks back</em> from the tip, producing a visible fork once they publish blocks.</p>
     <div class="form-group">
       <label>Blocks to fork back:</label>
       <input type="number" id="teamAttackBlocksBack" class="form-control" value="2" min="1" />
@@ -1224,11 +1239,20 @@ function applyAutoDifficultyUI() {
 function refreshBlockPaceDisplay() {
   const target = (relayState && relayState.settings && relayState.settings.targetBlockTimeSec) ||
     parseInt($('#targetBlockTimeSec').val(), 10) || 10;
-  const avgMs = relayState && relayState.networkStats && relayState.networkStats.averageBlockTimeMs;
+  const avgMs = (relayState && typeof relayState.observedPaceMs === 'function')
+    ? relayState.observedPaceMs()
+    : (relayState && relayState.networkStats && relayState.networkStats.averageBlockTimeMs);
+  const last = relayState && relayState.networkStats && relayState.networkStats.lastBlockTime;
+  const since = last ? Date.now() - last : 0;
   let text = '—';
   if (avgMs != null && !isNaN(avgMs) && avgMs > 0) {
     const sec = avgMs / 1000;
+    const stalled = since > Math.max(target * 1000, 4000) &&
+      relayState.networkStats &&
+      relayState.networkStats.averageBlockTimeMs > 0 &&
+      since > relayState.networkStats.averageBlockTimeMs * 1.5;
     text = (sec >= 10 ? sec.toFixed(0) : sec.toFixed(1)) + 's (target ' + target + 's)';
+    if (stalled) text += ' — waiting on next block';
   } else {
     text = 'warming up… (target ' + target + 's)';
   }
@@ -1453,6 +1477,24 @@ function teamCollusionPreconditionError() {
   if (n < 2) {
     return 'Team collusion needs at least 2 miners online (you have ' + n +
       '). Wallets and the admin hub do not count. Open another miner tab, then click again.';
+  }
+  const miners = Array.from(relayState.participants.values()).filter(function (p) {
+    const id = p && (p.userId || p.id) || '';
+    if (!id || String(id).indexOf('probe-') === 0) return false;
+    const role = String(p.role || 'miner').toLowerCase();
+    return role !== 'admin' && role !== 'wallet' && role !== 'observer' && role !== 'hub';
+  });
+  const ShareFn = window.RelayBlockchainState && RelayBlockchainState.collusionTeamHashrate;
+  const info = (typeof ShareFn === 'function')
+    ? ShareFn(miners)
+    : { n: n, totalHr: 0, share: 0 };
+  if (!(info.totalHr > 0)) {
+    return 'Team collusion is blocked until miners are hashing. Start mining on at least two miner tabs so the collusion team can reach 51% hashrate.';
+  }
+  if (!(info.share > 0.5)) {
+    const pct = Math.round(info.share * 100);
+    return 'Team collusion is blocked: the stronger half of miners only has ' + pct +
+      '% of miner hashrate (need more than 50%). Add hashrate on the attack side, or wait until fewer honest miners are hashing.';
   }
   return '';
 }
@@ -1974,7 +2016,9 @@ function renderClientRelayChain(opts) {
     const secondsAgo = Math.floor((Date.now() - relayState.networkStats.lastBlockTime) / 1000);
     $('#lastBlockTime').text(secondsAgo + 's');
   }
-  const avgMs = relayState.networkStats.averageBlockTimeMs;
+  const avgMs = (typeof relayState.observedPaceMs === 'function')
+    ? relayState.observedPaceMs()
+    : relayState.networkStats.averageBlockTimeMs;
   if (avgMs != null && !isNaN(avgMs) && chain.length > 1) {
     const avgSec = avgMs / 1000;
     $('#avgBlockTime').text(avgSec >= 10 ? avgSec.toFixed(0) + 's' : avgSec.toFixed(1) + 's');

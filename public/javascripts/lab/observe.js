@@ -83,17 +83,31 @@ $(document).ready(function() {
   
   // Prefer ?uid= from landing Join (minted per click). Never read
   // localStorage userId_SESSION_wallet — that reused Wallet 1 on a new tab.
+  // A missing uid must NOT mint another student (observe.html?session=CVV1U8
+  // without uid created user_iu5u4pz0i, then user_yifueuw8c, then user_m4fs468vo).
   var joinUid = '';
   try {
     joinUid = (new URLSearchParams(window.location.search || '')).get('uid') || '';
   } catch (eUid) {}
   if (window.LabPaths && typeof LabPaths.allocateTabUserId === 'function') {
-    userId = LabPaths.allocateTabUserId(sessionId, 'wallet', { uid: joinUid });
+    userId = LabPaths.allocateTabUserId(sessionId, 'wallet', { uid: joinUid, mint: false });
   } else if (joinUid) {
     userId = joinUid;
   } else {
     try { userId = sessionStorage.getItem('labUserId_' + sessionId) || ''; } catch (e) {}
-    if (!userId) userId = 'user_' + Math.random().toString(36).substr(2, 9);
+  }
+  if (!userId) {
+    if (window.LabPaths && typeof LabPaths.labUrl === 'function') {
+      window.location.replace(LabPaths.labUrl('index', sessionId));
+    } else {
+      window.location.replace('/lab?join=' + encodeURIComponent(sessionId || ''));
+    }
+    return;
+  }
+  if (window.LabPaths && typeof LabPaths.pinUidInLocation === 'function') {
+    LabPaths.pinUidInLocation(userId);
+  } else {
+    try { sessionStorage.setItem('labUserId_' + sessionId, userId); } catch (ePin) {}
   }
   if (window.LabPaths && typeof LabPaths.enforceBoundRolePage === 'function') {
     if (userId && LabPaths.enforceBoundRolePage('wallet', sessionId, userId)) return;
@@ -282,10 +296,17 @@ function initClientSideNetworkingForObserver(mode) {
       const derivedHeight = (state.newHeight != null)
         ? state.newHeight
         : (state.tipIndex != null ? state.tipIndex : Math.max(0, window._observerChain.length - 1));
+      const HeightFn = window.RelayBlockchainState && RelayBlockchainState.resolveOverviewHeight;
+      const overviewH = (typeof HeightFn === 'function')
+        ? HeightFn(window._observerChain, {
+          tipIndex: derivedHeight,
+          newHeight: derivedHeight,
+          hubHeight: derivedHeight,
+          networkStats: state.networkStats
+        }, window._observerHubHeight)
+        : Math.max(Number(derivedHeight) || 0, Number(window._observerHubHeight) || 0);
       const stats = Object.assign({}, state.networkStats || {}, {
-        blockHeight: (state.networkStats && state.networkStats.blockHeight != null)
-          ? state.networkStats.blockHeight
-          : derivedHeight
+        blockHeight: overviewH
       });
       populateObserverUIFromState({
         chain: window._observerChain,
@@ -293,8 +314,8 @@ function initClientSideNetworkingForObserver(mode) {
         participants: state.participants || [],
         pendingTransactions: state.pendingTransactions,
         networkStats: stats,
-        newHeight: derivedHeight,
-        hubHeight: derivedHeight
+        newHeight: overviewH,
+        hubHeight: overviewH
       });
     } else {
       populateObserverUIFromState(state);
@@ -348,8 +369,13 @@ function initClientSideNetworkingForObserver(mode) {
       ? window._observerChain[window._observerChain.length - 1]
       : null;
     const localH = localTip && localTip.index != null ? Number(localTip.index) : -1;
-    if (!isNaN(tipIndex) && tipIndex > localH && net) {
-      net.send('request-state', { from: userId });
+    if (!isNaN(tipIndex)) {
+      // Presence carries the live hub tip every ~4s. Paint Overview from it
+      // so a compact last-20 copy cannot leave height ~20 behind (22 vs 45).
+      paintObserverOverviewHeight(window._observerChain, { tipIndex: tipIndex, hubHeight: tipIndex });
+      if (tipIndex > localH && net) {
+        net.send('request-state', { from: userId });
+      }
     }
   });
 
@@ -523,21 +549,38 @@ function populateObserverUIFromState(state) {
       updateAdminSettings(state.adminSettings);
     }
 
-    // Prefer hub tip index. Never use truncated-suffix length-1 (that showed 23 while hub was 86).
-    const HeightFn = window.RelayBlockchainState && RelayBlockchainState.canonicalCopyHeight;
+    // Prefer hub tip / copy tip. Never trust a stale networkStats.blockHeight
+    // that is behind the chain already on screen (join showed 0 while #17 existed;
+    // later Overview oscillated 22↔28 while the copy was at 31+).
+    const ResolveFn = window.RelayBlockchainState && RelayBlockchainState.resolveOverviewHeight;
     const stats = Object.assign({}, state.networkStats || {});
-    if (stats.blockHeight == null) {
-      if (state.hubHeight != null) stats.blockHeight = state.hubHeight;
-      else if (state.newHeight != null) stats.blockHeight = state.newHeight;
-      else if (window._observerHubHeight != null) stats.blockHeight = window._observerHubHeight;
-      else if (typeof HeightFn === 'function') stats.blockHeight = HeightFn(chain, state);
+    const overviewH = (typeof ResolveFn === 'function')
+      ? ResolveFn(chain, {
+        tipIndex: state.tipIndex != null ? state.tipIndex : state.chainHeight,
+        chainHeight: state.chainHeight,
+        hubHeight: state.hubHeight,
+        newHeight: state.newHeight,
+        networkStats: stats
+      }, window._observerHubHeight)
+      : Math.max(
+        Number(stats.blockHeight) || 0,
+        Number(state.hubHeight) || 0,
+        Number(state.newHeight) || 0,
+        Number(window._observerHubHeight) || 0,
+        (chain.length && chain[chain.length - 1] && chain[chain.length - 1].index != null)
+          ? Number(chain[chain.length - 1].index) : 0
+      );
+    stats.blockHeight = overviewH;
+    if (overviewH != null && !isNaN(Number(overviewH))) {
+      window._observerHubHeight = Math.max(Number(window._observerHubHeight) || 0, Number(overviewH));
     }
 
     if (typeof updateNetworkStats === 'function') {
       updateNetworkStats({
         networkStats: stats,
         participants: participants,
-        chain: chain
+        chain: chain,
+        hubHeight: window._observerHubHeight
       });
     } else if (stats.blockHeight != null) {
       $('#blockHeight').text(stats.blockHeight);
@@ -621,16 +664,27 @@ function toggleTransactions(blockIndex) {
   }
 }
 
+function paintObserverOverviewHeight(chain, meta) {
+  const ResolveFn = window.RelayBlockchainState && RelayBlockchainState.resolveOverviewHeight;
+  const CopyFn = window.RelayBlockchainState && RelayBlockchainState.copyTipIndex;
+  const copyTip = (typeof CopyFn === 'function') ? CopyFn(chain) : null;
+  let height = (typeof ResolveFn === 'function')
+    ? ResolveFn(chain, meta || {}, window._observerHubHeight)
+    : (copyTip != null ? copyTip : window._observerHubHeight);
+  if (height == null) height = 0;
+  height = Math.max(Number(height) || 0, Number(window._observerHubHeight) || 0, Number(copyTip) || 0);
+  window._observerHubHeight = height;
+  $('#blockHeight').text(height);
+  return height;
+}
+
 function updateNetworkStats(blockchain) {
   const stats = blockchain.networkStats || {};
-  const HeightFn = window.RelayBlockchainState && RelayBlockchainState.canonicalCopyHeight;
-  let height = stats.blockHeight;
-  if (height == null && window._observerHubHeight != null) height = window._observerHubHeight;
-  if (height == null && typeof HeightFn === 'function') {
-    height = HeightFn(blockchain.chain, { tipIndex: window._observerHubHeight });
-  }
-  if (height == null) height = 0;
-  $('#blockHeight').text(height);
+  paintObserverOverviewHeight(blockchain.chain, {
+    tipIndex: blockchain.hubHeight != null ? blockchain.hubHeight : window._observerHubHeight,
+    hubHeight: blockchain.hubHeight,
+    networkStats: stats
+  });
   $('#participantCount').text(blockchain.participants ? blockchain.participants.length : 0);
   $('#totalHashrate').text((stats.totalHashrate || 0).toFixed(0) + ' H/s');
 
@@ -672,7 +726,7 @@ function updateParticipantList(blockchain) {
 
     html += `<li class="list-group-item" style="padding: 8px 10px;">
       <div>${roleLabel}${selfBadge}
-        <span class="pull-right">${copyBtn}${sendBtn ? ' ' + sendBtn : ''}</span>
+        <span class="participant-row-actions pull-right">${copyBtn}${sendBtn}</span>
       </div>
       ${nameHtml}
       <div style="margin-top: 4px; clear: both;">

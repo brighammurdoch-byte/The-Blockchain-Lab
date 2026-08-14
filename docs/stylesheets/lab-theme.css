@@ -288,6 +288,16 @@ body.lab-app .btn-block + .btn-block {
   margin-top: 8px;
 }
 
+/* Participant roster: keep Copy and Send to as two distinct actions */
+.participant-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.participant-row-actions .btn + .btn {
+  margin-left: 0;
+}
+
 /* ——— Forms ——— */
 body.lab-app .form-control {
   border-radius: 10px;
@@ -573,6 +583,18 @@ body.lab-app #blockchainView .panel:hover {
   .chain-block-col {
     min-width: 100% !important;
     flex-basis: 100% !important;
+  }
+
+  /* Copy + Send to sit in a float; without a gap they read as "CopySend to" */
+  .participant-row-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    float: right;
+  }
+  .participant-row-actions .btn {
+    margin-left: 0;
+    margin-right: 0;
   }
 }
 
