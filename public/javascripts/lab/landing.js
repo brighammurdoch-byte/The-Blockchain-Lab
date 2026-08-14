@@ -75,6 +75,15 @@ $(document).ready(function () {
     $btn.prop('disabled', true).text('Creating…');
 
     net.createRoom().then(function (roomCode) {
+      roomCode = String(roomCode || '').toUpperCase();
+      // A new Create must never reopen leftover state from a previous unused code
+      // (toast "Session restored from previous tab session" hijacked CVV1U8 → 91G5M2).
+      if (window.Persistence && typeof Persistence.markFreshAdminCreate === 'function') {
+        Persistence.markFreshAdminCreate(roomCode);
+      } else {
+        try { sessionStorage.setItem('labAdminFreshCreate_' + roomCode, '1'); } catch (e2) {}
+        try { localStorage.removeItem('blockchain-lab-admin-' + roomCode); } catch (e3) {}
+      }
       localStorage.setItem('networkingMode_' + roomCode, mode);
       localStorage.setItem('joinCode_' + roomCode, roomCode);
       localStorage.setItem('isAdmin_' + roomCode, 'true');

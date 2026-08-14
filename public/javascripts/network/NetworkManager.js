@@ -185,6 +185,21 @@ class NetworkManager {
   }
 
   _generateRoomCode() {
+    for (var i = 0; i < 16; i++) {
+      var code = Math.random().toString(36).substring(2, 8).toUpperCase();
+      if (!/^[A-Z0-9]{6}$/.test(code)) continue;
+      var used = false;
+      try {
+        if (typeof localStorage !== 'undefined' && (
+          localStorage.getItem('blockchain-lab-admin-' + code) ||
+          localStorage.getItem('joinCode_' + code) ||
+          localStorage.getItem('isAdmin_' + code)
+        )) {
+          used = true;
+        }
+      } catch (e) {}
+      if (!used) return code;
+    }
     return Math.random().toString(36).substring(2, 8).toUpperCase();
   }
 }

@@ -282,10 +282,17 @@ function initClientSideNetworkingForObserver(mode) {
       const derivedHeight = (state.newHeight != null)
         ? state.newHeight
         : (state.tipIndex != null ? state.tipIndex : Math.max(0, window._observerChain.length - 1));
+      const HeightFn = window.RelayBlockchainState && RelayBlockchainState.resolveOverviewHeight;
+      const overviewH = (typeof HeightFn === 'function')
+        ? HeightFn(window._observerChain, {
+          tipIndex: derivedHeight,
+          newHeight: derivedHeight,
+          hubHeight: derivedHeight,
+          networkStats: state.networkStats
+        }, window._observerHubHeight)
+        : Math.max(Number(derivedHeight) || 0, Number(window._observerHubHeight) || 0);
       const stats = Object.assign({}, state.networkStats || {}, {
-        blockHeight: (state.networkStats && state.networkStats.blockHeight != null)
-          ? state.networkStats.blockHeight
-          : derivedHeight
+        blockHeight: overviewH
       });
       populateObserverUIFromState({
         chain: window._observerChain,
@@ -293,8 +300,8 @@ function initClientSideNetworkingForObserver(mode) {
         participants: state.participants || [],
         pendingTransactions: state.pendingTransactions,
         networkStats: stats,
-        newHeight: derivedHeight,
-        hubHeight: derivedHeight
+        newHeight: overviewH,
+        hubHeight: overviewH
       });
     } else {
       populateObserverUIFromState(state);
@@ -523,21 +530,38 @@ function populateObserverUIFromState(state) {
       updateAdminSettings(state.adminSettings);
     }
 
-    // Prefer hub tip index. Never use truncated-suffix length-1 (that showed 23 while hub was 86).
-    const HeightFn = window.RelayBlockchainState && RelayBlockchainState.canonicalCopyHeight;
+    // Prefer hub tip / copy tip. Never trust a stale networkStats.blockHeight
+    // that is behind the chain already on screen (join showed 0 while #17 existed;
+    // later Overview oscillated 22↔28 while the copy was at 31+).
+    const ResolveFn = window.RelayBlockchainState && RelayBlockchainState.resolveOverviewHeight;
     const stats = Object.assign({}, state.networkStats || {});
-    if (stats.blockHeight == null) {
-      if (state.hubHeight != null) stats.blockHeight = state.hubHeight;
-      else if (state.newHeight != null) stats.blockHeight = state.newHeight;
-      else if (window._observerHubHeight != null) stats.blockHeight = window._observerHubHeight;
-      else if (typeof HeightFn === 'function') stats.blockHeight = HeightFn(chain, state);
+    const overviewH = (typeof ResolveFn === 'function')
+      ? ResolveFn(chain, {
+        tipIndex: state.tipIndex != null ? state.tipIndex : state.chainHeight,
+        chainHeight: state.chainHeight,
+        hubHeight: state.hubHeight,
+        newHeight: state.newHeight,
+        networkStats: stats
+      }, window._observerHubHeight)
+      : Math.max(
+        Number(stats.blockHeight) || 0,
+        Number(state.hubHeight) || 0,
+        Number(state.newHeight) || 0,
+        Number(window._observerHubHeight) || 0,
+        (chain.length && chain[chain.length - 1] && chain[chain.length - 1].index != null)
+          ? Number(chain[chain.length - 1].index) : 0
+      );
+    stats.blockHeight = overviewH;
+    if (overviewH != null && !isNaN(Number(overviewH))) {
+      window._observerHubHeight = Math.max(Number(window._observerHubHeight) || 0, Number(overviewH));
     }
 
     if (typeof updateNetworkStats === 'function') {
       updateNetworkStats({
         networkStats: stats,
         participants: participants,
-        chain: chain
+        chain: chain,
+        hubHeight: window._observerHubHeight
       });
     } else if (stats.blockHeight != null) {
       $('#blockHeight').text(stats.blockHeight);
@@ -623,13 +647,18 @@ function toggleTransactions(blockIndex) {
 
 function updateNetworkStats(blockchain) {
   const stats = blockchain.networkStats || {};
-  const HeightFn = window.RelayBlockchainState && RelayBlockchainState.canonicalCopyHeight;
-  let height = stats.blockHeight;
+  const ResolveFn = window.RelayBlockchainState && RelayBlockchainState.resolveOverviewHeight;
+  let height = (typeof ResolveFn === 'function')
+    ? ResolveFn(blockchain.chain, {
+      tipIndex: blockchain.hubHeight != null ? blockchain.hubHeight : window._observerHubHeight,
+      hubHeight: blockchain.hubHeight,
+      networkStats: stats
+    }, window._observerHubHeight)
+    : stats.blockHeight;
   if (height == null && window._observerHubHeight != null) height = window._observerHubHeight;
-  if (height == null && typeof HeightFn === 'function') {
-    height = HeightFn(blockchain.chain, { tipIndex: window._observerHubHeight });
-  }
   if (height == null) height = 0;
+  height = Math.max(Number(height) || 0, Number(window._observerHubHeight) || 0);
+  window._observerHubHeight = height;
   $('#blockHeight').text(height);
   $('#participantCount').text(blockchain.participants ? blockchain.participants.length : 0);
   $('#totalHashrate').text((stats.totalHashrate || 0).toFixed(0) + ' H/s');
