@@ -70,13 +70,18 @@ class SimulatedAdminRelayTransport {
     };
 
     // Announce ourselves to the admin
-    this.send({
+    var joinMsg = {
       type: 'peer-joined',
       roomCode: this.roomCode,
       from: userId,
       role,
       timestamp: Date.now()
-    });
+    };
+    if (this.nodeDisplayName) {
+      joinMsg.name = this.nodeDisplayName;
+      joinMsg.payload = { name: this.nodeDisplayName, role: role };
+    }
+    this.send(joinMsg);
 
     console.log(`[AdminRelay] Joined relay room: ${this.roomCode} as ${userId}`);
   }

@@ -5,7 +5,7 @@ block config
   - page = 'bitcoin'
 
 block extra_css
-  link(rel='stylesheet', href='/stylesheets/lab-theme.css?v=cons13')
+  link(rel='stylesheet', href='/stylesheets/lab-theme.css?v=p1fix1')
 
 block content
   .container.lab-landing
@@ -32,7 +32,7 @@ block content
           #joinError.alert.alert-danger(style="display:none; margin-bottom:12px;")
           .form-group
             label(for="joinCode") Session code
-            input.form-control(type="text", id="joinCode", name="joinCode", placeholder="ABC123", required, maxlength="6", autocomplete="off")
+            input.form-control(type="text", id="joinCode", name="joinCode", placeholder="ABC123", maxlength="6", autocomplete="off")
           .form-group
             label(for="roleSelect") Role
             select.form-control#roleSelect(name="role")
@@ -75,12 +75,12 @@ block content
   script(src="/javascripts/lib/p2pt.bundle.js?v=fixrelay")
   script(src="/javascripts/lib/mqtt.min.js?v=mqtt1")
   script(src="/javascripts/lab/labPaths.js?v=cons13")
-  script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=fixrelay")
-  script(src="/javascripts/network/MqttAdminRelayTransport.js?v=pause2")
+  script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=p1fix1")
+  script(src="/javascripts/network/MqttAdminRelayTransport.js?v=p1fix1")
   script(src="/javascripts/network/P2PAdminRelayTransport.js?v=mobjoin1")
-  script(src="/javascripts/network/AdminRelayCoordinator.js?v=mqttslim1")
+  script(src="/javascripts/network/AdminRelayCoordinator.js?v=p1fix1")
   script(src="/javascripts/network/Persistence.js?v=fixrelay")
-  script(src="/javascripts/network/RelayBlockchainState.js?v=btcclass1")
-  script(src="/javascripts/network/NetworkManager.js?v=mqtt1")
-  script(src="/javascripts/lab/sessionProbe.js?v=cons13")
-  script(src="/javascripts/lab/landing.js?v=cons13")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=p1fix1")
+  script(src="/javascripts/network/NetworkManager.js?v=p1fix1")
+  script(src="/javascripts/lab/sessionProbe.js?v=p1fix1")
+  script(src="/javascripts/lab/landing.js?v=p1fix1")

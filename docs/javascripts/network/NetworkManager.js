@@ -129,6 +129,12 @@ class NetworkManager {
     });
   }
 
+  setDisplayName(name) {
+    var nm = String(name || '').trim();
+    this.displayName = nm;
+    if (this.transport) this.transport.nodeDisplayName = nm;
+  }
+
   send(type, payload, target) {
     var msg = {
       type: type,

@@ -171,7 +171,12 @@ function setupEventHandlers() {
       return;
     }
     if (net) {
-      net.send('node-name-changed', { userId: userId, name: nodeName });
+      if (typeof net.setDisplayName === 'function') net.setDisplayName(nodeName);
+      else if (net.transport) net.transport.nodeDisplayName = nodeName;
+      net.send('node-name-changed', { userId: userId, name: nodeName, role: 'wallet' });
+      setTimeout(function () {
+        if (net) net.send('node-name-changed', { userId: userId, name: nodeName, role: 'wallet' });
+      }, 800);
       showToastNotification(nodeName ? 'Display name saved!' : 'Display name cleared', 'success');
     } else {
       showToastNotification('Not connected yet — try again in a moment', 'error');

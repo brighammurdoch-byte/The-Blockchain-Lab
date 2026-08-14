@@ -326,6 +326,15 @@ if (typeof window.RelayBlockchainState === 'undefined') {
   // Called when a new peer joins via the relay
   addOrUpdateParticipant(userId, role = 'miner', extra = {}) {
     extra = extra || {};
+    const incomingName = String(extra.displayName || extra.name || '').trim();
+    // Never clobber a known classroom name with empty/null from a later join/hashrate packet
+    if (!incomingName) {
+      extra = Object.assign({}, extra);
+      delete extra.name;
+      delete extra.displayName;
+    } else {
+      extra = Object.assign({}, extra, { name: incomingName, displayName: incomingName });
+    }
     if (!this.participants.has(userId)) {
       const endow = (extra.endowment != null)
         ? Math.max(0, Number(extra.endowment) || 0)
@@ -334,6 +343,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
         userId: userId,
         role: role,
         name: extra.name || null,
+        displayName: extra.displayName || extra.name || null,
         hashrate: 0,
         blocksMined: 0,
         balance: endow,
@@ -352,6 +362,12 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     } else {
       const p = this.participants.get(userId);
       Object.assign(p, extra);
+      if (incomingName) {
+        p.name = incomingName;
+        p.displayName = incomingName;
+      } else if (!p.displayName && p.name) {
+        p.displayName = p.name;
+      }
       p.lastSeenAt = Date.now();
       // Promote a known peer to wallet with starting coins if they never had an endowment
       const r = String(role || p.role || '').toLowerCase();
@@ -1040,8 +1056,30 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     return true;
   }
 
+  /** Classroom pause: freeze displayed network hashrate at 0. */
+  zeroHashratesForPause() {
+    this.participants.forEach((p) => {
+      p.hashrate = 0;
+      const r = String(p.role || '').toLowerCase();
+      if (r !== 'admin' && r !== 'hub' && p.status === 'mining') p.status = 'idle';
+    });
+    if (this.networkStats) this.networkStats.totalHashrate = 0;
+  }
+
+  static formatDifficultyLabel(leading, secondary) {
+    const L = Number(leading);
+    const S = Number(secondary);
+    const l = isNaN(L) ? 1 : L;
+    const s = isNaN(S) ? 0 : Math.max(0, S);
+    return l + ' leading zero' + (l === 1 ? '' : 's') + ' + 0x' + s.toString(16).toUpperCase();
+  }
+
   // Update hashrate for a participant (called from client reports)
   updateHashrate(userId, hashrate) {
+    if (this.networkPaused) {
+      this.zeroHashratesForPause();
+      return;
+    }
     const p = this.participants.get(userId);
     if (p) {
       p.hashrate = hashrate || 0;

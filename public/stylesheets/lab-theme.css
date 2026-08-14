@@ -429,6 +429,36 @@ body.lab-app #sessionCode {
   padding: 20px;
 }
 
+.lab-share-link-wrap {
+  margin-top: 6px;
+}
+.lab-share-link-wrap #joinShareLink {
+  display: block;
+  width: 100%;
+  min-height: 52px;
+  resize: none;
+  word-break: break-all;
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.4;
+  font-family: var(--lab-mono, Menlo, Monaco, Consolas, monospace);
+  margin-bottom: 8px;
+}
+
+body.lab-app .chain-hash,
+body.lab-app code.chain-hash {
+  display: block;
+  background: #f4f6f8 !important;
+  color: #1a2330 !important;
+  padding: 4px 6px;
+  border-radius: 4px;
+  word-break: break-all;
+  white-space: pre-wrap;
+  font-size: 11px;
+  line-height: 1.4;
+  font-family: var(--lab-mono, Menlo, Monaco, Consolas, monospace);
+}
+
 #joinQrCanvas {
   border-radius: 12px !important;
   border: 1px solid var(--lab-line) !important;

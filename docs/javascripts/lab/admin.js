@@ -17,11 +17,12 @@ let relayState = null;
 let socket = null; // legacy stub
 
 // Toast notification function (non-intrusive bubble at top)
-function showToastNotification(message, type = 'info') {
+function showToastNotification(message, type = 'info', durationMs) {
   // Remove existing toast if any
   $('#toastNotification').remove();
   
-  const bgColor = type === 'success' ? '#28a745' : type === 'error' ? '#dc3545' : '#17a2b8';
+  const bgColor = type === 'success' ? '#28a745' : type === 'error' ? '#dc3545' : type === 'warning' ? '#d97706' : '#17a2b8';
+  const hold = durationMs != null ? durationMs : (type === 'warning' ? 8000 : 4000);
   
   const toast = $(`
     <div id="toastNotification" class="lab-toast" style="
@@ -46,10 +47,96 @@ function showToastNotification(message, type = 'info') {
   
   $('body').append(toast);
   
-  // Auto-dismiss after 4 seconds
   setTimeout(function() {
     toast.fadeOut(300, function() { $(this).remove(); });
-  }, 4000);
+  }, hold);
+}
+
+function liveClassroomNodes() {
+  if (!relayState || !relayState.participants) return [];
+  return Array.from(relayState.participants.values()).filter(function (p) {
+    const id = p && (p.userId || p.id) || '';
+    return id && String(id).indexOf('probe-') !== 0;
+  });
+}
+
+function refreshLiveNodeBadge() {
+  const nodes = liveClassroomNodes();
+  const n = nodes.length;
+  const students = nodes.filter(function (p) {
+    const r = String(p.role || '').toLowerCase();
+    return r !== 'admin' && r !== 'hub';
+  }).length;
+  const $badge = $('#peerCountBadge');
+  if ($badge.length) {
+    $badge
+      .text('Live nodes: ' + n)
+      .attr('title', n + ' live nodes (instructor hub + ' + students +
+        ' student' + (students === 1 ? '' : 's') + '). Same count as Participants.')
+      .removeClass('label-default label-warning')
+      .addClass(n > 1 ? 'label-success' : 'label-warning');
+  }
+  const $hint = $('#peerCountHint');
+  if ($hint.length) {
+    $hint.text('Includes this hub. Students connected: ' + students + '.');
+  }
+}
+
+function applyInboundDisplayName(msg) {
+  if (!msg || !relayState) return false;
+  const payload = msg.payload || msg;
+  const uid = payload.userId || payload.from || msg.from;
+  const name = String(
+    payload.displayName || payload.name || msg.displayName || msg.name || ''
+  ).trim();
+  if (!uid || !name || String(uid).indexOf('probe-') === 0) return false;
+  const existing = relayState.participants.get(uid);
+  const role = (existing && existing.role) || payload.role || msg.role || 'miner';
+  relayState.addOrUpdateParticipant(uid, role, { name: name, displayName: name });
+  const viz = window.networkViz || networkViz;
+  if (viz && typeof viz.setNodeName === 'function') {
+    viz.setNodeName(uid, name);
+  }
+  return true;
+}
+
+function formatDifficultyLabel(leading, secondary) {
+  if (window.RelayBlockchainState && typeof RelayBlockchainState.formatDifficultyLabel === 'function') {
+    return RelayBlockchainState.formatDifficultyLabel(leading, secondary);
+  }
+  const L = Number(leading);
+  const S = Number(secondary);
+  const l = isNaN(L) ? 1 : L;
+  const s = isNaN(S) ? 0 : S;
+  return l + ' leading zero' + (l === 1 ? '' : 's') + ' + 0x' + s.toString(16).toUpperCase();
+}
+
+function syncDifficultyControlsFromState(settings) {
+  const s = settings || (relayState && relayState.settings) || {};
+  if (s.difficultyLeading != null) {
+    $('#difficultyLeading').val(s.difficultyLeading);
+  }
+  if (s.difficultySecondary != null) {
+    $('#difficultySecondary').val(s.difficultySecondary);
+  }
+  updateDifficultyDisplay();
+  refreshBlockPaceDisplay();
+}
+
+function applyNetworkPausedUi(paused) {
+  const on = !!paused;
+  const $badge = $('#networkPausedBadge');
+  if ($badge.length) {
+    $badge
+      .text(on ? 'Network paused' : 'Network live')
+      .removeClass('label-success label-warning label-default')
+      .addClass(on ? 'label-warning' : 'label-success');
+  }
+  $('#toggleNetworkBtn').text(on ? 'Resume Network' : 'Pause Network').data('paused', on);
+  if (on && relayState && typeof relayState.zeroHashratesForPause === 'function') {
+    relayState.zeroHashratesForPause();
+  }
+  $('#totalHashrate').text((on ? 0 : ((relayState && relayState.networkStats && relayState.networkStats.totalHashrate) || 0)).toFixed(0) + ' H/s');
 }
 
 // Add CSS animation for toast
@@ -347,7 +434,7 @@ function initClientSideNetworking(mode, roomCode) {
           applyAutoDifficultyUI();
         }
         if (relayState.networkPaused) {
-          $('#toggleNetworkBtn').text('Resume Network').data('paused', true);
+          applyNetworkPausedUi(true);
           if (net && net.transport) net.transport.networkPaused = true;
         }
         if (restored.settings) {
@@ -432,22 +519,17 @@ function initClientSideNetworking(mode, roomCode) {
     // When auto-difficulty retargets, keep admin sliders + badge in sync
     coordinator.onDifficultyRetarget = function (settings) {
       if (!settings) return;
-      if (settings.difficultyLeading != null) {
-        $('#difficultyLeading').val(settings.difficultyLeading);
-      }
-      if (settings.difficultySecondary != null) {
-        $('#difficultySecondary').val(settings.difficultySecondary);
-      }
-      updateDifficultyDisplay();
-      refreshBlockPaceDisplay();
-      // Soft toast so instructor sees pacing is working (debounced)
+      syncDifficultyControlsFromState(settings);
       if (!window.__lastRetargetToast || Date.now() - window.__lastRetargetToast > 8000) {
         window.__lastRetargetToast = Date.now();
-        const t = settings.targetBlockTimeSec || 10;
+        const t = settings.targetBlockTimeSec || (relayState && relayState.settings && relayState.settings.targetBlockTimeSec) || 10;
+        const avgMs = relayState && relayState.networkStats && relayState.networkStats.averageBlockTimeMs;
+        const avgBit = (avgMs != null && !isNaN(avgMs) && avgMs > 0)
+          ? ('; observed avg ' + (avgMs >= 10000 ? (avgMs / 1000).toFixed(0) : (avgMs / 1000).toFixed(1)) + 's')
+          : '';
         showToastNotification(
-          'Difficulty auto-adjusted toward ~' + t + 's blocks (now ' +
-          settings.difficultyLeading + ' + 0x' +
-          Number(settings.difficultySecondary).toString(16).toUpperCase() + ')',
+          'Difficulty now ' + formatDifficultyLabel(settings.difficultyLeading, settings.difficultySecondary) +
+          ' (target ' + t + 's' + avgBit + ')',
           'info'
         );
       }
@@ -477,9 +559,10 @@ function initClientSideNetworking(mode, roomCode) {
     showToastNotification(`Miner joined: ${msg.from}`, 'info');
 
     if (relayState) {
-      const role = msg.role || 'miner';
+      const role = msg.role || (msg.payload && msg.payload.role) || 'miner';
       const r = String(role).toLowerCase();
       const extra = (r === 'wallet' || r === 'observer') ? { endowment: 100 } : {};
+      applyInboundDisplayName(msg);
       relayState.addOrUpdateParticipant(msg.from, role, extra);
       if (typeof relayState._recomputeMiningRewards === 'function') {
         relayState._recomputeMiningRewards();
@@ -603,6 +686,7 @@ function initClientSideNetworking(mode, roomCode) {
     const payload = msg.payload || msg;
     const uid = payload.userId || msg.from;
     const hashrate = payload.hashrate;
+    applyInboundDisplayName(msg);
     if (nackMinerIfPaused(uid) && hashrate > 0) return;
     if (relayState && uid) {
       if (typeof relayState.touchParticipant === 'function') relayState.touchParticipant(uid);
@@ -619,6 +703,7 @@ function initClientSideNetworking(mode, roomCode) {
     const payload = msg.payload || msg;
     const uid = payload.userId || msg.from;
     const hashrate = payload.hashrate;
+    applyInboundDisplayName(msg);
     if (nackMinerIfPaused(uid) && hashrate > 0) return;
     if (relayState && uid) {
       relayState.updateHashrate(uid, hashrate);
@@ -670,31 +755,21 @@ function initClientSideNetworking(mode, roomCode) {
 
   // Student display-name changes → topology + participant lists
   net.on('node-name-changed', (msg) => {
+    if (!relayState) return;
+    applyInboundDisplayName(msg);
     const payload = msg.payload || msg;
     const uid = payload.userId || msg.from;
-    const name = (payload.name != null ? String(payload.name) : '').trim();
-    if (!uid || !relayState) return;
-
-    const existing = relayState.participants.get(uid);
-    const role = (existing && existing.role) || 'miner';
-    relayState.addOrUpdateParticipant(uid, role, {
-      name: name || null,
-      displayName: name || null
-    });
-
-    const viz = window.networkViz || networkViz;
-    if (viz && typeof viz.setNodeName === 'function' && name) {
-      viz.setNodeName(uid, name);
-    }
+    const existing = uid ? relayState.participants.get(uid) : null;
+    const role = (existing && existing.role) || payload.role || 'miner';
     if (typeof renderClientParticipants === 'function') renderClientParticipants();
     if (typeof renderClientRelayChain === 'function') renderClientRelayChain();
+    refreshLiveNodeBadge();
 
-    // Echo so other peers' UIs can refresh names from initial-state / lists
-    if (net && net.isAdmin) {
+    if (net && net.isAdmin && uid) {
       try {
         net.send('participant-updated', {
           userId: uid,
-          name: name,
+          name: (existing && (existing.displayName || existing.name)) || payload.name || '',
           role: role
         });
         net.send('participants-roster', {
@@ -704,9 +779,16 @@ function initClientSideNetworking(mode, roomCode) {
     }
   });
 
-  net.on('peer-count', (msg) => {
-    const count = (msg && msg.count != null) ? msg.count : (net.getPeerCount ? net.getPeerCount() : 0);
-    $('#peerCountBadge').text('Peers: ' + count).removeClass('label-default label-warning').addClass(count > 0 ? 'label-success' : 'label-warning');
+  net.on('peer-hello', (msg) => {
+    if (msg && msg.isAdmin) return;
+    if (applyInboundDisplayName(msg)) {
+      if (typeof renderClientParticipants === 'function') renderClientParticipants();
+      refreshLiveNodeBadge();
+    }
+  });
+
+  net.on('peer-count', function () {
+    refreshLiveNodeBadge();
   });
 
   // In Full P2P mode, accept gossiped blocks locally as well (admin still tracks chain for projector)
@@ -876,16 +958,17 @@ function setupEventHandlers() {
   $('#toggleNetworkBtn').click(function() {
     const isPaused = $(this).data('paused') || false;
     const willPause = !isPaused;
-    $(this).text(willPause ? 'Resume Network' : 'Pause Network');
-    $(this).data('paused', willPause);
     if (typeof relayState !== 'undefined' && relayState) {
       relayState.networkPaused = willPause;
     }
+    applyNetworkPausedUi(willPause);
     broadcastNetworkPausedState(willPause, { burst: true });
     showToastNotification(
       willPause ? 'Network paused — mining and transactions halted' : 'Network resumed',
-      willPause ? 'warning' : 'success'
+      willPause ? 'warning' : 'success',
+      willPause ? 12000 : 4000
     );
+    if (typeof renderClientParticipants === 'function') renderClientParticipants();
     if (relayState && net && net.roomCode && window.Persistence) {
       try { Persistence.saveAdminState(net.roomCode, relayState.getFullState()); } catch (e) {}
     }
@@ -1164,7 +1247,8 @@ function toggleTransactions(blockIndex) {
 function updateNetworkStats(blockchain) {
   const stats = blockchain.networkStats || {};
   $('#blockHeight').text(stats.blockHeight || 0);
-  $('#participantCount').text(blockchain.participants ? blockchain.participants.length : 0);
+  $('#participantCount').text(liveClassroomNodes().length);
+  refreshLiveNodeBadge();
   $('#totalHashrate').text((stats.totalHashrate || 0).toFixed(0) + ' H/s');
   
   if (stats.lastBlockTime) {
@@ -1247,19 +1331,15 @@ function updateSettingsDisplay(settings) {
     '<span class="label label-success">Unlocked</span>'
   );
 
-  // Auto-sync the sliders to match the server defaults on first load
+  syncDifficultyControlsFromState(settings);
   if (!initialSettingsLoaded) {
-    $('#difficultyLeading').val(settings.difficultyLeading != null ? settings.difficultyLeading : 1);
-    $('#difficultySecondary').val(settings.difficultySecondary != null ? settings.difficultySecondary : 8);
     $('#miningReward').val(settings.miningRewardCoins);
     if (settings.targetBlockTimeSec != null) $('#targetBlockTimeSec').val(settings.targetBlockTimeSec);
     if (typeof settings.autoDifficulty === 'boolean') $('#autoDifficulty').prop('checked', settings.autoDifficulty);
     $('#networkModeSelect').val(settings.networkMode === 'p2p' ? 'p2p' : 'admin-relay');
     $('#lockParameters').prop('checked', settings.parametersLocked);
-    updateDifficultyDisplay();
     applyParameterLockUI(!!settings.parametersLocked);
     applyAutoDifficultyUI();
-    refreshBlockPaceDisplay();
     initialSettingsLoaded = true;
   }
 }
@@ -1497,7 +1577,8 @@ function scheduleRenderClientRelayChain() {
     try {
       const chainLen = (relayState.chain && relayState.chain.length) ? relayState.chain.length : 0;
       $('#blockHeight').text(relayState.networkStats.blockHeight || Math.max(0, chainLen - 1));
-      $('#participantCount').text(relayState.participants ? relayState.participants.size : 0);
+      $('#participantCount').text(liveClassroomNodes().length);
+      refreshLiveNodeBadge();
       if (relayState.networkStats && relayState.networkStats.totalHashrate != null) {
         $('#totalHashrate').text((relayState.networkStats.totalHashrate || 0).toFixed(0) + ' H/s');
       }
@@ -1820,8 +1901,18 @@ function renderClientRelayChain(opts) {
 
   // Also update stats
   $('#blockHeight').text(relayState.networkStats.blockHeight || chain.length - 1);
-  $('#participantCount').text(relayState.participants.size);
-  $('#totalHashrate').text((relayState.networkStats.totalHashrate || 0).toFixed(0) + ' H/s');
+  const liveNodes = liveClassroomNodes();
+  $('#participantCount').text(liveNodes.length);
+  const paused = !!relayState.networkPaused;
+  if (paused && typeof relayState.zeroHashratesForPause === 'function') {
+    relayState.zeroHashratesForPause();
+  }
+  $('#totalHashrate').text((paused ? 0 : (relayState.networkStats.totalHashrate || 0)).toFixed(0) + ' H/s');
+  refreshLiveNodeBadge();
+  applyNetworkPausedUi(paused);
+  if (relayState.settings && relayState.settings.autoDifficulty) {
+    syncDifficultyControlsFromState(relayState.settings);
+  }
   if (relayState.networkStats.lastBlockTime) {
     const secondsAgo = Math.floor((Date.now() - relayState.networkStats.lastBlockTime) / 1000);
     $('#lastBlockTime').text(secondsAgo + 's');
@@ -2118,4 +2209,5 @@ function renderClientParticipants() {
     });
   }
   $('#nodeNamesList').html(namesHtml);
+  refreshLiveNodeBadge();
 }

@@ -47,12 +47,23 @@ $(document).ready(function () {
     $('#joinError').hide().text('').removeClass('alert-info').addClass('alert-danger');
   }
 
-  var joinAttempt = null;
+  var joinAttempt = { cancelled: false, abort: null };
+
+  function joinButtonLabel() {
+    return $('#roleSelect').val() === 'observer' ? 'Join as Wallet' : 'Join as Miner';
+  }
 
   function resetJoinButton($btn, text) {
-    $btn.prop('disabled', false).text(text || ($('#roleSelect').val() === 'observer' ? 'Join as Wallet' : 'Join as Miner'));
+    $btn.prop('disabled', false).text(text || joinButtonLabel());
     $('#joinCancelBtn').hide();
-    joinAttempt = null;
+  }
+
+  function abortJoinProbe() {
+    joinAttempt.cancelled = true;
+    if (typeof joinAttempt.abort === 'function') {
+      try { joinAttempt.abort(); } catch (e) {}
+    }
+    joinAttempt.abort = null;
   }
 
   $('#createSessionBtn').click(function () {
@@ -107,20 +118,22 @@ $(document).ready(function () {
 
     $btn.prop('disabled', true).text('Finding instructor…');
     $('#joinCancelBtn').show();
-    joinAttempt = { cancelled: false };
+    joinAttempt = { cancelled: false, abort: null };
 
     LabSessionProbe.probeActiveSession(joinCode, {
       timeoutMs: 10000,
+      handle: joinAttempt,
+      onAbort: function (fn) { joinAttempt.abort = fn; },
       onProgress: function (msg) {
-        if (joinAttempt && joinAttempt.cancelled) return;
+        if (joinAttempt.cancelled) return;
         showJoinProgress(msg);
         $btn.text('Finding instructor…');
       },
       shouldAbort: function () {
-        return !!(joinAttempt && joinAttempt.cancelled);
+        return !!joinAttempt.cancelled;
       }
     }).then(function (code) {
-      if (joinAttempt && joinAttempt.cancelled) return;
+      if (joinAttempt.cancelled) return;
       localStorage.setItem('joinCode_' + code, code);
       var roleKey = 'userId_' + code + '_' + role;
       var tabId = localStorage.getItem(roleKey) || '';
@@ -149,17 +162,22 @@ $(document).ready(function () {
       }
       go(role === 'wallet' ? 'observe' : 'participate', code);
     }).catch(function (err) {
-      if (joinAttempt && joinAttempt.cancelled) return;
+      if (joinAttempt.cancelled || (err && err.cancelled)) {
+        hideJoinError();
+        resetJoinButton($btn, originalText);
+        return;
+      }
       console.warn('[Join] probe failed', err);
       showJoinError(err && err.message ? err.message : 'Invalid or inactive session code. Check the code and try again.');
       resetJoinButton($btn, originalText);
     });
   });
 
-  $('#joinCancelBtn').on('click', function () {
-    if (joinAttempt) joinAttempt.cancelled = true;
+  $('#joinCancelBtn').on('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    abortJoinProbe();
     hideJoinError();
-    showJoinError('Join cancelled. Check the session code and try again.');
     resetJoinButton($('#joinForm button[type="submit"]'));
   });
 

@@ -51,9 +51,15 @@
     );
   }
 
+  function cancelledError() {
+    var err = new Error('Join cancelled.');
+    err.cancelled = true;
+    return err;
+  }
+
   /**
    * @param {string} joinCode
-   * @param {{ timeoutMs?: number, role?: string, onProgress?: function }} [opts]
+   * @param {{ timeoutMs?: number, role?: string, onProgress?: function, shouldAbort?: function, onAbort?: function }} [opts]
    * @returns {Promise<string>} resolved uppercase code
    */
   function probeActiveSession(joinCode, opts) {
@@ -105,6 +111,17 @@
         }
       }
 
+      function requestAbort() {
+        finish(false, cancelledError());
+      }
+
+      if (typeof opts.onAbort === 'function') {
+        try { opts.onAbort(requestAbort); } catch (e) {}
+      }
+      if (opts.handle && typeof opts.handle === 'object') {
+        opts.handle.abort = requestAbort;
+      }
+
       function onHubSignal(msg) {
         if (!msg) return;
         if (msg.isAdmin || msg.role === 'admin' || msg.type === 'admin-presence' ||
@@ -134,6 +151,10 @@
       });
 
       var timer = setTimeout(function () {
+        if (shouldAbort()) {
+          finish(false, cancelledError());
+          return;
+        }
         finish(false, new Error(
           sawPeer
             ? ('Found devices for ' + code + ' but the instructor hub did not answer in time. Keep the admin tab open and try again.')
@@ -143,7 +164,7 @@
 
       progressTimer = setInterval(function () {
         if (shouldAbort()) {
-          finish(false, new Error('Join cancelled.'));
+          finish(false, cancelledError());
           return;
         }
         var secs = Math.floor((Date.now() - startedAt) / 1000);
@@ -163,7 +184,7 @@
         // Keep pinging — WebRTC often connects a few seconds after joinRoom resolves
         retryTimer = setInterval(function () {
           if (shouldAbort()) {
-            finish(false, new Error('Join cancelled.'));
+            finish(false, cancelledError());
             return;
           }
           pingHub();

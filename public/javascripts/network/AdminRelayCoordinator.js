@@ -87,7 +87,11 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
         // Wallets/observers get 100 demo coins so they can transact immediately
         const r = String(role || '').toLowerCase();
         const extra = (r === 'wallet' || r === 'observer') ? { endowment: 100 } : {};
-        const nm = (msg.name || (msg.payload && msg.payload.name) || '').trim();
+        const nm = (
+          msg.name ||
+          (msg.payload && (msg.payload.name || msg.payload.displayName)) ||
+          ''
+        ).trim();
         if (nm) {
           extra.name = nm;
           extra.displayName = nm;
