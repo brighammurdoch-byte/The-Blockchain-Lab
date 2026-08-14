@@ -281,7 +281,24 @@
         }
       }
     } catch (e2) {}
+    // observe.html?session= without ?uid= must not mint another classroom student.
+    // Landing Join is the only place that should call mintJoinUserId.
+    if (opts.mint === false) return '';
     return mintJoinUserId(code, r);
+  }
+
+  /** Keep ?uid= on observe/participate so a refresh does not mint a new student. */
+  function pinUidInLocation(userId) {
+    var id = String(userId || '').trim();
+    if (!id || typeof global.location === 'undefined') return;
+    try {
+      var url = new URL(global.location.href);
+      if (url.searchParams.get('uid') === id) return;
+      url.searchParams.set('uid', id);
+      if (global.history && typeof global.history.replaceState === 'function') {
+        global.history.replaceState({}, '', url.toString());
+      }
+    } catch (e) {}
   }
 
   /**
@@ -313,7 +330,7 @@
     if (bound === 'admin' || bound === 'hub') return false;
     var page = bound === 'wallet' ? 'observe' : 'participate';
     if (typeof global.location !== 'undefined') {
-      global.location.replace(labUrl(page, sessionId));
+      global.location.replace(labUrl(page, sessionId, userId ? { uid: userId } : {}));
     }
     return true;
   }
@@ -335,6 +352,7 @@
     getUserIdForRole: getUserIdForRole,
     allocateTabUserId: allocateTabUserId,
     mintJoinUserId: mintJoinUserId,
+    pinUidInLocation: pinUidInLocation,
     withQuery: withQuery,
     enforceBoundRolePage: enforceBoundRolePage
   };

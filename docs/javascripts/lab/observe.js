@@ -83,17 +83,31 @@ $(document).ready(function() {
   
   // Prefer ?uid= from landing Join (minted per click). Never read
   // localStorage userId_SESSION_wallet — that reused Wallet 1 on a new tab.
+  // A missing uid must NOT mint another student (observe.html?session=CVV1U8
+  // without uid created user_iu5u4pz0i, then user_yifueuw8c, then user_m4fs468vo).
   var joinUid = '';
   try {
     joinUid = (new URLSearchParams(window.location.search || '')).get('uid') || '';
   } catch (eUid) {}
   if (window.LabPaths && typeof LabPaths.allocateTabUserId === 'function') {
-    userId = LabPaths.allocateTabUserId(sessionId, 'wallet', { uid: joinUid });
+    userId = LabPaths.allocateTabUserId(sessionId, 'wallet', { uid: joinUid, mint: false });
   } else if (joinUid) {
     userId = joinUid;
   } else {
     try { userId = sessionStorage.getItem('labUserId_' + sessionId) || ''; } catch (e) {}
-    if (!userId) userId = 'user_' + Math.random().toString(36).substr(2, 9);
+  }
+  if (!userId) {
+    if (window.LabPaths && typeof LabPaths.labUrl === 'function') {
+      window.location.replace(LabPaths.labUrl('index', sessionId));
+    } else {
+      window.location.replace('/lab?join=' + encodeURIComponent(sessionId || ''));
+    }
+    return;
+  }
+  if (window.LabPaths && typeof LabPaths.pinUidInLocation === 'function') {
+    LabPaths.pinUidInLocation(userId);
+  } else {
+    try { sessionStorage.setItem('labUserId_' + sessionId, userId); } catch (ePin) {}
   }
   if (window.LabPaths && typeof LabPaths.enforceBoundRolePage === 'function') {
     if (userId && LabPaths.enforceBoundRolePage('wallet', sessionId, userId)) return;
@@ -355,8 +369,13 @@ function initClientSideNetworkingForObserver(mode) {
       ? window._observerChain[window._observerChain.length - 1]
       : null;
     const localH = localTip && localTip.index != null ? Number(localTip.index) : -1;
-    if (!isNaN(tipIndex) && tipIndex > localH && net) {
-      net.send('request-state', { from: userId });
+    if (!isNaN(tipIndex)) {
+      // Presence carries the live hub tip every ~4s. Paint Overview from it
+      // so a compact last-20 copy cannot leave height ~20 behind (22 vs 45).
+      paintObserverOverviewHeight(window._observerChain, { tipIndex: tipIndex, hubHeight: tipIndex });
+      if (tipIndex > localH && net) {
+        net.send('request-state', { from: userId });
+      }
     }
   });
 
@@ -645,21 +664,27 @@ function toggleTransactions(blockIndex) {
   }
 }
 
-function updateNetworkStats(blockchain) {
-  const stats = blockchain.networkStats || {};
+function paintObserverOverviewHeight(chain, meta) {
   const ResolveFn = window.RelayBlockchainState && RelayBlockchainState.resolveOverviewHeight;
+  const CopyFn = window.RelayBlockchainState && RelayBlockchainState.copyTipIndex;
+  const copyTip = (typeof CopyFn === 'function') ? CopyFn(chain) : null;
   let height = (typeof ResolveFn === 'function')
-    ? ResolveFn(blockchain.chain, {
-      tipIndex: blockchain.hubHeight != null ? blockchain.hubHeight : window._observerHubHeight,
-      hubHeight: blockchain.hubHeight,
-      networkStats: stats
-    }, window._observerHubHeight)
-    : stats.blockHeight;
-  if (height == null && window._observerHubHeight != null) height = window._observerHubHeight;
+    ? ResolveFn(chain, meta || {}, window._observerHubHeight)
+    : (copyTip != null ? copyTip : window._observerHubHeight);
   if (height == null) height = 0;
-  height = Math.max(Number(height) || 0, Number(window._observerHubHeight) || 0);
+  height = Math.max(Number(height) || 0, Number(window._observerHubHeight) || 0, Number(copyTip) || 0);
   window._observerHubHeight = height;
   $('#blockHeight').text(height);
+  return height;
+}
+
+function updateNetworkStats(blockchain) {
+  const stats = blockchain.networkStats || {};
+  paintObserverOverviewHeight(blockchain.chain, {
+    tipIndex: blockchain.hubHeight != null ? blockchain.hubHeight : window._observerHubHeight,
+    hubHeight: blockchain.hubHeight,
+    networkStats: stats
+  });
   $('#participantCount').text(blockchain.participants ? blockchain.participants.length : 0);
   $('#totalHashrate').text((stats.totalHashrate || 0).toFixed(0) + ' H/s');
 

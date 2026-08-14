@@ -623,18 +623,56 @@ if (typeof window.RelayBlockchainState === 'undefined') {
   /** Display height for a (possibly truncated) student copy. Never use length-1 of a suffix. */
   static canonicalCopyHeight(chain, meta) {
     meta = meta || {};
-    if (meta.tipIndex != null && !isNaN(Number(meta.tipIndex))) return Number(meta.tipIndex);
-    if (meta.chainHeight != null && !isNaN(Number(meta.chainHeight))) return Number(meta.chainHeight);
-    if (meta.hubHeight != null && !isNaN(Number(meta.hubHeight))) return Number(meta.hubHeight);
-    const tip = Array.isArray(chain) && chain.length ? chain[chain.length - 1] : null;
-    if (tip && tip.index != null && !isNaN(Number(tip.index))) return Number(tip.index);
+    const copyTip = RelayBlockchainState.copyTipIndex(chain);
+    if (meta.tipIndex != null && !isNaN(Number(meta.tipIndex))) {
+      const t = Number(meta.tipIndex);
+      // Compact last-20 windows have length-1 ≈ 19 while block.index is 45+.
+      if (copyTip == null || t >= copyTip || !RelayBlockchainState._looksLikeSuffixLength(chain, t)) {
+        return Math.max(t, copyTip || 0);
+      }
+    }
+    if (meta.chainHeight != null && !isNaN(Number(meta.chainHeight))) {
+      const t = Number(meta.chainHeight);
+      if (copyTip == null || t >= copyTip || !RelayBlockchainState._looksLikeSuffixLength(chain, t)) {
+        return Math.max(t, copyTip || 0);
+      }
+    }
+    if (meta.hubHeight != null && !isNaN(Number(meta.hubHeight))) {
+      const t = Number(meta.hubHeight);
+      if (copyTip == null || t >= copyTip || !RelayBlockchainState._looksLikeSuffixLength(chain, t)) {
+        return Math.max(t, copyTip || 0);
+      }
+    }
+    if (copyTip != null) return copyTip;
     return 0;
   }
 
+  /** Last painted block.index. Null if the copy is empty or lacks index. */
+  static copyTipIndex(chain) {
+    const tip = Array.isArray(chain) && chain.length ? chain[chain.length - 1] : null;
+    if (tip && tip.index != null && !isNaN(Number(tip.index))) return Number(tip.index);
+    return null;
+  }
+
   /**
-   * Network Overview height: max of the displayed copy tip, hub tip hints, and
-   * the previous painted value. Never start at 0 when blocks exist, never jump
-   * backward when a stale MQTT snapshot carries an old networkStats.blockHeight.
+   * True when `value` is the array length-1 of a compact suffix, not a real
+   * hub height. CVV1U8 wallets showed Overview 22/28/31 while the panel tip
+   * was 45/46/51 — a persistent ~20-block gap, the last-20 transport window.
+   */
+  static _looksLikeSuffixLength(chain, value) {
+    if (!Array.isArray(chain) || !chain.length) return false;
+    const n = Number(value);
+    if (isNaN(n)) return false;
+    const suffixLen = chain.length - 1;
+    const copyTip = RelayBlockchainState.copyTipIndex(chain);
+    if (copyTip == null) return n === suffixLen;
+    return n === suffixLen && copyTip > n + 1;
+  }
+
+  /**
+   * Network Overview height must equal the painted copy tip / hub tip.
+   * Never use chain.length-1 or a stale networkStats.blockHeight — those
+   * stayed ~20 behind on CVV1U8 (22→45, 28→51) and never converged.
    */
   static resolveOverviewHeight(chain, meta, previousHeight) {
     meta = meta || {};
@@ -644,14 +682,25 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       const n = Number(v);
       if (!isNaN(n) && isFinite(n) && n >= 0) nums.push(n);
     }
-    const tip = Array.isArray(chain) && chain.length ? chain[chain.length - 1] : null;
-    if (tip && tip.index != null) push(tip.index);
-    push(meta.tipIndex);
-    push(meta.chainHeight);
-    push(meta.hubHeight);
-    push(meta.newHeight);
-    push(meta.blockHeight);
-    if (meta.networkStats) push(meta.networkStats.blockHeight);
+    const copyTip = RelayBlockchainState.copyTipIndex(chain);
+    push(copyTip);
+
+    function pushHub(v) {
+      if (v == null || v === '') return;
+      if (RelayBlockchainState._looksLikeSuffixLength(chain, v)) return;
+      push(v);
+    }
+    pushHub(meta.tipIndex);
+    pushHub(meta.chainHeight);
+    pushHub(meta.hubHeight);
+    pushHub(meta.newHeight);
+    // networkStats.blockHeight is chain.length-1 on the hub. When a stale
+    // snapshot rides along with a last-20 window it is ~20 behind the panel.
+    // Only use it when we have no copy tip and it is not a suffix length.
+    if (copyTip == null && meta.networkStats) {
+      pushHub(meta.networkStats.blockHeight);
+    }
+    if (copyTip == null) pushHub(meta.blockHeight);
     push(previousHeight);
     if (!nums.length) return 0;
     return Math.max.apply(null, nums);
@@ -1134,7 +1183,10 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const onBest = bestChain.some((b) => b.hash === block.hash);
 
     this.chain = bestChain;
-    this.networkStats.blockHeight = Math.max(0, this.chain.length - 1);
+    const heightTip = this.chain[this.chain.length - 1];
+    this.networkStats.blockHeight = (heightTip && heightTip.index != null)
+      ? Number(heightTip.index)
+      : Math.max(0, this.chain.length - 1);
     if (newTip && (isDirectExtension || (onBest && block.hash === newTip.hash))) {
       this.networkStats.lastBlockTime = newTip.timestamp || Date.now();
       if (isDirectExtension) {
@@ -1310,7 +1362,10 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
     // Re-run fork choice in case orphans are longer
     this.chain = this._selectBestChain();
-    this.networkStats.blockHeight = Math.max(0, this.chain.length - 1);
+    const restoredTip = this.chain[this.chain.length - 1];
+    this.networkStats.blockHeight = (restoredTip && restoredTip.index != null)
+      ? Number(restoredTip.index)
+      : Math.max(0, this.chain.length - 1);
     this._recomputeMiningRewards();
 
     return true;

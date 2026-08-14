@@ -23,6 +23,35 @@ function loadRelay() {
   return ctx.window.RelayBlockchainState;
 }
 
+function loadLabPaths() {
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'public/javascripts/lab/labPaths.js'),
+    'utf8'
+  );
+  const store = { local: {}, session: {} };
+  const ctx = {
+    window: {},
+    console,
+    localStorage: {
+      getItem: (k) => (Object.prototype.hasOwnProperty.call(store.local, k) ? store.local[k] : null),
+      setItem: (k, v) => { store.local[k] = String(v); },
+      removeItem: (k) => { delete store.local[k]; }
+    },
+    sessionStorage: {
+      getItem: (k) => (Object.prototype.hasOwnProperty.call(store.session, k) ? store.session[k] : null),
+      setItem: (k, v) => { store.session[k] = String(v); },
+      removeItem: (k) => { delete store.session[k]; }
+    },
+    Math: Math,
+    URL: URL
+  };
+  ctx.global = ctx;
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(src, ctx);
+  return { LabPaths: ctx.LabPaths || ctx.window.LabPaths, store: store };
+}
+
 function loadPersistence() {
   const src = fs.readFileSync(
     path.join(__dirname, '..', 'public/javascripts/network/Persistence.js'),
@@ -95,6 +124,32 @@ const Relay = loadRelay();
   const h = Relay.resolveOverviewHeight(suffix, { tipIndex: 38, networkStats: { blockHeight: 28 } }, 28);
   if (h === 38) pass('Overview uses hub tip on truncated window', String(h));
   else fail('Overview uses hub tip on truncated window', String(h));
+})();
+
+// --- 3b. CVV1U8: last-20 window must not leave Overview ~20 behind the panel ---
+(function () {
+  const pairs = [
+    [22, 45],
+    [28, 46],
+    [28, 51],
+    [31, 51]
+  ];
+  let ok = true;
+  const details = [];
+  pairs.forEach(function (pair) {
+    const stale = pair[0];
+    const tip = pair[1];
+    const suffix = chainTo(tip).slice(-20);
+    const h = Relay.resolveOverviewHeight(suffix, {
+      networkStats: { blockHeight: stale },
+      tipIndex: suffix.length - 1,
+      hubHeight: stale
+    }, stale);
+    details.push(stale + '→' + tip + ' got ' + h);
+    if (h !== tip) ok = false;
+  });
+  if (ok) pass('CVV1U8 wallet pairs converge to copy tip (not length-1)', details.join('; '));
+  else fail('CVV1U8 wallet pairs converge to copy tip (not length-1)', details.join('; '));
 })();
 
 // --- 4. 101s stall interval is capped; median does not snap ---
@@ -236,11 +291,29 @@ const Relay = loadRelay();
     pass('Legacy 51% helper text removed from admin.pug', '');
   } else fail('Legacy 51% helper text removed from admin.pug', 'still present');
 
-  if (/observe\.js\?v=p2fix5/.test(fs.readFileSync(path.join(__dirname, '..', 'views/lab/observe.pug'), 'utf8')) &&
-      /participate\.js\?v=p2fix5/.test(fs.readFileSync(path.join(__dirname, '..', 'views/lab/participate.pug'), 'utf8')) &&
+  if (/observe\.js\?v=p2fix6/.test(fs.readFileSync(path.join(__dirname, '..', 'views/lab/observe.pug'), 'utf8')) &&
+      /labPaths\.js\?v=p2fix6/.test(fs.readFileSync(path.join(__dirname, '..', 'views/lab/observe.pug'), 'utf8')) &&
       /landing\.js\?v=p2fix4/.test(fs.readFileSync(path.join(__dirname, '..', 'views/lab/index.pug'), 'utf8'))) {
     pass('Changed scripts cache-bust past p2fix3', '');
   } else fail('Changed scripts cache-bust past p2fix3', 'stale ?v=');
+
+  if (/mint:\s*false/.test(observe) && /pinUidInLocation/.test(observe) && /labUrl\('index'/.test(observe)) {
+    pass('observe.html without uid redirects to landing (does not mint)', '');
+  } else fail('observe.html without uid redirects to landing (does not mint)', 'missing mint:false / pin / landing redirect');
+
+  if (/mintJoinUserId/.test(landing)) {
+    pass('Landing Join still mints a new classroom id', '');
+  } else fail('Landing Join still mints a new classroom id', 'missing mintJoinUserId');
+
+  const paths = loadLabPaths();
+  const minted = paths.LabPaths.allocateTabUserId('CVV1U8', 'wallet', { mint: false });
+  if (!minted) pass('observe allocateTabUserId(mint:false) does not create a student', '');
+  else fail('observe allocateTabUserId(mint:false) does not create a student', minted);
+  const kept = paths.LabPaths.allocateTabUserId('CVV1U8', 'wallet', { uid: 'user_iu5u4pz0i', mint: false });
+  const again = paths.LabPaths.allocateTabUserId('CVV1U8', 'wallet', { mint: false });
+  if (kept === 'user_iu5u4pz0i' && again === 'user_iu5u4pz0i') {
+    pass('Refresh of an observe tab keeps the pinned uid', again);
+  } else fail('Refresh of an observe tab keeps the pinned uid', kept + ' / ' + again);
 
   const theme = fs.readFileSync(path.join(__dirname, '..', 'public/stylesheets/lab-theme.css'), 'utf8');
   if (/participant-row-actions/.test(participate) && /participant-row-actions/.test(theme) && /gap:\s*8px/.test(theme)) {
