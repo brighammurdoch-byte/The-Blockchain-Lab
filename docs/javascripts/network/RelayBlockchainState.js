@@ -207,8 +207,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
    * Nudge difficulty so recent block intervals approach targetBlockTimeSec.
    *
    * Classroom constraint: a 3× hashrate change is ~0.4 leading zeros, not +3
-   * zeros. Steps are nibble-sized, cooldown-gated, and never skip more than
-   * one leading-zero boundary. Hashrate is a gentle pull, not a snap-to-target.
+   * zeros. Normal steps are nibble-sized and cooldown-gated. When the median
+   * is ≥3× too fast, one leading-zero step is allowed (1→2), never 1→4.
+   * Hashrate is a gentle pull, not a snap-to-target.
    * Returns updated settings object if changed, else null.
    */
   maybeRetargetDifficulty() {
@@ -263,6 +264,22 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       else if (Math.abs(ratio - 1) < 0.25 && Math.abs(toward) <= 2) delta = toward;
     }
 
+    // Way-too-fast: ≥3× quicker than target for several fresh samples.
+    // One leading-zero step is allowed (1→2), never 1→4 in a single retarget.
+    // Nibble-only walk left 3 miners at 1+0x6 while blocks landed every 0.5s.
+    const wayTooFast = ratio > 0 && ratio < (1 / 3) && recent.length >= 2;
+    if (wayTooFast && curLeading < 5) {
+      const nextLeading = curLeading + 1;
+      const keepS = Math.max(0, Math.min(15, Number(this.settings.difficultySecondary) || 0));
+      const next = this._scoreToDifficulty(nextLeading * 16 + keepS);
+      if (
+        next.difficultyLeading !== this.settings.difficultyLeading ||
+        next.difficultySecondary !== this.settings.difficultySecondary
+      ) {
+        return this._commitRetarget(next, avg, targetMs, ratio, curScore);
+      }
+    }
+
     delta = Math.max(-2, Math.min(2, delta));
     if (delta === 0) return null;
 
@@ -279,6 +296,11 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       return null;
     }
 
+    return this._commitRetarget(next, avg, targetMs, ratio, curScore);
+  }
+
+  _commitRetarget(next, avg, targetMs, ratio, curScore) {
+    const nextScore = this._difficultyScore(next.difficultyLeading, next.difficultySecondary);
     this.networkStats.prevDifficulty = {
       leading: this.settings.difficultyLeading,
       secondary: this.settings.difficultySecondary
@@ -373,6 +395,32 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     return Object.assign({}, this.settings);
   }
 
+  _pushBlockInterval(rawMs) {
+    const interval = this._capIntervalMs(rawMs);
+    if (!(interval > 0)) return;
+    if (!Array.isArray(this.networkStats.blockIntervals)) this.networkStats.blockIntervals = [];
+    this.networkStats.blockIntervals.push(interval);
+    if (this.networkStats.blockIntervals.length > 20) {
+      this.networkStats.blockIntervals = this.networkStats.blockIntervals.slice(-20);
+    }
+    this.networkStats.averageBlockTimeMs = this._medianMs(this.networkStats.blockIntervals);
+  }
+
+  /** Wall-clock sample on every canonical tip change (extension or reorg). */
+  _recordTipPace() {
+    const now = Date.now();
+    const prevWall = this.networkStats && this.networkStats._lastTipWallClock;
+    if (this.networkStats) {
+      this.networkStats._lastTipWallClock = now;
+      this.networkStats.lastBlockTime = now;
+    }
+    if (!prevWall) return;
+    if (this.chain && this.chain.length <= 2) return;
+    const raw = now - prevWall;
+    if (!(raw > 0)) return;
+    this._pushBlockInterval(raw);
+  }
+
   _recordBlockInterval(block) {
     const prev = this.chain.length >= 2 ? this.chain[this.chain.length - 2] : null;
     if (!prev || !block || !block.timestamp || !prev.timestamp) return;
@@ -381,15 +429,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
     const raw = Math.max(0, (block.timestamp || 0) - (prev.timestamp || 0));
     if (!(raw > 0)) return;
-    const interval = this._capIntervalMs(raw);
-    if (!(interval > 0)) return;
-    if (!Array.isArray(this.networkStats.blockIntervals)) this.networkStats.blockIntervals = [];
-    this.networkStats.blockIntervals.push(interval);
-    // Keep last 20 intervals
-    if (this.networkStats.blockIntervals.length > 20) {
-      this.networkStats.blockIntervals = this.networkStats.blockIntervals.slice(-20);
-    }
-    this.networkStats.averageBlockTimeMs = this._medianMs(this.networkStats.blockIntervals);
+    this._pushBlockInterval(raw);
   }
 
   /**
@@ -441,10 +481,12 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     } else {
       const p = this.participants.get(userId);
       const existingName = String(p.displayName || p.name || '').trim();
+      const existingIsPlaceholder = !existingName || /^unnamed$/i.test(existingName);
       // A later join / hello / hashrate for the same id must not rename a live
       // wallet (L3T0NE: Wallet 1's own page flipped to "Wallet 2").
       // Only an explicit Save Name (extra.rename) may replace a known name.
-      const allowRename = !!extra.rename || !existingName;
+      // An empty first presence must not latch forever — a later real name wins.
+      const allowRename = !!extra.rename || existingIsPlaceholder;
       const clean = Object.assign({}, extra);
       delete clean.rename;
       if (incomingName && !allowRename) {
@@ -1216,11 +1258,13 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     this.networkStats.blockHeight = (heightTip && heightTip.index != null)
       ? Number(heightTip.index)
       : Math.max(0, this.chain.length - 1);
-    if (newTip && (isDirectExtension || (onBest && block.hash === newTip.hash))) {
+    if (newTip && tipChanged) {
+      // Wall-clock between tip changes. Block timestamps collide when 3 miners
+      // find 1-zero hashes in the same ms, and reorgs skipped interval samples
+      // so auto-diff only nudged twice in a 200-block burst.
+      this._recordTipPace();
+    } else if (newTip && (isDirectExtension || (onBest && block.hash === newTip.hash))) {
       this.networkStats.lastBlockTime = newTip.timestamp || Date.now();
-      if (isDirectExtension) {
-        this._recordBlockInterval(newTip);
-      }
     }
 
     this._recomputeMiningRewards();

@@ -14,6 +14,9 @@ let miningWorkerFailed = false; // after hard failure, stay on main-thread minin
 let miningJobGen = 0;
 let lastWorkerProgressAt = 0;
 let lastHashrateEmitAt = 0;
+let lastLocalHashrate = 0;
+let _nameBroadcastTimer = null;
+let _chainRenderTimer = null;
 let currentMiningBlock = null;
 let miningWakeLock = null;
 let miningKeepaliveTimer = null;
@@ -60,6 +63,14 @@ let localNewForkTip = null;
 /** Best known tip on the CLASSIC side after activation (miners on "classic" stick to this). */
 let localClassicForkTip = null;
 let seenBlocks = new Set(); // Prevent infinite gossip loops
+
+function rememberSeenBlock(hash) {
+  if (!hash) return;
+  seenBlocks.add(hash);
+  if (seenBlocks.size > 800) {
+    seenBlocks = new Set(Array.from(seenBlocks).slice(-400));
+  }
+}
 let submittedBlockHashes = new Set(); // Avoid double-submit of the same PoW solution
 let localPendingTxs = []; // Mempool mirror from hub
 let remineTxTimer = null; // Debounce remine when mempool updates
@@ -405,7 +416,9 @@ function mineBatch(){
     })));
     if (isValidHash(hash, difficulty)) {
       block.hash = hash; block.nonce = nonce;
-      self.postMessage({ type: 'found', gen: job.gen, block: block, hash: hash, nonce: nonce, totalIterations: totalIterations + 1, startTime: startTime });
+      var foundElapsed = Math.max(0.05, (Date.now() - startTime) / 1000);
+      var foundHr = Math.max(1, Math.floor((totalIterations + 1) / foundElapsed));
+      self.postMessage({ type: 'found', gen: job.gen, block: block, hash: hash, nonce: nonce, totalIterations: totalIterations + 1, hashrate: foundHr, startTime: startTime });
       running = false; clearTimer(); return;
     }
     nonce++; totalIterations++;
@@ -528,26 +541,21 @@ function handleMiningWorkerMessage(ev) {
   if (data.type === 'progress') {
     lastWorkerProgressAt = Date.now();
     const nonce = data.nonce || 0;
-    const hashrate = data.hashrate || 0;
+    const hashrate = noteHashWork(data.totalIterations || 0, data.startTime, data.hashrate);
+    applyLocalHashrate(hashrate);
+    maybeEmitHashrate(hashrate, 1000);
     try {
       const nc = document.getElementById('nonceCount');
       if (nc) nc.textContent = Number(nonce).toLocaleString();
-      const ch = document.getElementById('currentHashrate');
-      if (ch) ch.textContent = Number(hashrate).toLocaleString();
-      const yh = document.getElementById('yourHashrate');
-      if (yh) yh.textContent = Number(hashrate).toLocaleString() + ' H/s';
     } catch (e) {}
-
-    const now = Date.now();
-    if (now - lastHashrateEmitAt > 2000) {
-      lastHashrateEmitAt = now;
-      emitHashrate(hashrate);
-    }
     return;
   }
 
   if (data.type === 'found') {
     lastWorkerProgressAt = Date.now();
+    const foundHr = noteHashWork(data.totalIterations || 1, data.startTime, data.hashrate);
+    applyLocalHashrate(foundHr);
+    maybeEmitHashrate(foundHr, 400);
     if (!isMining || networkPaused) return;
     const block = data.block;
     if (!block || !block.hash) return;
@@ -558,7 +566,7 @@ function handleMiningWorkerMessage(ev) {
       collusionTransactions = [];
     }
 
-    seenBlocks.add(block.hash);
+    rememberSeenBlock(block.hash);
     pruneLocalMempool(block);
 
     if (isNewForkId(block.forkId)) {
@@ -613,12 +621,7 @@ function handleMiningWorkerMessage(ev) {
     };
     currentMiningBlock = nextBlock;
     updateMiningActivityUi(nextBlock.index);
-    if (net) {
-      net.send('mining-on-block', {
-        blockHash: nextBlock.previousHash,
-        minerAddress: userId
-      });
-    }
+    emitMiningOnBlock(nextBlock.previousHash);
     startWorkerMiningJob(nextBlock);
   }
 }
@@ -640,13 +643,23 @@ function persistAndBroadcastNodeName(nodeName) {
   if (net && typeof net.setDisplayName === 'function') net.setDisplayName(name);
   else if (net && net.transport) net.transport.nodeDisplayName = name;
   restoreNodeNameInput(name);
-  if (net) {
-    net.send('node-name-changed', { userId: userId, name: name, role: 'miner' });
+  if (net && name) {
+    net.send('node-name-changed', { userId: userId, name: name, role: 'miner', displayName: name });
     // Repeat once — QoS 0 MQTT often drops the one-shot while miners flood hashrate
     setTimeout(function () {
-      if (net) net.send('node-name-changed', { userId: userId, name: name, role: 'miner' });
+      if (net) net.send('node-name-changed', { userId: userId, name: name, role: 'miner', displayName: name });
     }, 800);
   }
+}
+
+function scheduleBroadcastTypedName() {
+  if (_nameBroadcastTimer) clearTimeout(_nameBroadcastTimer);
+  _nameBroadcastTimer = setTimeout(function () {
+    _nameBroadcastTimer = null;
+    const typed = ($('#nodeName').val() || '').trim();
+    if (!typed || typed.length > 50) return;
+    persistAndBroadcastNodeName(typed);
+  }, 400);
 }
 
 /** Phone-width Save can clear the input after blur; put the saved name back. */
@@ -665,13 +678,43 @@ function restoreNodeNameInput(preferred) {
   $el.val(name);
 }
 
+function noteHashWork(totalIterations, startTime, reported) {
+  const now = Date.now();
+  const elapsed = Math.max(0.05, (now - (startTime || now)) / 1000);
+  const fromJob = Math.max(1, Math.floor((Number(totalIterations) || 1) / elapsed));
+  const reportedHr = Math.max(0, Math.floor(Number(reported) || 0));
+  return Math.max(fromJob, reportedHr, 1);
+}
+
+function applyLocalHashrate(hashrate) {
+  const hr = Math.max(0, Math.floor(Number(hashrate) || 0));
+  if (hr > 0) lastLocalHashrate = hr;
+  const shown = hr > 0 ? hr : (isMining && !networkPaused ? lastLocalHashrate : 0);
+  try {
+    const ch = document.getElementById('currentHashrate');
+    if (ch) ch.textContent = Number(shown).toLocaleString();
+    const yh = document.getElementById('yourHashrate');
+    if (yh) yh.textContent = Number(shown).toLocaleString() + ' H/s';
+  } catch (e) {}
+  return shown;
+}
+
+function maybeEmitHashrate(hashrate, minIntervalMs) {
+  const now = Date.now();
+  const wait = minIntervalMs != null ? minIntervalMs : 1000;
+  if (now - lastHashrateEmitAt < wait) return;
+  lastHashrateEmitAt = now;
+  emitHashrate(hashrate);
+}
+
 function emitHashrate(hashrate) {
   if (net) {
     const nm = currentNodeDisplayName();
     net.send('hashrate-update', {
       userId: userId,
       hashrate: hashrate,
-      name: nm || undefined
+      name: nm || undefined,
+      displayName: nm || undefined
     });
   } else if (typeof socket !== 'undefined' && socket) {
     socket.emit('hashrate-update', {
@@ -683,11 +726,12 @@ function emitHashrate(hashrate) {
 
 function updateMiningActivityUi(blockIndex) {
   const label = blockIndex != null ? (' (Block #' + blockIndex + ')') : '';
+  const shown = lastLocalHashrate > 0 ? lastLocalHashrate : 0;
   $('#miningActivity').html(
     '<div class="alert alert-info">' +
       '<p><strong>Mining in progress' + label + '…</strong></p>' +
       '<p>Nonce attempts: <span id="nonceCount">0</span></p>' +
-      '<p>Current hashrate: <span id="currentHashrate">0</span> H/s</p>' +
+      '<p>Current hashrate: <span id="currentHashrate">' + Number(shown).toLocaleString() + '</span> H/s</p>' +
       '<p class="small text-muted" id="bgMineNote" style="margin-top:6px;">Mining runs in a Web Worker so it continues if you switch apps/tabs. On phones, keep the screen on (or disable battery optimization for the browser) for best results.</p>' +
       '<div class="progress" style="margin-top: 10px;">' +
         '<div id="miningProgress" class="progress-bar progress-bar-striped active" style="width: 100%"></div>' +
@@ -1040,7 +1084,7 @@ function applyCanonicalChain(chain, opts) {
     const prevMain = local.slice();
     window.lastRelayedChain = merged.chain;
     chain.forEach(function (b) {
-      if (b && b.hash) seenBlocks.add(b.hash);
+      if (b && b.hash) rememberSeenBlock(b.hash);
     });
     if (prevMain.length) {
       const mainHashes = new Set((window.lastRelayedChain || []).map(function (b) { return b && b.hash; }));
@@ -1095,7 +1139,7 @@ function applyCanonicalChain(chain, opts) {
     window.lastRelayedChain = chain.slice();
   }
   chain.forEach(function (b) {
-    if (b && b.hash) seenBlocks.add(b.hash);
+    if (b && b.hash) rememberSeenBlock(b.hash);
   });
   if (prevMain.length) {
     const mainHashes = new Set(chain.map(function (b) { return b && b.hash; }));
@@ -1219,6 +1263,17 @@ function mergeKnownOrphans(list) {
   lastKnownOrphans = Array.from(byHash.values()).filter(function (b) {
     return b && b.hash && !main.has(b.hash);
   });
+  const tipIdx = (window.lastRelayedChain && window.lastRelayedChain.length)
+    ? Number(window.lastRelayedChain[window.lastRelayedChain.length - 1].index) || 0
+    : 0;
+  lastKnownOrphans = lastKnownOrphans.filter(function (b) {
+    if (isNewForkId(b.forkId)) return true;
+    if (b.index == null) return true;
+    return Number(b.index) >= tipIdx - 40;
+  });
+  if (lastKnownOrphans.length > 60) {
+    lastKnownOrphans = lastKnownOrphans.slice(-60);
+  }
   // Keep NEW-side tip sticky for miners that chose the new chain
   refreshLocalNewForkTip();
 }
@@ -1940,7 +1995,7 @@ let socket = null; // ensure no ReferenceError from any remaining legacy paths
     if (minerId === userId) return; // Ignore our own block
     if (seenBlocks.has(block.hash)) return; // Deduplicate! Stop infinite gossip loop
     
-    seenBlocks.add(block.hash);
+    rememberSeenBlock(block.hash);
     debugLog(`Received gossip block from ${minerId}: ${block.hash.substring(0, 16)}... Evaluating.`);
 
     // Track validator acceptance (broken validator = rejects everything)
@@ -2078,7 +2133,7 @@ function initClientSideNetworkingForParticipant(mode) {
       }));
     }
     if (!block) return;
-    if (block.hash) seenBlocks.add(block.hash);
+    if (block.hash) rememberSeenBlock(block.hash);
     try { handleGossipBlock(block, minerId || 'peer'); } catch (e) {}
     if (!window.lastRelayedChain) window.lastRelayedChain = [];
 
@@ -2188,7 +2243,7 @@ function initClientSideNetworkingForParticipant(mode) {
 
     // Legacy / compact single-block payload (tip extension without full chain)
     if (block) {
-      if (block.hash) seenBlocks.add(block.hash);
+      if (block.hash) rememberSeenBlock(block.hash);
       try { handleGossipBlock(block, minerId || 'relay-admin'); } catch (e) {}
       if (!window.lastRelayedChain) window.lastRelayedChain = [];
 
@@ -2524,12 +2579,14 @@ function initClientSideNetworkingForParticipant(mode) {
     showToastNotification('Connected via browser relay (no server)', 'success');
     var savedName = '';
     try { savedName = localStorage.getItem('nodeName_' + sessionId + '_' + userId) || ''; } catch (e) {}
-    if (savedName) {
-      $('#nodeName').val(savedName);
-      persistAndBroadcastNodeName(savedName);
-      rememberParticipants([{ userId: userId, address: userId, name: savedName, displayName: savedName, role: 'miner' }]);
+    var typedName = ($('#nodeName').val() || '').trim();
+    var joinName = typedName || savedName;
+    if (joinName) {
+      $('#nodeName').val(joinName);
+      persistAndBroadcastNodeName(joinName);
+      rememberParticipants([{ userId: userId, address: userId, name: joinName, displayName: joinName, role: 'miner' }]);
     }
-    restoreNodeNameInput(savedName);
+    restoreNodeNameInput(joinName);
     $('#blockchainView').html('<p class="text-muted">Connected to relay hub. Waiting for initial chain state from admin...</p>');
     // Explicitly request the state in case the automatic peer-joined didn't trigger it
     net.send('request-state', { from: userId });
@@ -2752,6 +2809,14 @@ function setupEventHandlers() {
       $('#setNodeNameBtn').click();
     }
   });
+  // Typed name must reach the hub even if the student never clicks Save.
+  // Hashrate used to carry it, but easy-diff finds never emitted progress.
+  $('#nodeName').on('blur', function () {
+    const typed = ($(this).val() || '').trim();
+    if (!typed || typed.length > 50) return;
+    persistAndBroadcastNodeName(typed);
+  });
+  $('#nodeName').on('input', scheduleBroadcastTypedName);
   $('#transactionForm').submit(function(e) {
     e.preventDefault();
     
@@ -3310,7 +3375,7 @@ function seedLocalGenesisChain() {
     data: 'Genesis Block - Blockchain Lab (Client Relay)'
   };
   window.lastRelayedChain = [genesis];
-  seenBlocks.add(genesis.hash);
+  rememberSeenBlock(genesis.hash);
   lastKnownAdminSettings = normalizeAdminSettings({
     difficultyLeading: 4,
     difficultySecondary: 8,
@@ -3451,20 +3516,30 @@ function fetchDataAndMine() {
   }
 }
 
+function miningPresencePayload(blockHash) {
+  const nm = currentNodeDisplayName();
+  return {
+    blockHash: blockHash,
+    minerAddress: userId,
+    userId: userId,
+    name: nm || undefined,
+    displayName: nm || undefined,
+    role: 'miner'
+  };
+}
+
+function emitMiningOnBlock(blockHash) {
+  const payload = miningPresencePayload(blockHash);
+  if (net) {
+    net.send('mining-on-block', payload);
+  } else if (typeof socket !== 'undefined' && socket) {
+    socket.emit('mining-on-block', Object.assign({ sessionId: sessionId }, payload));
+  }
+}
+
 function mineBlock(block, adminSettings) {
   // Report to network which block we're mining on (via relay if possible)
-  if (net) {
-    net.send('mining-on-block', {
-      blockHash: block.previousHash,
-      minerAddress: userId
-    });
-  } else if (typeof socket !== 'undefined' && socket) {
-    socket.emit('mining-on-block', {
-      sessionId: sessionId,
-      blockHash: block.previousHash,
-      minerAddress: userId
-    });
-  }
+  emitMiningOnBlock(block && block.previousHash);
 
   updateMiningActivityUi(block.index);
   currentMiningBlock = block;
@@ -3531,7 +3606,7 @@ function mineBlockOnMainThread(block, adminSettings) {
           collusionTransactions = [];
         }
         const minedBlock = JSON.parse(JSON.stringify(block));
-        seenBlocks.add(hash);
+        rememberSeenBlock(hash);
         pruneLocalMempool(minedBlock);
         if (isNewForkId(minedBlock.forkId)) {
           noteNewForkBlock(minedBlock);
@@ -3565,12 +3640,7 @@ function mineBlockOnMainThread(block, adminSettings) {
         block.timestamp = Date.now();
         nonce = 0;
         updateMiningActivityUi(block.index);
-        if (net) {
-          net.send('mining-on-block', {
-            blockHash: block.previousHash,
-            minerAddress: userId
-          });
-        }
+        emitMiningOnBlock(block.previousHash);
         break;
       }
       nonce++;
@@ -3578,22 +3648,13 @@ function mineBlockOnMainThread(block, adminSettings) {
     }
 
     lastWorkerProgressAt = Date.now();
-    const elapsed = Math.max(0.1, (Date.now() - startTime) / 1000);
-    const hashrate = Math.max(1, Math.floor(totalIterations / elapsed));
+    const hashrate = noteHashWork(totalIterations, startTime);
+    applyLocalHashrate(hashrate);
+    maybeEmitHashrate(hashrate, 1000);
     try {
       const nc = document.getElementById('nonceCount');
       if (nc) nc.textContent = nonce.toLocaleString();
-      const ch = document.getElementById('currentHashrate');
-      if (ch) ch.textContent = hashrate.toLocaleString();
-      const yh = document.getElementById('yourHashrate');
-      if (yh) yh.textContent = hashrate.toLocaleString() + ' H/s';
     } catch (e) {}
-
-    const now = Date.now();
-    if (now - lastHashrateEmitAt > 2000) {
-      lastHashrateEmitAt = now;
-      emitHashrate(hashrate);
-    }
 
     // When hidden, browsers throttle setTimeout heavily — use shortest delay
     const delay = document.hidden ? 0 : getMineCpuDelay();
@@ -3612,7 +3673,9 @@ function getMineCpuDelay() {
 
 function submitMinedBlock(block, startTime, totalIterations) {
   const totalTime = Date.now() - startTime;
-  const hashrate = Math.floor(totalIterations / (totalTime / 1000));
+  const hashrate = noteHashWork(totalIterations || 1, startTime, Math.floor((totalIterations || 1) / Math.max(0.05, totalTime / 1000)));
+  applyLocalHashrate(hashrate);
+  maybeEmitHashrate(hashrate, 400);
 
   if (!block || !block.hash) return;
   if (submittedBlockHashes.has(block.hash)) {
@@ -3634,15 +3697,17 @@ function submitMinedBlock(block, startTime, totalIterations) {
   // Optimistic tip so mempool remines don't restart on a stale parent and re-race submits
   pushOptimisticTip(block);
   
-  if (net) {
+    if (net) {
     debugLog('Broadcasting mined block via client relay');
+    const nm = currentNodeDisplayName();
+    const submitPayload = { block: block, minerId: userId, name: nm || undefined, displayName: nm || undefined };
     // In Full P2P mode, gossip the block to peers; otherwise submit to admin hub
     if (networkMode === 'p2p' || lastKnownAdminSettings?.networkMode === 'p2p' || lastKnownAdminSettings?.networkMode === 'real-p2p') {
-      net.send('block-gossip', { block, minerId: userId });
+      net.send('block-gossip', submitPayload);
       // Also emit locally as accepted for immediate UI feedback
       try { handleGossipBlock(block, userId); } catch (e) {}
     } else {
-      net.send('block-submitted', { block, minerId: userId });
+      net.send('block-submitted', submitPayload);
     }
   } else {
     console.warn('No net available for block submit');
@@ -3667,6 +3732,7 @@ function stopMining(opts) {
       ? '<p class="text-warning">Mining paused by admin (will resume automatically if switch stays ON)</p>'
       : '<p class="text-muted">Mining stopped</p>'
   );
+  lastLocalHashrate = 0;
   $('#yourHashrate').text('0 H/s');
 
   if (mainThreadMineTimer) {
@@ -3811,6 +3877,17 @@ function pathFromTipHash(tipHash) {
 }
 
 function updateParticipantBlockchainView(chainData, participants) {
+  window.__pendingChainViewArgs = { chainData: chainData, participants: participants };
+  if (_chainRenderTimer) return;
+  _chainRenderTimer = setTimeout(function () {
+    _chainRenderTimer = null;
+    const args = window.__pendingChainViewArgs || {};
+    window.__pendingChainViewArgs = null;
+    renderParticipantBlockchainViewNow(args.chainData, args.participants);
+  }, 350);
+}
+
+function renderParticipantBlockchainViewNow(chainData, participants) {
   const parts = rememberParticipants(participants);
   // Prefer explicit chain if provided and non-empty; otherwise personal/fork-aware path
   let blocks =
@@ -3845,8 +3922,19 @@ function updateParticipantBlockchainView(chainData, participants) {
     sideNote +
     '</h4>';
 
-  for (let i = 0; i < blocks.length; i++) {
-    const block = blocks[i];
+  const windowed = (CD && typeof CD.windowBlocksForDisplay === 'function')
+    ? CD.windowBlocksForDisplay(blocks, 24)
+    : { blocks: blocks, omitted: 0, keptGenesis: false };
+  if (windowed.omitted > 0) {
+    html +=
+      '<p class="small text-muted" style="margin-bottom:8px;">Showing genesis + recent blocks (' +
+      windowed.omitted +
+      ' earlier hidden). Height above is the full tip.</p>';
+  }
+
+  const visible = windowed.blocks || blocks;
+  for (let i = 0; i < visible.length; i++) {
+    const block = visible[i];
     const highlight = block.miner === userId ? 'panel-success' : 'panel-default';
     const minerId = block.miner != null ? block.miner : '';
 
@@ -3900,6 +3988,9 @@ function updateParticipantBlockchainView(chainData, participants) {
   }
 
   $('#blockchainView').html(html || '<p class="text-muted">No blocks yet</p>');
+  if (window.ChainDisplay && typeof ChainDisplay.pinChainPanelToTip === 'function') {
+    ChainDisplay.pinChainPanelToTip(document.getElementById('blockchainView'));
+  }
 }
 
 function updateNetworkBlockchainView(mainChain, orphans, participants) {
@@ -3915,7 +4006,8 @@ function updateNetworkBlockchainView(mainChain, orphans, participants) {
       orphans: orphanList,
       participants: parts,
       openTxPanels: openTxPanels,
-      hubHeight: hubConfirmedHeight
+      hubHeight: hubConfirmedHeight,
+      maxVisible: 24
     });
     const newSide = (orphanList || []).filter(function (b) {
       return b && (b.forkId === 'new' || b.forkId === 'NEW');
@@ -3945,6 +4037,9 @@ function updateNetworkBlockchainView(mainChain, orphans, participants) {
         html;
     }
     $('#networkBlockchainView').html(html);
+    if (typeof ChainDisplay.pinChainPanelToTip === 'function') {
+      ChainDisplay.pinChainPanelToTip(document.getElementById('networkBlockchainView'));
+    }
     return;
   }
   $('#networkBlockchainView').html('<p class="text-muted">No blocks yet</p>');

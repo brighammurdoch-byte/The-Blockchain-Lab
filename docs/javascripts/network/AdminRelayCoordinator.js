@@ -128,6 +128,16 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
   _handleBlockSubmitted(msg) {
     const block = msg.payload?.block || msg.block;
     const from = msg.from || msg.payload?.minerId;
+    const incomingName = String(
+      (msg.payload && (msg.payload.displayName || msg.payload.name)) ||
+      msg.displayName || msg.name || ''
+    ).trim();
+    if (from && incomingName && this.lab && typeof this.lab.addOrUpdateParticipant === 'function') {
+      this.lab.addOrUpdateParticipant(from, 'miner', {
+        name: incomingName,
+        displayName: incomingName
+      });
+    }
 
     if (this.lab && this.lab.networkPaused) {
       this.net.send('block-rejected', {
