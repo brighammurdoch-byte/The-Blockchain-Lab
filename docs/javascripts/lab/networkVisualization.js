@@ -327,6 +327,16 @@ class NetworkVisualization {
     }
     const modeChanged = prevMode !== this.topologyMode;
 
+    if (!nodesChanged && !linksChanged && !modeChanged && !opts.forceRelayout) {
+      // Name / status / hashrate only — do not rebuild D3 or restart forces
+      // (join-burst full relayout was an admin Aw Snap path).
+      miners.forEach((miner) => {
+        if (miner.name) this.setNodeName(miner.userId, miner.name);
+        if (miner.status) this.setNodeStatus(miner.userId, miner.status);
+      });
+      return;
+    }
+
     this.animateLinkChanges(this.links, newLinks);
     this.links = newLinks;
 

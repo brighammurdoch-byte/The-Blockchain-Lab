@@ -97,14 +97,13 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
           extra.displayName = nm;
         }
         this.lab.addOrUpdateParticipant(msg.from, role, extra);
-        if (typeof this.lab._recomputeMiningRewards === 'function') {
-          this.lab._recomputeMiningRewards();
-        }
+        // Do not _recomputeMiningRewards on join — walking the chain in the
+        // same turn as the join toast OOMs the hub (ST0R8T Aw Snap error 9).
       }
     }
 
     // Yield so a join toast cannot synchronously serialize the full chain
-    // + topology + roster in the same turn (XU1J1S Aw Snap error 9).
+    // + topology + roster in the same turn (XU1J1S / ST0R8T Aw Snap error 9).
     const self = this;
     const to = msg.from;
     setTimeout(function () {
@@ -118,16 +117,16 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
       }
 
       self.net.send('initial-state', state, to);
+    }, 100);
 
-      // Tell the room the new wallet's funded balance (so rosters update)
-      if (!isProbe && self.lab && self.lab.participants) {
-        try {
-          self.net.send('participants-roster', {
-            participants: Array.from(self.lab.participants.values())
-          });
-        } catch (e) {}
-      }
-    }, 0);
+    setTimeout(function () {
+      if (isProbe || !self.lab || !self.lab.participants) return;
+      try {
+        self.net.send('participants-roster', {
+          participants: Array.from(self.lab.participants.values())
+        });
+      } catch (e) {}
+    }, 220);
   }
 
   _handleBlockSubmitted(msg) {
@@ -246,7 +245,7 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
       }, from);
       if (this.lab && typeof this.lab.maybeEaseDifficultyIfStalled === 'function') {
         const eased = this.lab.maybeEaseDifficultyIfStalled();
-        if (eased) {
+        if (eased && !eased.difficultyUnchanged) {
           this.broadcastSettings(eased);
           if (typeof this.onDifficultyRetarget === 'function') {
             try { this.onDifficultyRetarget(eased); } catch (e) {}

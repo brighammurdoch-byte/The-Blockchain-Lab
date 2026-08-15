@@ -320,12 +320,12 @@ function classroomLab(leading, secondary) {
   const obsPug = loadFile('views/lab/observe.pug');
   const indexPug = loadFile('views/lab/index.pug');
   const ok =
-    /RelayBlockchainState\.js\?v=p4fix6/.test(adminPug + partPug + obsPug + indexPug) &&
-    /admin\.js\?v=p4fix6/.test(adminPug) &&
+    /RelayBlockchainState\.js\?v=p4fix7/.test(adminPug + partPug + obsPug + indexPug) &&
+    /admin\.js\?v=p4fix7/.test(adminPug) &&
     /observe\.js\?v=p4fix5/.test(obsPug) &&
     /NetworkManager\.js\?v=p4fix5/.test(adminPug + partPug + obsPug);
-  if (ok) pass('Edited scripts cache-bust p4fix6', '');
-  else fail('Edited scripts cache-bust p4fix6', 'stale ?v=');
+  if (ok) pass('Edited scripts cache-bust p4fix7', '');
+  else fail('Edited scripts cache-bust p4fix7', 'stale ?v=');
 })();
 
 const failed = results.filter(function (r) { return !r.ok; });

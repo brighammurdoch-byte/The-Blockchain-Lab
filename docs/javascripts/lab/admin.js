@@ -106,10 +106,27 @@ function applyInboundDisplayName(msg, opts) {
   relayState.addOrUpdateParticipant(uid, role, extra);
   const viz = window.networkViz || networkViz;
   if (viz && typeof viz.setNodeName === 'function') {
-    viz.setNodeName(uid, name);
+    // Do not touch D3 in the same turn as a join toast (Aw Snap error 9).
+    setTimeout(function () {
+      try { viz.setNodeName(uid, name); } catch (eName) {}
+    }, 0);
   }
   return true;
 }
+
+/**
+ * Opening /lab/admin.html with no ?session= must NOT mint a classroom
+ * (ST0R8T leftover Create produced 91G5M2 / B78D9J empty hubs).
+ */
+function adminShouldHostSession(code) {
+  const s = String(code || '').trim().toUpperCase();
+  if (!s) return false;
+  if (typeof LabPaths !== 'undefined' && LabPaths && typeof LabPaths.isSessionCode === 'function') {
+    return LabPaths.isSessionCode(s);
+  }
+  return /^[A-Z0-9]{4,8}$/.test(s) && !/^(ADMIN|INDEX|LAB)$/.test(s);
+}
+if (typeof window !== 'undefined') window.adminShouldHostSession = adminShouldHostSession;
 
 function formatDifficultyLabel(leading, secondary) {
   if (window.RelayBlockchainState && typeof RelayBlockchainState.formatDifficultyLabel === 'function') {
@@ -166,6 +183,14 @@ if (!$('#toastStyles').length) {
 $(document).ready(function() {
   // Extract sessionId from URL (path or ?session= for static hosting)
   sessionId = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || '';
+  if (!adminShouldHostSession(sessionId)) {
+    // Sit on the landing — do not call createRoom / initAsAdmin.
+    var land = (window.LabPaths && typeof LabPaths.labUrl === 'function')
+      ? LabPaths.labUrl('index')
+      : '/lab/index.html';
+    try { window.location.replace(land); } catch (eLand) {}
+    return;
+  }
   if (window.LabPaths && LabPaths.persistChainFlavor) {
     LabPaths.persistChainFlavor(sessionId, LabPaths.getChainFlavor());
   }
@@ -244,17 +269,27 @@ $(document).ready(function() {
     }
   }, 5000);
 
+  // Since Last Block must tick on the wall clock while the tip is frozen
+  // (ST0R8T stuck at 31s because the label only updated on a new block).
+  setInterval(function () {
+    if (typeof refreshSinceLastBlockDisplay === 'function') refreshSinceLastBlockDisplay();
+  }, 1000);
+
   // If auto-difficulty overshot, ease down when no block lands for a while
   setInterval(function () {
     if (!relayState || !coordinator) return;
     if (typeof refreshBlockPaceDisplay === 'function') refreshBlockPaceDisplay();
+    if (typeof refreshSinceLastBlockDisplay === 'function') refreshSinceLastBlockDisplay();
     if (typeof relayState.maybeEaseDifficultyIfStalled !== 'function') return;
     const eased = relayState.maybeEaseDifficultyIfStalled();
-    if (eased) {
+    if (eased && !eased.difficultyUnchanged) {
       coordinator.broadcastSettings(eased);
+      if (typeof republishHubTipToMiners === 'function') republishHubTipToMiners();
       if (typeof coordinator.onDifficultyRetarget === 'function') {
         try { coordinator.onDifficultyRetarget(eased); } catch (e) {}
       }
+    } else if (eased && eased.republishTip) {
+      if (typeof republishHubTipToMiners === 'function') republishHubTipToMiners();
     }
   }, 5000);
 
@@ -693,19 +728,15 @@ function initClientSideNetworking(mode, roomCode) {
         extra.displayName = known;
       }
       relayState.addOrUpdateParticipant(msg.from, role, extra);
-      if (typeof relayState._recomputeMiningRewards === 'function') {
-        relayState._recomputeMiningRewards();
-      }
+      // Do not walk the whole chain here — join + toast + rewards + D3
+      // in one turn Aw Snapped the hub (ST0R8T error 9).
     }
     // Join toast must not rebuild chain + topology + roster in this turn
-    // (XU1J1S Aw Snap error 9 on first miner join).
-    if (typeof scheduleRenderClientParticipants === 'function') {
+    // (XU1J1S / ST0R8T Aw Snap error 9). Stagger paints across macrotasks.
+    if (typeof scheduleJoinUiPaints === 'function') {
+      scheduleJoinUiPaints();
+    } else if (typeof scheduleRenderClientParticipants === 'function') {
       scheduleRenderClientParticipants();
-    } else if (typeof renderClientParticipants === 'function') {
-      renderClientParticipants();
-    }
-    if (typeof scheduleRenderClientRelayChain === 'function') {
-      scheduleRenderClientRelayChain();
     }
     // Push roster so existing miners/wallets can see the new address immediately
     if (relayState && net) {
@@ -715,7 +746,7 @@ function initClientSideNetworking(mode, roomCode) {
             participants: Array.from(relayState.participants.values())
           });
         } catch (e) {}
-      }, 0);
+      }, 120);
     }
   });
 
@@ -908,9 +939,8 @@ function initClientSideNetworking(mode, roomCode) {
     const uid = payload.userId || msg.from;
     const existing = uid ? relayState.participants.get(uid) : null;
     const role = (existing && existing.role) || payload.role || 'miner';
-    if (typeof scheduleRenderClientParticipants === 'function') scheduleRenderClientParticipants();
-    else if (typeof renderClientParticipants === 'function') renderClientParticipants();
-    if (typeof scheduleRenderClientRelayChain === 'function') scheduleRenderClientRelayChain();
+    if (typeof scheduleJoinUiPaints === 'function') scheduleJoinUiPaints();
+    else if (typeof scheduleRenderClientParticipants === 'function') scheduleRenderClientParticipants();
     refreshLiveNodeBadge();
 
     if (net && net.isAdmin && uid) {
@@ -1826,7 +1856,69 @@ function schedulePersistAdminState() {
   }, 2000);
 }
 
-function scheduleRenderClientRelayChain() {
+function refreshSinceLastBlockDisplay() {
+  if (!relayState) return;
+  try {
+    const ms = (typeof relayState.sinceLastBlockMs === 'function')
+      ? relayState.sinceLastBlockMs()
+      : (relayState.networkStats && relayState.networkStats.lastBlockTime
+        ? Date.now() - relayState.networkStats.lastBlockTime
+        : 0);
+    $('#lastBlockTime').text(Math.floor(Math.max(0, ms) / 1000) + 's');
+  } catch (e) {}
+}
+
+var _lastTipRepublishAt = 0;
+function republishHubTipToMiners() {
+  if (!relayState || !net) return;
+  const now = Date.now();
+  if (_lastTipRepublishAt && now - _lastTipRepublishAt < 15000) return;
+  _lastTipRepublishAt = now;
+  try {
+    const compact = (typeof relayState.compactChainForTransport === 'function')
+      ? relayState.compactChainForTransport(50000)
+      : { chain: (relayState.chain || []).slice(-20), chainTruncated: true };
+    net.send('initial-state', {
+      chain: compact.chain,
+      chainTruncated: !!compact.chainTruncated,
+      chainHeight: compact.chainHeight != null
+        ? compact.chainHeight
+        : (relayState.networkStats && relayState.networkStats.blockHeight),
+      tipHash: compact.tipHash,
+      tipIndex: compact.tipIndex,
+      adminSettings: Object.assign({}, relayState.settings),
+      networkStats: relayState.networkStats ? Object.assign({}, relayState.networkStats) : undefined,
+      pendingTransactions: Array.isArray(relayState.pendingTransactions)
+        ? relayState.pendingTransactions.slice(0, 20)
+        : []
+    });
+  } catch (e) {}
+}
+
+var _joinPaintGen = 0;
+function scheduleJoinUiPaints() {
+  // Never run roster / chain / topology in the same turn as a join toast.
+  const gen = ++_joinPaintGen;
+  setTimeout(function () {
+    if (gen !== _joinPaintGen) return;
+    if (typeof scheduleRenderClientParticipants === 'function') scheduleRenderClientParticipants();
+  }, 80);
+  setTimeout(function () {
+    if (gen !== _joinPaintGen) return;
+    if (typeof scheduleRenderClientRelayChain === 'function') {
+      scheduleRenderClientRelayChain({ skipTopology: true, skipRoster: true });
+    }
+  }, 220);
+  setTimeout(function () {
+    if (gen !== _joinPaintGen) return;
+    if (typeof renderClientRelayChain === 'function') {
+      renderClientRelayChain({ skipRoster: true });
+    }
+  }, 480);
+}
+
+function scheduleRenderClientRelayChain(opts) {
+  opts = opts || {};
   // Keep height/stats snappy even while the heavy chain HTML is throttled
   if (relayState) {
     try {
@@ -1837,17 +1929,14 @@ function scheduleRenderClientRelayChain() {
       if (relayState.networkStats && relayState.networkStats.totalHashrate != null) {
         $('#totalHashrate').text((relayState.networkStats.totalHashrate || 0).toFixed(0) + ' H/s');
       }
-      if (relayState.networkStats && relayState.networkStats.lastBlockTime) {
-        const secondsAgo = Math.floor((Date.now() - relayState.networkStats.lastBlockTime) / 1000);
-        $('#lastBlockTime').text(secondsAgo + 's');
-      }
+      if (typeof refreshSinceLastBlockDisplay === 'function') refreshSinceLastBlockDisplay();
       if (typeof refreshBlockPaceDisplay === 'function') refreshBlockPaceDisplay();
     } catch (e) {}
   }
   if (_relayRenderTimer) return;
   _relayRenderTimer = setTimeout(function () {
     _relayRenderTimer = null;
-    renderClientRelayChain();
+    renderClientRelayChain(opts);
   }, 500);
 }
 
@@ -2184,7 +2273,9 @@ function renderClientRelayChain(opts) {
   if (relayState.settings && relayState.settings.autoDifficulty) {
     syncDifficultyControlsFromState(relayState.settings);
   }
-  if (relayState.networkStats.lastBlockTime) {
+  if (typeof refreshSinceLastBlockDisplay === 'function') {
+    refreshSinceLastBlockDisplay();
+  } else if (relayState.networkStats.lastBlockTime) {
     const secondsAgo = Math.floor((Date.now() - relayState.networkStats.lastBlockTime) / 1000);
     $('#lastBlockTime').text(secondsAgo + 's');
   }
@@ -2200,8 +2291,10 @@ function renderClientRelayChain(opts) {
   if (typeof refreshBlockPaceDisplay === 'function') refreshBlockPaceDisplay();
   if (typeof refreshForkHeightDefault === 'function') refreshForkHeightDefault(false);
 
-  // Update participants table from relay state
-  renderClientParticipants();
+  // Update participants table from relay state (skip on join-staggered paints)
+  if (!opts.skipRoster && typeof renderClientParticipants === 'function') {
+    renderClientParticipants();
+  }
 
   // Shared mempool (pending txs) — visible on admin projector
   if (typeof updatePendingTransactions === 'function') {
@@ -2229,7 +2322,9 @@ function renderClientRelayChain(opts) {
   }
   const nowTopo = Date.now();
   const forceTopo = !!opts.forceTopologyRelayout || !!opts.forceGossipRewire;
-  if (viz && typeof viz.updateTopology === 'function' && (forceTopo || !_lastTopoAt || nowTopo - _lastTopoAt > 1000)) {
+  if (opts.skipTopology) {
+    // Join-staggered chain paint — topology runs in a later turn.
+  } else if (viz && typeof viz.updateTopology === 'function' && (forceTopo || !_lastTopoAt || nowTopo - _lastTopoAt > 1000)) {
     _lastTopoAt = nowTopo;
     try {
       const participantsArr = Array.from(relayState.participants.values())
