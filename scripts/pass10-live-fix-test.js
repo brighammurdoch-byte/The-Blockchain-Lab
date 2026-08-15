@@ -251,11 +251,11 @@ function armFreeze(lab, agoMs) {
   const indexPug = loadFile('views/lab/index.pug');
   const ok =
     /RelayBlockchainState\.js\?v=p4fix7/.test(adminPug + partPug + obsPug + indexPug) &&
-    /admin\.js\?v=p4fix7/.test(adminPug) &&
+    /admin\.js\?v=p4fix8/.test(adminPug) &&
     /AdminRelayCoordinator\.js\?v=p4fix7/.test(adminPug + partPug + obsPug) &&
     /networkVisualization\.js\?v=p4fix7/.test(adminPug) &&
     /Persistence\.js\?v=p4fix6/.test(adminPug + indexPug) &&
-    /landing\.js\?v=p4fix6/.test(indexPug);
+    /landing\.js\?v=p4fix8/.test(indexPug);
   if (ok) pass('Edited scripts cache-bust p4fix7', '');
   else fail('Edited scripts cache-bust p4fix7', 'stale ?v=');
 })();

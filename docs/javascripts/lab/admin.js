@@ -117,6 +117,7 @@ function applyInboundDisplayName(msg, opts) {
 /**
  * Opening /lab/admin.html with no ?session= must NOT mint a classroom
  * (ST0R8T leftover Create produced 91G5M2 / B78D9J empty hubs).
+ * Shape-only: a leftover ?session=CODE still looks valid here.
  */
 function adminShouldHostSession(code) {
   const s = String(code || '').trim().toUpperCase();
@@ -127,6 +128,26 @@ function adminShouldHostSession(code) {
   return /^[A-Z0-9]{4,8}$/.test(s) && !/^(ADMIN|INDEX|LAB)$/.test(s);
 }
 if (typeof window !== 'undefined') window.adminShouldHostSession = adminShouldHostSession;
+
+/**
+ * Leftover-URL rehost (IF16FZ / 91G5M2): history or a new tab of
+ * admin.html?session=CODE must not initAsAdmin unless THIS tab just
+ * Created or is already the live hub for that exact code.
+ * sessionStorage only — never last-session / localStorage.
+ */
+function adminTabOwnsHub(code) {
+  const s = String(code || '').trim().toUpperCase();
+  if (!s) return false;
+  if (typeof Persistence !== 'undefined' && Persistence && typeof Persistence.isLiveAdminHub === 'function') {
+    if (Persistence.isLiveAdminHub(s)) return true;
+  }
+  try {
+    if (sessionStorage.getItem('labAdminFreshCreate_' + s) === '1') return true;
+    if (sessionStorage.getItem('labAdminLiveHub_' + s) === '1') return true;
+  } catch (eOwn) {}
+  return false;
+}
+if (typeof window !== 'undefined') window.adminTabOwnsHub = adminTabOwnsHub;
 
 function formatDifficultyLabel(leading, secondary) {
   if (window.RelayBlockchainState && typeof RelayBlockchainState.formatDifficultyLabel === 'function') {
@@ -183,8 +204,9 @@ if (!$('#toastStyles').length) {
 $(document).ready(function() {
   // Extract sessionId from URL (path or ?session= for static hosting)
   sessionId = (window.LabPaths && LabPaths.getSessionIdFromLocation()) || '';
-  if (!adminShouldHostSession(sessionId)) {
-    // Sit on the landing — do not call createRoom / initAsAdmin.
+  if (!adminShouldHostSession(sessionId) || !adminTabOwnsHub(sessionId)) {
+    // Bare URL: landing, do not mint. Leftover ?session=CODE this tab
+    // did not Create / is not hosting: same. Never createRoom / initAsAdmin.
     var land = (window.LabPaths && typeof LabPaths.labUrl === 'function')
       ? LabPaths.labUrl('index')
       : '/lab/index.html';

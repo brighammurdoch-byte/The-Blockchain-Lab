@@ -615,7 +615,7 @@ const Relay = loadRelay();
       && /RelayBlockchainState\.js\?v=p4fix7/.test(partPug)
       && /participate\.js\?v=p4fix3/.test(partPug)
       && /observe\.js\?v=p4fix5/.test(obsPug)
-      && /admin\.js\?v=p4fix7/.test(adminPug)) {
+      && /admin\.js\?v=p4fix8/.test(adminPug)) {
     pass('Changed assets cache-bust (p4fix7 on edited scripts)', '');
   } else fail('Changed assets cache-bust (p4fix7 on edited scripts)', 'stale ?v=');
 })();
