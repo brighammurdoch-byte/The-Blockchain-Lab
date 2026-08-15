@@ -56,22 +56,23 @@ const ChainDisplay = loadChainDisplay();
     difficultyLeading: 1,
     difficultySecondary: 0
   });
-  lab.networkStats.blockIntervals = [300, 300, 280];
+  lab.networkStats.blockIntervals = [300, 300, 280, 310];
   lab.networkStats.totalHashrate = 70000;
   const first = lab.maybeRetargetDifficulty();
   if (!(first && first.difficultyLeading === 2)) {
     fail('First way-too-fast step is 1→2', first ? JSON.stringify(first) : 'no change');
     return;
   }
-  lab.networkStats.lastRetarget.at = Date.now() - 6000;
-  lab.networkStats.blockIntervals = [300, 300, 280];
+  lab.networkStats.lastRetarget.at = Date.now() - 36000;
+  lab.networkStats.lastRetarget.leadingZeroAt = Date.now() - 36000;
+  lab.networkStats.blockIntervals = [300, 300, 280, 310];
   lab.networkStats.totalHashrate = 70000;
   const second = lab.maybeRetargetDifficulty();
   if (second && second.difficultyLeading === 3 && Number(second.difficultySecondary) === 0) {
-    pass('Still-too-fast after cooldown adds one more zero (2→3)',
+    pass('Still-too-fast after inter-zero cooldown adds one more zero (2→3)',
       second.difficultyLeading + '+0x' + Number(second.difficultySecondary).toString(16));
   } else {
-    fail('Still-too-fast after cooldown adds one more zero (2→3)',
+    fail('Still-too-fast after inter-zero cooldown adds one more zero (2→3)',
       second ? (second.difficultyLeading + '+0x' + Number(second.difficultySecondary).toString(16)) : 'no change');
   }
 })();
@@ -252,20 +253,20 @@ const ChainDisplay = loadChainDisplay();
   }
 })();
 
-// --- 12. Cache-bust p4fix3 on every edited asset ---
+// --- 12. Cache-bust p4fix4 on this pass's edited assets ---
 (function () {
   const adminPug = loadFile('views/lab/admin.pug');
   const partPug = loadFile('views/lab/participate.pug');
   const obsPug = loadFile('views/lab/observe.pug');
   const ok =
-    /RelayBlockchainState\.js\?v=p4fix3/.test(adminPug + partPug + obsPug) &&
-    /admin\.js\?v=p4fix3/.test(adminPug) &&
+    /RelayBlockchainState\.js\?v=p4fix4/.test(adminPug + partPug + obsPug) &&
+    /admin\.js\?v=p4fix4/.test(adminPug) &&
     /participate\.js\?v=p4fix3/.test(partPug) &&
     /chainDisplay\.js\?v=p4fix3/.test(adminPug + partPug) &&
     /networkVisualization\.js\?v=p4fix3/.test(adminPug) &&
     /AdminRelayCoordinator\.js\?v=p4fix3/.test(adminPug);
-  if (ok) pass('Changed assets cache-bust (p4fix3)', '');
-  else fail('Changed assets cache-bust (p4fix3)', 'stale ?v=');
+  if (ok) pass('Changed assets cache-bust (p4fix4 on edited scripts)', '');
+  else fail('Changed assets cache-bust (p4fix4 on edited scripts)', 'stale ?v=');
 })();
 
 const failed = results.filter(function (r) { return !r.ok; });
