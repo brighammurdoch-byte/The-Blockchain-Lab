@@ -182,9 +182,17 @@ const Relay = loadRelay();
   lab.networkStats.averageBlockTimeMs = 250;
   lab.networkStats.lastBlockTime = Date.now() - 50000;
   const eased = lab.maybeEaseDifficultyIfStalled();
-  if (!eased) pass('Stall-ease skipped when recent blocks were too fast', '');
-  else fail('Stall-ease skipped when recent blocks were too fast',
-    eased.difficultyLeading + '+0x' + Number(eased.difficultySecondary).toString(16));
+  // A 50s freeze with leftover 0.3s samples is a stalled tip, not a burst.
+  if (eased && (
+    eased.difficultyLeading < 4 ||
+    Number(eased.difficultySecondary) > 1
+  )) {
+    pass('Frozen tip eases even with leftover fast samples',
+      eased.difficultyLeading + '+0x' + Number(eased.difficultySecondary).toString(16));
+  } else {
+    fail('Frozen tip eases even with leftover fast samples',
+      eased ? (eased.difficultyLeading + '+0x' + Number(eased.difficultySecondary).toString(16)) : 'no ease');
+  }
 })();
 
 // --- 6. observedPaceMs does not keep advertising 0.1s while height is frozen ---

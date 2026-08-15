@@ -596,11 +596,12 @@ function initClientSideNetworking(mode, roomCode) {
             : (relayState && typeof relayState.observedPaceMs === 'function'
               ? relayState.observedPaceMs()
               : (relayState && relayState.networkStats && relayState.networkStats.averageBlockTimeMs)));
+        const paceBit = (avgMs != null && !isNaN(avgMs) && avgMs > 0)
+          ? ((avgMs >= 10000 ? (avgMs / 1000).toFixed(0) : (avgMs / 1000).toFixed(1)) + 's')
+          : '';
         const avgBit = (lastRt && lastRt.stalled)
-          ? '; easing after a stall'
-          : ((avgMs != null && !isNaN(avgMs) && avgMs > 0)
-            ? ('; observed avg ' + (avgMs >= 10000 ? (avgMs / 1000).toFixed(0) : (avgMs / 1000).toFixed(1)) + 's')
-            : '');
+          ? ('; easing after a stall' + (paceBit ? ', observed ' + paceBit : ''))
+          : (paceBit ? ('; observed avg ' + paceBit) : '');
         showToastNotification(
           'Difficulty now ' + formatDifficultyLabel(settings.difficultyLeading, settings.difficultySecondary) +
           ' (target ' + t + 's' + avgBit + ')',

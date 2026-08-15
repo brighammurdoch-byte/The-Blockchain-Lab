@@ -174,6 +174,30 @@ if (typeof window.RelayBlockchainState === 'undefined') {
   }
 
   /**
+   * One leading-zero increase per ~3.5× target (35s at 10s). The 5s general
+   * cooldown let 1→2→3→4→5 fire in ~20s once lastRetarget.at actually
+   * expired (QT0G4E after p4fix3).
+   */
+  _zeroCooldownMs() {
+    return Math.max(this._targetMs() * 3.5, 35000);
+  }
+
+  /** Hashrate-implied leading zeros for the 10s classroom target, or null. */
+  _wantLeadingFromHashrate() {
+    const hs = Number(this.networkStats && this.networkStats.totalHashrate) || 0;
+    if (hs <= 500) return null;
+    const wantScore = this._scoreForTargetHashes(hs * (this._targetMs() / 1000));
+    return Math.floor(wantScore / 16);
+  }
+
+  _leadingZeroOnCooldown() {
+    const lastRt = this.networkStats && this.networkStats.lastRetarget;
+    const at = lastRt && lastRt.leadingZeroAt;
+    if (!at) return false;
+    return (Date.now() - at) < this._zeroCooldownMs();
+  }
+
+  /**
    * Bound one observed interval so a 0.1s burst or a 101s stall recovery
    * cannot snap the controller. Floor keeps "too fast" visible; cap is 2.5× target.
    */
@@ -266,11 +290,19 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     }
 
     // Way-too-fast: ≥3× quicker than target for several fresh samples.
-    // Repeatable: 1→2, then after cooldown 2→3, then 3→4. Never 1→4 / 2→5
-    // in one retarget. 4W4KV3 froze at 2+0x0 because the climb path only
-    // ran once and the hub redraw kept resetting lastRetarget.at.
+    // Repeatable after the inter-zero cooldown: 1→2, later 2→3. Never 1→4
+    // / 2→5 in one retarget. Do not add a zero past the hashrate-implied
+    // leading count (4+0xC → 5+0xC was QT0G4E: 1.5s still looked "too fast").
     const wayTooFast = ratio > 0 && ratio < (1 / 3) && recent.length >= 2;
-    if (wayTooFast && curLeading < 5) {
+    const wantLeading = this._wantLeadingFromHashrate();
+    const lastAddedZero = !!(lastRt && lastRt.addedLeadingZero);
+    const samplesForZero = lastAddedZero ? 4 : 2;
+    const canAddZero = wayTooFast
+      && curLeading < 5
+      && !this._leadingZeroOnCooldown()
+      && recent.length >= samplesForZero
+      && (wantLeading == null || wantLeading > curLeading);
+    if (canAddZero) {
       const nextLeading = curLeading + 1;
       const keepS = Math.max(0, Math.min(15, Number(this.settings.difficultySecondary) || 0));
       const next = this._scoreToDifficulty(nextLeading * 16 + keepS);
@@ -281,6 +313,20 @@ if (typeof window.RelayBlockchainState === 'undefined') {
         return this._commitRetarget(next, avg, targetMs, ratio, curScore);
       }
     }
+    if (wayTooFast && !canAddZero) {
+      // Still too fast but another zero is rate-limited or already at the
+      // hashrate-implied L. Tighten the nibble (lower S = harder) instead.
+      const curS = Math.max(0, Math.min(15, Number(this.settings.difficultySecondary) || 0));
+      if (curS > 0) {
+        const next = this._scoreToDifficulty(curLeading * 16 + Math.max(0, curS - 2));
+        if (
+          next.difficultyLeading !== this.settings.difficultyLeading ||
+          next.difficultySecondary !== this.settings.difficultySecondary
+        ) {
+          return this._commitRetarget(next, avg, targetMs, ratio, curScore);
+        }
+      }
+    }
 
     delta = Math.max(-2, Math.min(2, delta));
     if (delta === 0) return null;
@@ -289,6 +335,10 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const nextLeading = Math.floor(nextScore / 16);
     if (nextLeading > curLeading + 1) nextScore = (curLeading + 1) * 16 + 0;
     if (nextLeading < curLeading - 1) nextScore = curLeading * 16 + 0;
+    // Inter-zero cooldown also applies to a nibble step that would cross L.
+    if (Math.floor(nextScore / 16) > curLeading && this._leadingZeroOnCooldown()) {
+      nextScore = curLeading * 16 + Math.min(15, (curScore % 16));
+    }
 
     const next = this._scoreToDifficulty(nextScore);
     if (
@@ -303,6 +353,10 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
   _commitRetarget(next, avg, targetMs, ratio, curScore) {
     const nextScore = this._difficultyScore(next.difficultyLeading, next.difficultySecondary);
+    const prevL = this.settings.difficultyLeading;
+    const addedLeadingZero = next.difficultyLeading > prevL;
+    const prevZeroAt = this.networkStats && this.networkStats.lastRetarget
+      && this.networkStats.lastRetarget.leadingZeroAt;
     this.networkStats.prevDifficulty = {
       leading: this.settings.difficultyLeading,
       secondary: this.settings.difficultySecondary
@@ -318,7 +372,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       ratio: ratio,
       delta: nextScore - curScore,
       leading: next.difficultyLeading,
-      secondary: next.difficultySecondary
+      secondary: next.difficultySecondary,
+      addedLeadingZero: addedLeadingZero,
+      leadingZeroAt: addedLeadingZero ? Date.now() : prevZeroAt
     };
     this.networkStats.averageBlockTimeMs = avg;
     return Object.assign({}, this.settings);
@@ -336,49 +392,60 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const targetMs = this._targetMs();
     const last = this.networkStats && this.networkStats.lastBlockTime;
     const lastRt = this.networkStats && this.networkStats.lastRetarget;
-    const lastDelta = lastRt ? Number(lastRt.delta) || 0 : 0;
-    // After an upward retarget, ease sooner — that freeze is the overshoot,
-    // not a 25s "wait then one nibble" stall that left height frozen.
-    const waitMs = lastDelta > 0
-      ? Math.max(targetMs * 1.5, 12000)
+    const hs = Number(this.networkStats && this.networkStats.totalHashrate) || 0;
+    const hashing = hs > 500;
+    // Miners hashing + tip freeze: ease at ~12s (QT0G4E sat at 58s).
+    // Empty hub keeps a longer wait so a brief pause does not collapse.
+    const waitMs = hashing
+      ? Math.max(targetMs * 1.2, 12000)
       : Math.max(targetMs * 2.5, 22000);
-    const since = last || (lastRt && lastRt.at);
-    if (since && Date.now() - since < waitMs) return null;
-    if (!since && this.chain && this.chain.length <= 1) return null;
+    const sinceTs = last || (lastRt && lastRt.at);
+    const sinceMs = sinceTs ? Date.now() - sinceTs : 0;
+    if (sinceTs && sinceMs < waitMs) return null;
+    if (!sinceTs && this.chain && this.chain.length <= 1) return null;
 
-    // Fast-sample guard only applies to intervals mined at the CURRENT
-    // difficulty. Retarget clears the list; leftover 0.3s samples from
-    // before a 1→4 jump must not block ease (that was the 25s tip freeze).
     const recent = Array.isArray(this.networkStats && this.networkStats.blockIntervals)
       ? this.networkStats.blockIntervals.slice(-6)
       : [];
     const recentMedian = this._medianMs(recent);
-    if (recentMedian > 0 && recentMedian < targetMs * 0.8) {
+    // Leftover 0.3s/2.1s samples must not block ease on a frozen tip
+    // (QT0G4E: 2.1s median at 5+0xC, then 58s with 18k+ H/s). Only trust
+    // "still too fast" when a block actually landed recently.
+    const lastBlockAge = last ? Date.now() - last : Infinity;
+    if (recentMedian > 0 && recentMedian < targetMs * 0.8 && lastBlockAge < waitMs) {
       return null;
     }
 
-    const curScore = this._difficultyScore(
-      this.settings.difficultyLeading,
-      this.settings.difficultySecondary
-    );
-    if (curScore <= 1 * 16 + 0) return null;
+    const curL = Math.max(1, Math.min(6, Number(this.settings.difficultyLeading) || 1));
+    const curS = Math.max(0, Math.min(15, Number(this.settings.difficultySecondary) || 0));
+    if (curL <= 1 && curS >= 15) return null;
 
-    // Never collapse past the hashrate-implied target minus a small cushion.
-    let floor = 1 * 16 + 0;
-    const hs = Number(this.networkStats && this.networkStats.totalHashrate) || 0;
-    if (hs > 500) {
-      const wantScore = this._scoreForTargetHashes(hs * (targetMs / 1000));
-      floor = Math.max(floor, wantScore - 8);
+    const wantL = this._wantLeadingFromHashrate();
+    // Higher S = more permissive next nibble = easier. Score-1 walked
+    // 5+0xC→0xB→0x1 (harder) and only recovered when it wrapped to 4+0xF.
+    let nextL = curL;
+    let nextS = curS;
+    if (hashing && wantL != null && curL > wantL) {
+      nextL = curL - 1;
+      nextS = Math.min(15, curS + 2);
+    } else if (curS < 15) {
+      nextS = Math.min(15, curS + 2);
+    } else if (curL > 1) {
+      nextL = curL - 1;
+      nextS = 15;
     }
-    if (curScore <= floor) return null;
+    if (wantL != null && nextL < Math.max(1, wantL - 1)) {
+      nextL = Math.max(1, wantL - 1);
+      if (nextL === curL && nextS === curS) return null;
+    }
 
-    const next = this._scoreToDifficulty(Math.max(floor, curScore - 1));
-    if (
-      next.difficultyLeading === this.settings.difficultyLeading &&
-      next.difficultySecondary === this.settings.difficultySecondary
-    ) {
-      return null;
-    }
+    const next = {
+      difficultyLeading: nextL,
+      difficultySecondary: nextS
+    };
+    if (nextL === curL && nextS === curS) return null;
+
+    const prevZeroAt = lastRt && lastRt.leadingZeroAt;
     this.networkStats.prevDifficulty = {
       leading: this.settings.difficultyLeading,
       secondary: this.settings.difficultySecondary
@@ -386,13 +453,16 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     this.updateSettings(next);
     this.networkStats.lastRetarget = {
       at: Date.now(),
-      avgMs: recentMedian > 0 ? recentMedian : targetMs,
+      avgMs: sinceMs > 0 ? sinceMs : (recentMedian > 0 ? recentMedian : targetMs),
       targetMs: targetMs,
-      ratio: recentMedian > 0 ? recentMedian / targetMs : 9,
+      ratio: sinceMs > 0 ? sinceMs / targetMs : 9,
       delta: -1,
       leading: next.difficultyLeading,
       secondary: next.difficultySecondary,
-      stalled: true
+      stalled: true,
+      addedLeadingZero: false,
+      // Dropping a zero must not bounce straight back up (4→5→4).
+      leadingZeroAt: nextL < curL ? Date.now() : prevZeroAt
     };
     return Object.assign({}, this.settings);
   }

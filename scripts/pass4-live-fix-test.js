@@ -165,9 +165,18 @@ const Relay = loadRelay();
   lab.networkStats.averageBlockTimeMs = 250;
   lab.networkStats.lastBlockTime = Date.now() - 50000;
   const eased = lab.maybeEaseDifficultyIfStalled();
-  if (!eased) pass('Stall-ease skipped when current-difficulty blocks were too fast', '');
-  else fail('Stall-ease skipped when current-difficulty blocks were too fast',
-    eased.difficultyLeading + '+0x' + Number(eased.difficultySecondary).toString(16));
+  // QT0G4E: leftover 2.1s samples at 5+0xC must not block a 50s tip freeze
+  // while miners are still hashing. Ease must move toward easier work.
+  if (eased && (
+    eased.difficultyLeading < 4 ||
+    Number(eased.difficultySecondary) > 1
+  )) {
+    pass('Frozen tip eases even with leftover fast samples',
+      eased.difficultyLeading + '+0x' + Number(eased.difficultySecondary).toString(16));
+  } else {
+    fail('Frozen tip eases even with leftover fast samples',
+      eased ? (eased.difficultyLeading + '+0x' + Number(eased.difficultySecondary).toString(16)) : 'no ease');
+  }
 })();
 
 // --- 6. Reorg puts the orphaned transfer back in the mempool ---
@@ -603,12 +612,12 @@ const Relay = loadRelay();
     /admin\.js\?v=p2fix/.test(adminPug) ||
     /lab-theme\.css\?v=p2fix/.test(partPug + obsPug + adminPug);
   if (!changedStillStale
-      && /RelayBlockchainState\.js\?v=p4fix3/.test(partPug)
+      && /RelayBlockchainState\.js\?v=p4fix4/.test(partPug)
       && /participate\.js\?v=p4fix3/.test(partPug)
       && /observe\.js\?v=p4fix1/.test(obsPug)
-      && /admin\.js\?v=p4fix3/.test(adminPug)) {
-    pass('Changed assets cache-bust (p4fix3)', '');
-  } else fail('Changed assets cache-bust (p4fix3)', 'stale ?v=');
+      && /admin\.js\?v=p4fix4/.test(adminPug)) {
+    pass('Changed assets cache-bust (p4fix4 on edited scripts)', '');
+  } else fail('Changed assets cache-bust (p4fix4 on edited scripts)', 'stale ?v=');
 })();
 
 // --- 10. 2+ miners listed, hashing/hashrate gate fails → in-app reason, no confirm ---
