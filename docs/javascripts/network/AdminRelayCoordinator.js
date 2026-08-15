@@ -193,7 +193,7 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
         chain: packed ? packed.chain : (needFullChain ? chain : undefined),
         chainTruncated: packed ? !!packed.chainTruncated : undefined,
         chainHeight: packed ? packed.chainHeight : result.newHeight,
-        orphans: needOrphans ? (snap.orphans || []) : undefined,
+        orphans: needOrphans ? (snap.orphans || []).slice(-12) : undefined,
         participants: participants,
         pendingTransactions: snap.pendingTransactions || [],
         networkStats: snap.networkStats || (this.lab && this.lab.networkStats ? { ...this.lab.networkStats } : undefined),

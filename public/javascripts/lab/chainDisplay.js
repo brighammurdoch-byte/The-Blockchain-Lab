@@ -249,6 +249,19 @@
       if (!dup) byIndex[idx].push(b);
       if (idx > maxIndex) maxIndex = idx;
     }
+    // Cap race-losers per height so the hub/wallet panel cannot grow a
+    // full competing column for every miner at every height.
+    Object.keys(byIndex).forEach(function (key) {
+      var level = byIndex[key];
+      if (!level || level.length <= 4) return;
+      var mains = [];
+      var others = [];
+      for (var li = 0; li < level.length; li++) {
+        if (mainHashes[level[li].hash]) mains.push(level[li]);
+        else others.push(level[li]);
+      }
+      byIndex[key] = mains.concat(others.slice(0, 3));
+    });
 
     function sortLevel(blocks, parentOrder) {
       // Main-chain block first, then by parent position, then hash

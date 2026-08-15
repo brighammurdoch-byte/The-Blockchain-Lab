@@ -1206,16 +1206,11 @@ function applyCanonicalChain(chain, opts) {
     console.error('Error applying canonical chain UI', e);
   }
 
-  // Track hub-confirmed tip height so optimistic mining cannot race dozens of blocks ahead
+  // Track hub-confirmed tip height so optimistic mining cannot race dozens of blocks ahead.
+  // Never raise hubConfirmedHeight from a local unconfirmed tip — that let Copy
+  // run ~200 ahead of Overview on 4W4KV3 (246 vs 445).
   if (incomingHeight != null && !isNaN(incomingHeight)) {
     hubConfirmedHeight = Math.max(hubConfirmedHeight, incomingHeight);
-  } else {
-    const appliedTip = window.lastRelayedChain && window.lastRelayedChain.length
-      ? window.lastRelayedChain[window.lastRelayedChain.length - 1]
-      : newTip;
-    if (appliedTip && appliedTip.index != null) {
-      hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(appliedTip.index) || 0);
-    }
   }
   if (myForkChoice !== 'new' && window.lastRelayedChain && window.lastRelayedChain.length) {
     const appliedTipIdx = window.lastRelayedChain[window.lastRelayedChain.length - 1];
@@ -3905,9 +3900,12 @@ function capDisplayedChainToHub(blocks) {
   const out = [];
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
-    if (!b || b.index == null || Number(b.index) <= cap) out.push(b);
+    if (!b) continue;
+    if (b.index == null || Number(b.index) <= cap) out.push(b);
   }
-  return out.length ? out : blocks;
+  // Never fall back to the uncapped tail — a compact suffix all above the
+  // cap used to reappear as Copy 445 while Overview stayed at 246.
+  return out;
 }
 
 /**
@@ -3950,15 +3948,21 @@ function updateParticipantBlockchainView(chainData, participants) {
 
 function renderParticipantBlockchainViewNow(chainData, participants) {
   const parts = rememberParticipants(participants);
-  // Prefer explicit chain if provided and non-empty; otherwise personal/fork-aware path
-  let blocks =
-    chainData && Array.isArray(chainData.chain) && chainData.chain.length
-      ? chainData.chain
-      : getPersonalChainBlocks();
+  if (myForkChoice !== 'new') trimToHubTip();
+  // Always paint from the live capped copy. Stale chainData from the 350ms
+  // throttle was a 200-block private tail while Overview had already paired.
+  let blocks = getPersonalChainBlocks();
   // When caller passes hub main during a NEW choice, replace with personal path
   if (myForkChoice === 'new' && pendingForkHeight != null) {
     const personal = getPersonalChainBlocks();
     if (personal && personal.length) blocks = personal;
+  } else if (
+    myForkChoice === 'new' &&
+    chainData &&
+    Array.isArray(chainData.chain) &&
+    chainData.chain.length
+  ) {
+    blocks = chainData.chain;
   }
 
   const CD = window.ChainDisplay;
