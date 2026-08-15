@@ -180,10 +180,10 @@ function loadAdminHubFns(sessionStore, localStore) {
   const btcPug = loadFile('views/lab/bitcoin.pug');
   const ok =
     /admin\.js\?v=p4fix8/.test(adminPug) &&
-    /landing\.js\?v=p4fix8/.test(indexPug) &&
-    /landing\.js\?v=p4fix8/.test(btcPug);
-  if (ok) pass('Edited scripts cache-bust p4fix8', '');
-  else fail('Edited scripts cache-bust p4fix8', 'stale ?v=');
+    /landing\.js\?v=p4fix9/.test(indexPug) &&
+    /landing\.js\?v=p4fix9/.test(btcPug);
+  if (ok) pass('Edited scripts cache-bust p4fix8 / landing p4fix9', '');
+  else fail('Edited scripts cache-bust p4fix8 / landing p4fix9', 'stale ?v=');
 })();
 
 const failed = results.filter(function (r) { return !r.ok; });

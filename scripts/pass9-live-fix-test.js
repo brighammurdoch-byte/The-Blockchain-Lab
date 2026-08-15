@@ -266,8 +266,8 @@ function classroomLab(leading, secondary) {
     /RelayBlockchainState\.js\?v=p4fix7/.test(adminPug + partPug + obsPug + indexPug) &&
     /admin\.js\?v=p4fix8/.test(adminPug) &&
     /AdminRelayCoordinator\.js\?v=p4fix7/.test(adminPug + partPug + obsPug) &&
-    /Persistence\.js\?v=p4fix6/.test(adminPug + indexPug) &&
-    /landing\.js\?v=p4fix8/.test(indexPug) &&
+    /Persistence\.js\?v=p4fix9/.test(adminPug + indexPug) &&
+    /landing\.js\?v=p4fix9/.test(indexPug) &&
     /observe\.js\?v=p4fix5/.test(obsPug) &&
     /NetworkManager\.js\?v=p4fix5/.test(adminPug);
   if (ok) pass('Edited scripts cache-bust p4fix7', '');
