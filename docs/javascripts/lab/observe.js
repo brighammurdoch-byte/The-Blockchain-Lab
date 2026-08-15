@@ -16,6 +16,7 @@ let toastBusy = false;
 let networkMode = null;
 let net = null;
 let socket = null; // prevent any stray legacy references
+let _nameBroadcastTimer = null;
 
 function showToastNotification(message, type = 'info', durationMs) {
   const now = Date.now();
@@ -201,18 +202,14 @@ function setupEventHandlers() {
       showToastNotification('Display name must be 50 characters or less', 'error');
       return;
     }
-    persistLocalWalletName(nodeName);
-    if (net) {
-      if (typeof net.setDisplayName === 'function') net.setDisplayName(nodeName);
-      else if (net.transport) net.transport.nodeDisplayName = nodeName;
-      net.send('node-name-changed', { userId: userId, name: nodeName, role: 'wallet' });
-      setTimeout(function () {
-        if (net) net.send('node-name-changed', { userId: userId, name: nodeName, role: 'wallet' });
-      }, 800);
-      showToastNotification(nodeName ? 'Display name saved!' : 'Display name cleared', 'success');
-    } else {
-      showToastNotification('Not connected yet — try again in a moment', 'error');
+    if (!nodeName) {
+      showToastNotification('Please enter a display name', 'error');
+      restoreNodeNameInput();
+      return;
     }
+    persistAndBroadcastNodeName(nodeName);
+    restoreNodeNameInput(nodeName);
+    showToastNotification('Display name saved!', 'success');
   });
 
   $('#nodeName').on('keypress', function(e) {
@@ -223,9 +220,14 @@ function setupEventHandlers() {
   });
   $('#nodeName').on('blur', function () {
     const typed = ($(this).val() || '').trim();
-    if (!typed || typed.length > 50) return;
-    $('#setNodeNameBtn').trigger('click');
+    if (!typed || typed.length > 50) {
+      restoreNodeNameInput();
+      return;
+    }
+    persistAndBroadcastNodeName(typed);
+    restoreNodeNameInput(typed);
   });
+  $('#nodeName').on('input', scheduleBroadcastTypedName);
 }
 
 // Legacy initSocket removed (client-relay only)
@@ -346,6 +348,8 @@ function initClientSideNetworkingForObserver(mode) {
   });
 
   net.on('transport-reconnected', function () {
+    const nm = currentNodeDisplayName();
+    if (nm) persistAndBroadcastNodeName(nm);
     if (net) net.send('request-state', { from: userId });
   });
 
@@ -424,12 +428,16 @@ function initClientSideNetworkingForObserver(mode) {
   const joinCode = localStorage.getItem('joinCode_' + sessionId) || sessionId;
   const savedName = loadLocalWalletName();
   if (savedName && typeof net.setDisplayName === 'function') net.setDisplayName(savedName);
+  restoreNodeNameInput(savedName);
   net.joinRoom(joinCode, userId, 'wallet').then(() => {
     console.log('[ObserveNet] Joined relay room as observer');
     $('#blockchainView').html('<p class="text-muted">Connected to relay hub. Waiting for initial chain state from admin...</p>');
-    if (savedName) {
-      net.send('node-name-changed', { userId: userId, name: savedName, role: 'wallet' });
+    var typedName = ($('#nodeName').val() || '').trim();
+    var joinName = typedName || savedName;
+    if (joinName) {
+      persistAndBroadcastNodeName(joinName);
     }
+    restoreNodeNameInput(joinName);
     // Explicitly request the state
     net.send('request-state', { from: userId });
     window.addEventListener('pagehide', function () {
@@ -460,6 +468,63 @@ function persistLocalWalletName(name) {
     sessionStorage.setItem(walletNameStorageKey(), n);
     localStorage.setItem(walletNameStorageKey(), n);
   } catch (e) {}
+}
+
+function currentNodeDisplayName() {
+  try {
+    const typed = ($('#nodeName').val() || '').trim();
+    if (typed) return typed;
+    return loadLocalWalletName();
+  } catch (e) {
+    return '';
+  }
+}
+
+function persistAndBroadcastNodeName(nodeName) {
+  const name = String(nodeName || '').trim();
+  persistLocalWalletName(name);
+  if (net && typeof net.setDisplayName === 'function') net.setDisplayName(name);
+  else if (net && net.transport) net.transport.nodeDisplayName = name;
+  restoreNodeNameInput(name);
+  if (net && name) {
+    net.send('node-name-changed', {
+      userId: userId,
+      name: name,
+      role: 'wallet',
+      displayName: name
+    });
+    setTimeout(function () {
+      if (net) {
+        net.send('node-name-changed', {
+          userId: userId,
+          name: name,
+          role: 'wallet',
+          displayName: name
+        });
+      }
+    }, 800);
+  }
+}
+
+function scheduleBroadcastTypedName() {
+  if (_nameBroadcastTimer) clearTimeout(_nameBroadcastTimer);
+  _nameBroadcastTimer = setTimeout(function () {
+    _nameBroadcastTimer = null;
+    const typed = ($('#nodeName').val() || '').trim();
+    if (!typed || typed.length > 50) return;
+    persistAndBroadcastNodeName(typed);
+  }, 400);
+}
+
+/** Phone-width Save can clear the input after blur; put the saved name back. */
+function restoreNodeNameInput(preferred) {
+  const $el = $('#nodeName');
+  if (!$el.length) return;
+  let name = String(preferred || '').trim();
+  if (!name) name = loadLocalWalletName();
+  if (!name) return;
+  if ($el.is(':focus') && String($el.val() || '').trim()) return;
+  $el.val(name);
 }
 
 function adoptObserverHubChain(incoming, meta) {
@@ -622,14 +687,7 @@ function populateObserverUIFromState(state) {
         me.name = localName;
         me.displayName = localName;
       }
-      const $nodeName = $('#nodeName');
-      if ($nodeName.length && !$nodeName.is(':focus')) {
-        if (localName) {
-          $nodeName.val(localName);
-        } else if (me && (me.name || me.displayName)) {
-          $nodeName.val(me.displayName || me.name);
-        }
-      }
+      restoreNodeNameInput(localName || (me && (me.displayName || me.name)) || '');
     }
   } catch (e) {
     console.error('Error populating observer UI from relay state', e);

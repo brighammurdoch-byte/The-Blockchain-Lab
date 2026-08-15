@@ -149,7 +149,14 @@ class NetworkManager {
       if (payload.role && !msg.role) msg.role = payload.role;
       if (payload.block) msg.block = payload.block;
       if (payload.adminUserId) msg.adminUserId = payload.adminUserId;
+      // Wallet/observe joins do not send hashrate. Attach the saved display
+      // name so request-state / hello / tx carry it (MYDFSN stayed Unnamed).
+      if (this.displayName && !payload.name && !payload.displayName) {
+        payload.name = this.displayName;
+        payload.displayName = this.displayName;
+      }
     }
+    if (this.displayName && !msg.name) msg.name = this.displayName;
 
     this.transport.send(msg);
     this._emit(type, msg);

@@ -234,10 +234,10 @@ function paceFast(lab) {
   const partPug = loadFile('views/lab/participate.pug');
   const obsPug = loadFile('views/lab/observe.pug');
   const ok =
-    /RelayBlockchainState\.js\?v=p4fix4/.test(adminPug + partPug + obsPug) &&
-    /admin\.js\?v=p4fix4/.test(adminPug);
-  if (ok) pass('Edited scripts cache-bust p4fix4', '');
-  else fail('Edited scripts cache-bust p4fix4', 'stale ?v=');
+    /RelayBlockchainState\.js\?v=p4fix5/.test(adminPug + partPug + obsPug) &&
+    /admin\.js\?v=p4fix5/.test(adminPug);
+  if (ok) pass('Edited scripts cache-bust p4fix5', '');
+  else fail('Edited scripts cache-bust p4fix5', 'stale ?v=');
 })();
 
 const failed = results.filter(function (r) { return !r.ok; });

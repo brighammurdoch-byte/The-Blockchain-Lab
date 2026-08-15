@@ -612,12 +612,12 @@ const Relay = loadRelay();
     /admin\.js\?v=p2fix/.test(adminPug) ||
     /lab-theme\.css\?v=p2fix/.test(partPug + obsPug + adminPug);
   if (!changedStillStale
-      && /RelayBlockchainState\.js\?v=p4fix4/.test(partPug)
+      && /RelayBlockchainState\.js\?v=p4fix5/.test(partPug)
       && /participate\.js\?v=p4fix3/.test(partPug)
-      && /observe\.js\?v=p4fix1/.test(obsPug)
-      && /admin\.js\?v=p4fix4/.test(adminPug)) {
-    pass('Changed assets cache-bust (p4fix4 on edited scripts)', '');
-  } else fail('Changed assets cache-bust (p4fix4 on edited scripts)', 'stale ?v=');
+      && /observe\.js\?v=p4fix5/.test(obsPug)
+      && /admin\.js\?v=p4fix5/.test(adminPug)) {
+    pass('Changed assets cache-bust (p4fix5 on edited scripts)', '');
+  } else fail('Changed assets cache-bust (p4fix5 on edited scripts)', 'stale ?v=');
 })();
 
 // --- 10. 2+ miners listed, hashing/hashrate gate fails → in-app reason, no confirm ---

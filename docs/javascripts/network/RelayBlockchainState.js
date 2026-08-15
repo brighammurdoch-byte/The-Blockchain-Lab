@@ -69,7 +69,10 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     this.allBlocks.set(genesis.hash, genesis);
     this.genesisCreated = true;
     this.networkStats.blockHeight = 0;
-    this.networkStats.lastBlockTime = genesis.timestamp;
+    // Wall-clock, not genesis.timestamp (that is Date.now()-10s and
+    // immediately looks like a stall once miners start hashing).
+    this.networkStats.lastBlockTime = Date.now();
+    this.networkStats._lastTipWallClock = Date.now();
   }
 
   // Update admin settings (called when admin changes sliders)
@@ -289,6 +292,15 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       else if (Math.abs(ratio - 1) < 0.25 && Math.abs(toward) <= 2) delta = toward;
     }
 
+    // Score = L*16+S; higher S is more permissive (easier). The ratio table
+    // above adds to the score when too fast, which eases the nibble
+    // (MYDFSN: 4+0x9 → 0xB at 1.8–3.9s). Too-fast must tighten toward 0x0
+    // without walking L backward when S is already 0.
+    if (ratio < 1 && delta > 0) {
+      const curS = curScore % 16;
+      delta = curS > 0 ? -Math.min(delta, curS) : 0;
+    }
+
     // Way-too-fast: ≥3× quicker than target for several fresh samples.
     // Repeatable after the inter-zero cooldown: 1→2, later 2→3. Never 1→4
     // / 2→5 in one retarget. Do not add a zero past the hashrate-implied
@@ -335,6 +347,10 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const nextLeading = Math.floor(nextScore / 16);
     if (nextLeading > curLeading + 1) nextScore = (curLeading + 1) * 16 + 0;
     if (nextLeading < curLeading - 1) nextScore = curLeading * 16 + 0;
+    // Too-fast nibble steps must not wrap 2+0x0 → 1+0xE.
+    if (ratio < 1 && Math.floor(nextScore / 16) < curLeading) {
+      nextScore = curLeading * 16 + 0;
+    }
     // Inter-zero cooldown also applies to a nibble step that would cross L.
     if (Math.floor(nextScore / 16) > curLeading && this._leadingZeroOnCooldown()) {
       nextScore = curLeading * 16 + Math.min(15, (curScore % 16));
@@ -390,7 +406,6 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     if (this.settings.parametersLocked) return null;
 
     const targetMs = this._targetMs();
-    const last = this.networkStats && this.networkStats.lastBlockTime;
     const lastRt = this.networkStats && this.networkStats.lastRetarget;
     const hs = Number(this.networkStats && this.networkStats.totalHashrate) || 0;
     const hashing = hs > 500;
@@ -399,6 +414,13 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const waitMs = hashing
       ? Math.max(targetMs * 1.2, 12000)
       : Math.max(targetMs * 2.5, 22000);
+    // Prefer the wall-clock of the last accepted tip. lastBlockTime may be a
+    // block.timestamp (or genesis Date.now()-10s) and lastRetarget.at ignores
+    // blocks that landed after the last retarget — both toasted
+    // "easing after a stall" at 12–13s while MYDFSN was still producing
+    // multiple blocks per 10s.
+    const tipWall = this.networkStats && this.networkStats._lastTipWallClock;
+    const last = tipWall || (this.networkStats && this.networkStats.lastBlockTime);
     const sinceTs = last || (lastRt && lastRt.at);
     const sinceMs = sinceTs ? Date.now() - sinceTs : 0;
     if (sinceTs && sinceMs < waitMs) return null;
@@ -408,11 +430,18 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       ? this.networkStats.blockIntervals.slice(-6)
       : [];
     const recentMedian = this._medianMs(recent);
-    // Leftover 0.3s/2.1s samples must not block ease on a frozen tip
-    // (QT0G4E: 2.1s median at 5+0xC, then 58s with 18k+ H/s). Only trust
-    // "still too fast" when a block actually landed recently.
-    const lastBlockAge = last ? Date.now() - last : Infinity;
-    if (recentMedian > 0 && recentMedian < targetMs * 0.8 && lastBlockAge < waitMs) {
+    const tipAge = tipWall
+      ? Date.now() - tipWall
+      : (last ? Date.now() - last : Infinity);
+    // A tip that landed well under the 10s target is never a stall.
+    if (tipAge < targetMs) return null;
+    // Still ≥3× too fast and a tip arrived within the 10s target: tighten
+    // via maybeRetargetDifficulty, do not ease. Leftover 0.3s/2.1s samples
+    // must not block ease on a true freeze (QT0G4E: 2.1s median, then 58s).
+    if (recentMedian > 0 && recentMedian < targetMs / 3 && tipAge < targetMs) {
+      return null;
+    }
+    if (recentMedian > 0 && recentMedian < targetMs * 0.8 && tipAge < waitMs) {
       return null;
     }
 
@@ -647,6 +676,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
   noteNetworkResumed() {
     if (!this.networkStats) this.networkStats = {};
     this.networkStats.lastBlockTime = Date.now();
+    this.networkStats._lastTipWallClock = Date.now();
     if (this.networkStats.lastRetarget) this.networkStats.lastRetarget.at = Date.now();
   }
 
@@ -1440,9 +1470,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       // find 1-zero hashes in the same ms, and reorgs skipped interval samples
       // so auto-diff only nudged twice in a 200-block burst.
       this._recordTipPace();
-    } else if (newTip && (isDirectExtension || (onBest && block.hash === newTip.hash))) {
-      this.networkStats.lastBlockTime = newTip.timestamp || Date.now();
     }
+    // Do not rewind lastBlockTime to newTip.timestamp on a duplicate / non-tip
+    // delivery — that made a live chain look 12s+ stalled (false stall-ease).
 
     this._recomputeMiningRewards();
     if (typeof this.pruneDistantOrphans === 'function') {

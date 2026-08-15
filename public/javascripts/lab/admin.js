@@ -445,7 +445,10 @@ function initClientSideNetworking(mode, roomCode) {
     // Restore only on refresh of THIS admin tab for THIS room.
     // A landing "Create Session" click sets labAdminFreshCreate_* and must start empty
     // — leftover Persistence for an unused code (91G5M2) used to hijack the new hub.
-    const allowRestore = !Persistence.consumeFreshAdminCreate(roomCode) &&
+    const freshCreate = Persistence.consumeFreshAdminCreate(roomCode);
+    let liveHubTab = false;
+    try { liveHubTab = sessionStorage.getItem('labAdminLiveHub_' + roomCode) === '1'; } catch (eLive) {}
+    const allowRestore = !freshCreate &&
       (typeof Persistence.shouldRestoreAdminState !== 'function' || Persistence.shouldRestoreAdminState(roomCode));
     const restored = allowRestore ? Persistence.loadAdminState(roomCode) : null;
     if (!allowRestore && typeof Persistence.clearAdminState === 'function') {
@@ -455,7 +458,18 @@ function initClientSideNetworking(mode, roomCode) {
       const success = relayState.restoreFromPersisted(restored);
       if (success) {
         console.log('[ClientNet] Restored previous session state from localStorage');
-        showToastNotification('Session restored from previous tab session', 'success');
+        // Reload of the tab that created / is hosting this room is not a
+        // "previous tab session" — the live hub is already the source of truth
+        // (MYDFSN toasted restore mid-watch and on later hub re-reads).
+        if (!freshCreate && !liveHubTab) {
+          showToastNotification('Session restored from previous tab session', 'success');
+        }
+        if (liveHubTab && relayState.networkStats) {
+          // Persist is a snapshot of ourselves; don't let a 10s-old
+          // lastBlockTime trip a false stall-ease after reload.
+          relayState.networkStats.lastBlockTime = Date.now();
+          relayState.networkStats._lastTipWallClock = Date.now();
+        }
 
         // Re-apply restored settings to the UI sliders
         if (restored.settings) {
@@ -503,6 +517,7 @@ function initClientSideNetworking(mode, roomCode) {
       halvingInterval: (relayState.settings && relayState.settings.halvingInterval) || 21
     };
     relayState.updateSettings(initialSettings);
+    try { sessionStorage.setItem('labAdminLiveHub_' + roomCode, '1'); } catch (eLiveSet) {}
 
     // Ensure admin registers itself so lists + viz show the hub from the start (educational).
     // Endowment gives the instructor starter coins to fund student wallets without mining.
@@ -638,6 +653,11 @@ function initClientSideNetworking(mode, roomCode) {
       const r = String(role).toLowerCase();
       const extra = (r === 'wallet' || r === 'observer') ? { endowment: 100 } : {};
       applyInboundDisplayName(msg);
+      const known = relayState.knownNames && relayState.knownNames.get(String(msg.from));
+      if (known && !extra.name) {
+        extra.name = known;
+        extra.displayName = known;
+      }
       relayState.addOrUpdateParticipant(msg.from, role, extra);
       if (typeof relayState._recomputeMiningRewards === 'function') {
         relayState._recomputeMiningRewards();
@@ -940,6 +960,7 @@ function initClientSideNetworking(mode, roomCode) {
   // Handle explicit request for state from joiners (more reliable than relying only on peer-joined)
   net.on('request-state', (msg) => {
     const requester = msg.payload && msg.payload.from ? msg.payload.from : msg.from;
+    applyInboundDisplayName(msg);
     if (relayState) {
       const state = relayState.getSanitizedStateForNewPeer();
       net.send('initial-state', state, requester);
