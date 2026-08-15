@@ -430,11 +430,129 @@ const Relay = loadRelay();
   }
 })();
 
-// --- 9. Source / cache-bust / toast placement ---
+// --- 8b. GHPEHS hub late view: 100→95 / 40→45 after reorg+requeue+reinclude ---
+(function () {
+  const lab = new Relay('GHPEHS HUB');
+  lab.ensureGenesis();
+  lab.updateSettings({ difficultyLeading: 1, difficultySecondary: 15, autoDifficulty: false });
+  lab.addOrUpdateParticipant('user_ixzppaiof', 'wallet', {
+    endowment: 100, balance: 100, displayName: 'Wallet 1'
+  });
+  lab.addOrUpdateParticipant('user_x64uho1mu', 'miner', { displayName: 'Miner 2' });
+  lab.addOrUpdateParticipant('miner-1', 'miner', { displayName: 'Miner 1' });
+  lab.addOrUpdateParticipant('user_vtxh3dg6e', 'miner', { displayName: 'Miner 3' });
+
+  const genesis = lab.chain[0];
+  const tx = {
+    id: 'tx-hub-5',
+    from: 'user_ixzppaiof',
+    to: 'user_x64uho1mu',
+    amount: 5,
+    timestamp: 500031
+  };
+  lab.tryAddTransaction(tx);
+
+  const s1 = makeBlock(1, '0000h1', genesis.hash, { miner: 'user_x64uho1mu' });
+  const s2 = makeBlock(2, '0000h2', s1.hash, { miner: 'user_x64uho1mu' });
+  lab.tryAddBlock(s1, 'user_x64uho1mu');
+  lab.tryAddBlock(s2, 'user_x64uho1mu');
+
+  let losePrev = s2.hash;
+  let winPrev = s2.hash;
+  for (let i = 3; i <= 4; i++) {
+    const lose = makeBlock(i, '0000hl' + i, losePrev, { miner: 'user_x64uho1mu' });
+    const win = makeBlock(i, '0000hw' + i, winPrev, { miner: 'miner-1' });
+    lab.tryAddBlock(lose, 'user_x64uho1mu');
+    lab.tryAddBlock(win, 'miner-1');
+    losePrev = lose.hash;
+    winPrev = win.hash;
+  }
+
+  const include = makeBlock(5, '0000hltx', losePrev, {
+    miner: 'user_vtxh3dg6e',
+    transactions: [tx]
+  });
+  lab.tryAddBlock(include, 'user_vtxh3dg6e');
+  const m2inc = lab.participants.get('user_x64uho1mu');
+  const wInc = lab.participants.get('user_ixzppaiof');
+  if (!(m2inc && m2inc.blocksMined === 4 && m2inc.balance === 45 && wInc && wInc.balance === 95)) {
+    fail('GHPEHS hub first include is 40+5 / 100-5 (not +10 / 90)',
+      'm2=' + (m2inc && m2inc.balance) + '/' + (m2inc && m2inc.blocksMined) +
+      ' w=' + (wInc && wInc.balance));
+    return;
+  }
+  pass('GHPEHS hub first include is a single debit (95 / 45)', '95/45');
+
+  const win5 = makeBlock(5, '0000hw5', winPrev, { miner: 'miner-1' });
+  lab.tryAddBlock(win5, 'miner-1');
+  const win6 = makeBlock(6, '0000hw6', win5.hash, { miner: 'miner-1' });
+  const reorg = lab.tryAddBlock(win6, 'miner-1');
+  const m2re = lab.participants.get('user_x64uho1mu');
+  const wRe = lab.participants.get('user_ixzppaiof');
+  const pending = lab.pendingTransactions || [];
+  const back = pending.some(function (t) {
+    return t && t.from === 'user_ixzppaiof' && t.to === 'user_x64uho1mu' && Number(t.amount) === 5;
+  });
+  if (reorg.reorg && m2re && m2re.balance === 20 && wRe && wRe.balance === 100 && back) {
+    pass('GHPEHS hub reorg shows 100 / 20 and the 5-coin tx is pending on the hub',
+      pending.length + ' pending');
+  } else {
+    fail('GHPEHS hub reorg shows 100 / 20 and the 5-coin tx is pending on the hub',
+      JSON.stringify({
+        reorg: reorg.reorg,
+        m2: m2re && m2re.balance,
+        w: wRe && wRe.balance,
+        pending: pending.length
+      }));
+    return;
+  }
+
+  const w7 = makeBlock(7, '0000hw7', win6.hash, { miner: 'user_x64uho1mu' });
+  const w8 = makeBlock(8, '0000hw8', w7.hash, { miner: 'user_x64uho1mu' });
+  lab.tryAddBlock(w7, 'user_x64uho1mu');
+  lab.tryAddBlock(w8, 'user_x64uho1mu');
+  const m2pre = lab.participants.get('user_x64uho1mu');
+  if (!(m2pre && m2pre.blocksMined === 4 && m2pre.balance === 40)) {
+    fail('GHPEHS hub Miner 2 is 40 before re-include',
+      m2pre ? (m2pre.balance + '/' + m2pre.blocksMined) : 'missing');
+    return;
+  }
+
+  const again = makeBlock(9, '0000hre', w8.hash, {
+    miner: 'user_vtxh3dg6e',
+    transactions: [lab.pendingTransactions[0]]
+  });
+  const r2 = lab.tryAddBlock(again, 'user_vtxh3dg6e');
+  const m2end = lab.participants.get('user_x64uho1mu');
+  const wEnd = lab.participants.get('user_ixzppaiof');
+  const stillPending = (lab.pendingTransactions || []).length;
+  const txBlocks = (lab.chain || []).filter(function (b) {
+    return (b.transactions || []).some(function (t) {
+      return t && t.from === 'user_ixzppaiof' && Number(t.amount) === 5;
+    });
+  });
+  if (r2.accepted && wEnd && wEnd.balance === 95 && m2end && m2end.balance === 45
+      && stillPending === 0 && txBlocks.length === 1) {
+    pass('GHPEHS hub settles 100→95 / 40→45 after requeue+reinclude (not 90 / +10)',
+      'txs-on-chain=' + txBlocks.length);
+  } else {
+    fail('GHPEHS hub settles 100→95 / 40→45 after requeue+reinclude (not 90 / +10)',
+      JSON.stringify({
+        accepted: r2.accepted,
+        w: wEnd && wEnd.balance,
+        m2: m2end && m2end.balance,
+        pending: stillPending,
+        txBlocks: txBlocks.length
+      }));
+  }
+})();
+
+// --- 9. Source / cache-bust / toast placement / attack buttons ---
 (function () {
   const theme = fs.readFileSync(path.join(__dirname, '..', 'public/stylesheets/lab-theme.css'), 'utf8');
   const part = fs.readFileSync(path.join(__dirname, '..', 'public/javascripts/lab/participate.js'), 'utf8');
   const obs = fs.readFileSync(path.join(__dirname, '..', 'public/javascripts/lab/observe.js'), 'utf8');
+  const admin = fs.readFileSync(path.join(__dirname, '..', 'public/javascripts/lab/admin.js'), 'utf8');
   const relay = fs.readFileSync(path.join(__dirname, '..', 'public/javascripts/network/RelayBlockchainState.js'), 'utf8');
   const partPug = fs.readFileSync(path.join(__dirname, '..', 'views/lab/participate.pug'), 'utf8');
   const obsPug = fs.readFileSync(path.join(__dirname, '..', 'views/lab/observe.pug'), 'utf8');
@@ -459,6 +577,21 @@ const Relay = loadRelay();
   if (/returned to mempool/.test(obs) && /returned to mempool/.test(part)) {
     pass('Wallet and miner toast when a transfer is re-queued', '');
   } else fail('Wallet and miner toast when a transfer is re-queued', 'missing copy');
+
+  const attackClick = admin.match(/startTeamAttackBtn[\s\S]{0,400}confirm\s*\(/);
+  const forkClick = admin.match(/proposeForkBtn[\s\S]{0,800}confirm\s*\(/);
+  if (!attackClick && !forkClick && /handleTeamAttackClick/.test(admin) && /handleHardForkClick/.test(admin)
+      && /click\.labAttack/.test(admin) && /Click Initiate Team Collusion again/.test(admin)
+      && /Click Propose Hard Fork again/.test(admin)) {
+    pass('51% and Hard Fork use in-app confirm, not a silent window.confirm', '');
+  } else fail('51% and Hard Fork use in-app confirm, not a silent window.confirm',
+    'confirm=' + !!(attackClick || forkClick));
+
+  if (/teamCollusionPreconditionError/.test(admin) && /showAttackPanelFeedback/.test(admin)
+      && /hardForkPreconditionError/.test(admin) && /showForkPanelFeedback/.test(admin)
+      && /scrollIntoView/.test(admin)) {
+    pass('Failed 51%/fork preconditions show an in-app panel (not a no-op)', '');
+  } else fail('Failed 51%/fork preconditions show an in-app panel (not a no-op)', 'missing');
 
   const changedStillStale =
     /RelayBlockchainState\.js\?v=p2fix[46]/.test(partPug + obsPug + adminPug) ||

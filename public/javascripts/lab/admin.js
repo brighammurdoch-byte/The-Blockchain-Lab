@@ -1131,7 +1131,7 @@ function setupEventHandlers() {
       <label>Blocks to fork back:</label>
       <input type="number" id="teamAttackBlocksBack" class="form-control" value="2" min="1" />
     </div>
-    <button id="startTeamAttackBtn" class="btn btn-danger btn-block">Initiate Team Collusion</button>
+    <button id="startTeamAttackBtn" class="btn btn-danger btn-block" type="button">Initiate Team Collusion</button>
     <div id="teamAttackFeedback" class="alert" style="display:none; margin-top:12px;"></div>
     <div id="teamAttackStats" style="display:none; margin-top: 15px; padding: 10px; background: #fff3f3; border-radius: 4px;">
       <p class="text-success"><strong>Honest Hashrate:</strong> <span id="honestHashrate">0</span> H/s</p>
@@ -1139,17 +1139,9 @@ function setupEventHandlers() {
     </div>
   `);
   
-  $('#startTeamAttackBtn').click(function(e) {
+  $(document).off('click.labAttack', '#startTeamAttackBtn').on('click.labAttack', '#startTeamAttackBtn', function (e) {
     e.preventDefault();
-    const why = teamCollusionPreconditionError();
-    if (why) {
-      showAttackPanelFeedback(why, 'error');
-      showToastNotification(why, 'error');
-      return;
-    }
-    const blocksBack = Math.max(1, parseInt($('#teamAttackBlocksBack').val(), 10) || 2);
-    if (!confirm('Initiate Team 51% attack simulation going back ' + blocksBack + ' blocks?')) return;
-    startTeamCollusionAttack(blocksBack);
+    handleTeamAttackClick();
   });
   
   // Inject Hard Fork Simulation panel dynamically
@@ -1166,7 +1158,7 @@ function setupEventHandlers() {
       <input type="number" id="forkHeight" class="form-control" value="10" min="1" />
       <small class="form-text text-muted" id="forkHeightHint">Defaults to current height + 10 blocks.</small>
     </div>
-    <button id="proposeForkBtn" class="btn btn-warning btn-block">Propose Hard Fork</button>
+    <button id="proposeForkBtn" class="btn btn-warning btn-block" type="button">Propose Hard Fork</button>
     <div id="adminForkStatus" style="display:none; margin-top:10px;" class="alert alert-warning"></div>
   `);
 
@@ -1177,27 +1169,9 @@ function setupEventHandlers() {
   });
   refreshForkHeightDefault(true);
   
-  $('#proposeForkBtn').click(function(e) {
+  $(document).off('click.labFork', '#proposeForkBtn').on('click.labFork', '#proposeForkBtn', function (e) {
     e.preventDefault();
-    const why = hardForkPreconditionError();
-    if (why) {
-      showForkPanelFeedback(why, 'error');
-      showToastNotification(why, 'error');
-      return;
-    }
-    // On initiate: if they left the default alone, snap to current tip + 10
-    if (!$('#forkHeight').data('userEdited')) {
-      refreshForkHeightDefault(true);
-    }
-    const height = parseInt($('#forkHeight').val(), 10) || defaultForkActivationHeight();
-    const name = ($('#forkName').val() || 'Hard Fork').trim() || 'Hard Fork';
-    if (!Number.isFinite(height) || height < 1) {
-      showForkPanelFeedback('Enter a valid activation block height', 'error');
-      showToastNotification('Enter a valid activation block height', 'error');
-      return;
-    }
-    if (!confirm('Propose “' + name + '” at block ' + height + ' (current tip is ' + getHubBlockHeight() + ')?')) return;
-    proposeHardFork(name, height);
+    handleHardForkClick();
   });
 
   // === Client-relay testing helper button ===
@@ -1486,6 +1460,9 @@ function showAttackPanelFeedback(message, kind) {
     .addClass(kind === 'success' ? 'alert-success' : (kind === 'warning' ? 'alert-warning' : 'alert-danger'))
     .text(message)
     .show();
+  try {
+    if ($el[0] && $el[0].scrollIntoView) $el[0].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  } catch (e) {}
 }
 
 function showForkPanelFeedback(message, kind) {
@@ -1499,6 +1476,81 @@ function showForkPanelFeedback(message, kind) {
     .addClass(kind === 'error' ? 'alert-danger' : 'alert-warning')
     .html(message)
     .show();
+  try {
+    if ($st[0] && $st[0].scrollIntoView) $st[0].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  } catch (e) {}
+}
+
+/** In-app confirm so a blocked window.confirm() cannot swallow the click. */
+let teamAttackArmedUntil = 0;
+let hardForkArmedUntil = 0;
+
+function handleTeamAttackClick() {
+  try {
+    const why = teamCollusionPreconditionError();
+    if (why) {
+      teamAttackArmedUntil = 0;
+      showAttackPanelFeedback(why, 'error');
+      showToastNotification(why, 'error');
+      return;
+    }
+    const blocksBack = Math.max(1, parseInt($('#teamAttackBlocksBack').val(), 10) || 2);
+    const now = Date.now();
+    if (teamAttackArmedUntil && now < teamAttackArmedUntil) {
+      teamAttackArmedUntil = 0;
+      startTeamCollusionAttack(blocksBack);
+      return;
+    }
+    teamAttackArmedUntil = now + 15000;
+    const ready = 'Team collusion is ready (fork ' + blocksBack +
+      ' blocks back). Click Initiate Team Collusion again within 15s to start.';
+    showAttackPanelFeedback(ready, 'warning');
+    showToastNotification(ready, 'warning');
+  } catch (err) {
+    teamAttackArmedUntil = 0;
+    const msg = 'Team collusion could not start: ' + (err && err.message ? err.message : String(err));
+    showAttackPanelFeedback(msg, 'error');
+    showToastNotification(msg, 'error');
+  }
+}
+
+function handleHardForkClick() {
+  try {
+    const why = hardForkPreconditionError();
+    if (why) {
+      hardForkArmedUntil = 0;
+      showForkPanelFeedback(why, 'error');
+      showToastNotification(why, 'error');
+      return;
+    }
+    if (!$('#forkHeight').data('userEdited')) {
+      refreshForkHeightDefault(true);
+    }
+    const height = parseInt($('#forkHeight').val(), 10) || defaultForkActivationHeight();
+    const name = ($('#forkName').val() || 'Hard Fork').trim() || 'Hard Fork';
+    if (!Number.isFinite(height) || height < 1) {
+      hardForkArmedUntil = 0;
+      showForkPanelFeedback('Enter a valid activation block height', 'error');
+      showToastNotification('Enter a valid activation block height', 'error');
+      return;
+    }
+    const now = Date.now();
+    if (hardForkArmedUntil && now < hardForkArmedUntil) {
+      hardForkArmedUntil = 0;
+      proposeHardFork(name, height);
+      return;
+    }
+    hardForkArmedUntil = now + 15000;
+    const ready = 'Hard fork “' + name + '” is ready at block ' + height +
+      ' (tip ' + getHubBlockHeight() + '). Click Propose Hard Fork again within 15s to start.';
+    showForkPanelFeedback(ready, 'warning');
+    showToastNotification(ready, 'warning');
+  } catch (err) {
+    hardForkArmedUntil = 0;
+    const msg = 'Hard fork could not start: ' + (err && err.message ? err.message : String(err));
+    showForkPanelFeedback(msg, 'error');
+    showToastNotification(msg, 'error');
+  }
 }
 
 function teamCollusionPreconditionError() {
