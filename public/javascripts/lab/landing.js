@@ -68,14 +68,31 @@ $(document).ready(function () {
     joinAttempt.abort = null;
   }
 
+  var createInFlight = false;
   $('#createSessionBtn').click(function () {
+    const $btn = $('#createSessionBtn');
+    if (createInFlight || $btn.prop('disabled')) return;
+    createInFlight = true;
     const mode = 'admin-relay';
     const net = new NetworkManager(mode);
-    const $btn = $('#createSessionBtn');
     $btn.prop('disabled', true).text('Creating…');
 
     net.createRoom().then(function (roomCode) {
       roomCode = String(roomCode || '').toUpperCase();
+      // Drop leftover hub flags from an earlier Create in this tab so a
+      // later history open of admin.html?session=OLDCODE cannot rehost.
+      try {
+        var stale = [];
+        for (var i = 0; i < sessionStorage.length; i++) {
+          var k = sessionStorage.key(i);
+          if (!k) continue;
+          if (k.indexOf('labAdminFreshCreate_') === 0 || k.indexOf('labAdminLiveHub_') === 0) {
+            var old = k.slice(k.indexOf('_') + 1);
+            if (old && old !== roomCode) stale.push(k);
+          }
+        }
+        for (var j = 0; j < stale.length; j++) sessionStorage.removeItem(stale[j]);
+      } catch (eClaim) {}
       // A new Create must never reopen leftover state from a previous unused code
       // (toast "Session restored from previous tab session" hijacked CVV1U8 → 91G5M2).
       if (window.Persistence && typeof Persistence.markFreshAdminCreate === 'function') {
@@ -106,6 +123,7 @@ $(document).ready(function () {
       go('admin', roomCode);
     }).catch(function (err) {
       console.error(err);
+      createInFlight = false;
       $btn.prop('disabled', false).text('Create Session');
       alert('Could not create session: ' + (err && err.message ? err.message : err));
     });
