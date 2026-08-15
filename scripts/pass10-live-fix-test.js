@@ -254,8 +254,8 @@ function armFreeze(lab, agoMs) {
     /admin\.js\?v=p4fix8/.test(adminPug) &&
     /AdminRelayCoordinator\.js\?v=p4fix7/.test(adminPug + partPug + obsPug) &&
     /networkVisualization\.js\?v=p4fix7/.test(adminPug) &&
-    /Persistence\.js\?v=p4fix6/.test(adminPug + indexPug) &&
-    /landing\.js\?v=p4fix8/.test(indexPug);
+    /Persistence\.js\?v=p4fix9/.test(adminPug + indexPug) &&
+    /landing\.js\?v=p4fix9/.test(indexPug);
   if (ok) pass('Edited scripts cache-bust p4fix7', '');
   else fail('Edited scripts cache-bust p4fix7', 'stale ?v=');
 })();

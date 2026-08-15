@@ -68,7 +68,36 @@ $(document).ready(function () {
     joinAttempt.abort = null;
   }
 
+  function persistClassroomItem(key, value, keepCode) {
+    if (window.Persistence && typeof Persistence.setLocalItem === 'function') {
+      Persistence.setLocalItem(key, value, keepCode);
+      return;
+    }
+    try {
+      localStorage.setItem(key, value);
+    } catch (e) {
+      if (window.Persistence && typeof Persistence.pruneLeftoverClassroomKeys === 'function') {
+        Persistence.pruneLeftoverClassroomKeys(keepCode);
+        localStorage.setItem(key, value);
+        return;
+      }
+      throw e;
+    }
+  }
+
   var createInFlight = false;
+  function resetCreateSessionBtn() {
+    createInFlight = false;
+    $('#createSessionBtn').prop('disabled', false).text('Create Session');
+  }
+
+  // bfcache Back leaves the button on "Creating…" (RID0Y6). Do not keep
+  // createInFlight locked after this tab is shown again from history.
+  $(window).on('pageshow', function (ev) {
+    var nav = ev.originalEvent;
+    if (nav && nav.persisted) resetCreateSessionBtn();
+  });
+
   $('#createSessionBtn').click(function () {
     const $btn = $('#createSessionBtn');
     if (createInFlight || $btn.prop('disabled')) return;
@@ -108,23 +137,18 @@ $(document).ready(function () {
       } else {
         try { sessionStorage.setItem('labAdminLiveHub_' + roomCode, '1'); } catch (e4) {}
       }
-      localStorage.setItem('networkingMode_' + roomCode, mode);
-      localStorage.setItem('joinCode_' + roomCode, roomCode);
-      localStorage.setItem('isAdmin_' + roomCode, 'true');
-      if (window.LabPaths && LabPaths.persistChainFlavor) {
-        LabPaths.persistChainFlavor(roomCode, chainFlavor);
-      } else {
-        localStorage.setItem('chainFlavor_' + roomCode, chainFlavor);
-      }
+      persistClassroomItem('networkingMode_' + roomCode, mode, roomCode);
+      persistClassroomItem('joinCode_' + roomCode, roomCode, roomCode);
+      persistClassroomItem('isAdmin_' + roomCode, 'true', roomCode);
+      persistClassroomItem('chainFlavor_' + roomCode, chainFlavor, roomCode);
       if (net.userId) {
-        localStorage.setItem('adminUserId_' + roomCode, net.userId);
+        persistClassroomItem('adminUserId_' + roomCode, net.userId, roomCode);
       }
       try { net.disconnect(); } catch (e) {}
       go('admin', roomCode);
     }).catch(function (err) {
       console.error(err);
-      createInFlight = false;
-      $btn.prop('disabled', false).text('Create Session');
+      resetCreateSessionBtn();
       alert('Could not create session: ' + (err && err.message ? err.message : err));
     });
   });

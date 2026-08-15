@@ -8,7 +8,7 @@ if (typeof window.Persistence === 'undefined') {
 const Persistence = {
   saveAdminState(roomCode, state) {
     try {
-      localStorage.setItem(`blockchain-lab-admin-${roomCode}`, JSON.stringify(state));
+      this.setLocalItem(`blockchain-lab-admin-${roomCode}`, JSON.stringify(state), roomCode);
     } catch (e) {
       console.warn('Failed to save admin state to localStorage', e);
     }
@@ -76,6 +76,87 @@ const Persistence = {
     const code = String(roomCode || '').toUpperCase();
     if (!code) return false;
     try { return sessionStorage.getItem(this.liveHubKey(code)) === '1'; } catch (e) { return false; }
+  },
+
+  /**
+   * Origin-scoped leftover keys from prior classrooms. Admin-state blobs
+   * (blockchain-lab-admin-CODE) are the usual quota fillers on Pages.
+   * sessionStorage labAdminLiveHub_* / labAdminFreshCreate_* are never
+   * touched — those are this-tab hub flags, not origin leftovers.
+   */
+  classroomLocalPrefixes: [
+    'blockchain-lab-admin-',
+    'joinCode_',
+    'isAdmin_',
+    'networkingMode_',
+    'chainFlavor_',
+    'adminUserId_',
+    'userRole_',
+    'userId_',
+    'nodeName_',
+    'labValidatorCode_'
+  ],
+
+  isClassroomSessionCode(code) {
+    var s = String(code || '').toUpperCase();
+    return /^[A-Z0-9]{4,8}$/.test(s) && !/^(ADMIN|INDEX|LAB)$/.test(s);
+  },
+
+  classroomCodeFromKey(key) {
+    var k = String(key || '');
+    var prefixes = this.classroomLocalPrefixes;
+    for (var i = 0; i < prefixes.length; i++) {
+      if (k.indexOf(prefixes[i]) !== 0) continue;
+      var rest = k.slice(prefixes[i].length);
+      var code = rest.split('_')[0];
+      if (this.isClassroomSessionCode(code)) return code.toUpperCase();
+    }
+    return '';
+  },
+
+  /**
+   * Drop leftover classroom localStorage for every code except keepCode.
+   * Never localStorage.clear(). Never delete the room being created.
+   * Returns the removed key names.
+   */
+  pruneLeftoverClassroomKeys(keepCode) {
+    var keep = String(keepCode || '').toUpperCase();
+    var removed = [];
+    try {
+      if (typeof localStorage === 'undefined') return removed;
+      var toRemove = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (!k) continue;
+        var code = this.classroomCodeFromKey(k);
+        if (!code) continue;
+        if (keep && code === keep) continue;
+        toRemove.push(k);
+      }
+      for (var j = 0; j < toRemove.length; j++) {
+        try {
+          localStorage.removeItem(toRemove[j]);
+          removed.push(toRemove[j]);
+        } catch (eRm) {}
+      }
+    } catch (e) {}
+    return removed;
+  },
+
+  /**
+   * setItem, or on any failure prune leftover classroom keys (not keepCode)
+   * and retry once. Used by Create Session so a full Pages origin can
+   * still mint a new room.
+   */
+  setLocalItem(key, value, keepCode) {
+    try {
+      localStorage.setItem(key, value);
+      return true;
+    } catch (e) {
+      this.pruneLeftoverClassroomKeys(keepCode);
+      localStorage.setItem(key, value);
+      return true;
+    }
   },
 
   /**
