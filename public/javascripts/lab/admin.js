@@ -1481,33 +1481,22 @@ function showForkPanelFeedback(message, kind) {
   } catch (e) {}
 }
 
-/** In-app confirm so a blocked window.confirm() cannot swallow the click. */
-let teamAttackArmedUntil = 0;
-let hardForkArmedUntil = 0;
-
+/**
+ * 51%: blocked-state is in-app (never a confirm that would run).
+ * Hard Fork: browser confirm is OK once preconditions pass (GHPEHS cancelled that dialog).
+ */
 function handleTeamAttackClick() {
   try {
     const why = teamCollusionPreconditionError();
     if (why) {
-      teamAttackArmedUntil = 0;
       showAttackPanelFeedback(why, 'error');
       showToastNotification(why, 'error');
       return;
     }
     const blocksBack = Math.max(1, parseInt($('#teamAttackBlocksBack').val(), 10) || 2);
-    const now = Date.now();
-    if (teamAttackArmedUntil && now < teamAttackArmedUntil) {
-      teamAttackArmedUntil = 0;
-      startTeamCollusionAttack(blocksBack);
-      return;
-    }
-    teamAttackArmedUntil = now + 15000;
-    const ready = 'Team collusion is ready (fork ' + blocksBack +
-      ' blocks back). Click Initiate Team Collusion again within 15s to start.';
-    showAttackPanelFeedback(ready, 'warning');
-    showToastNotification(ready, 'warning');
+    if (!confirm('Initiate Team 51% attack simulation going back ' + blocksBack + ' blocks?')) return;
+    startTeamCollusionAttack(blocksBack);
   } catch (err) {
-    teamAttackArmedUntil = 0;
     const msg = 'Team collusion could not start: ' + (err && err.message ? err.message : String(err));
     showAttackPanelFeedback(msg, 'error');
     showToastNotification(msg, 'error');
@@ -1518,7 +1507,6 @@ function handleHardForkClick() {
   try {
     const why = hardForkPreconditionError();
     if (why) {
-      hardForkArmedUntil = 0;
       showForkPanelFeedback(why, 'error');
       showToastNotification(why, 'error');
       return;
@@ -1529,24 +1517,13 @@ function handleHardForkClick() {
     const height = parseInt($('#forkHeight').val(), 10) || defaultForkActivationHeight();
     const name = ($('#forkName').val() || 'Hard Fork').trim() || 'Hard Fork';
     if (!Number.isFinite(height) || height < 1) {
-      hardForkArmedUntil = 0;
       showForkPanelFeedback('Enter a valid activation block height', 'error');
       showToastNotification('Enter a valid activation block height', 'error');
       return;
     }
-    const now = Date.now();
-    if (hardForkArmedUntil && now < hardForkArmedUntil) {
-      hardForkArmedUntil = 0;
-      proposeHardFork(name, height);
-      return;
-    }
-    hardForkArmedUntil = now + 15000;
-    const ready = 'Hard fork “' + name + '” is ready at block ' + height +
-      ' (tip ' + getHubBlockHeight() + '). Click Propose Hard Fork again within 15s to start.';
-    showForkPanelFeedback(ready, 'warning');
-    showToastNotification(ready, 'warning');
+    if (!confirm('Propose “' + name + '” at block ' + height + ' (current tip is ' + getHubBlockHeight() + ')?')) return;
+    proposeHardFork(name, height);
   } catch (err) {
-    hardForkArmedUntil = 0;
     const msg = 'Hard fork could not start: ' + (err && err.message ? err.message : String(err));
     showForkPanelFeedback(msg, 'error');
     showToastNotification(msg, 'error');

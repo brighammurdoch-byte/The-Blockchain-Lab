@@ -578,14 +578,21 @@ const Relay = loadRelay();
     pass('Wallet and miner toast when a transfer is re-queued', '');
   } else fail('Wallet and miner toast when a transfer is re-queued', 'missing copy');
 
-  const attackClick = admin.match(/startTeamAttackBtn[\s\S]{0,400}confirm\s*\(/);
-  const forkClick = admin.match(/proposeForkBtn[\s\S]{0,800}confirm\s*\(/);
-  if (!attackClick && !forkClick && /handleTeamAttackClick/.test(admin) && /handleHardForkClick/.test(admin)
-      && /click\.labAttack/.test(admin) && /Click Initiate Team Collusion again/.test(admin)
-      && /Click Propose Hard Fork again/.test(admin)) {
-    pass('51% and Hard Fork use in-app confirm, not a silent window.confirm', '');
-  } else fail('51% and Hard Fork use in-app confirm, not a silent window.confirm',
-    'confirm=' + !!(attackClick || forkClick));
+  const attackFn = admin.match(/function handleTeamAttackClick\([\s\S]*?\n\}/);
+  const forkFn = admin.match(/function handleHardForkClick\([\s\S]*?\n\}/);
+  const attackBody = attackFn ? attackFn[0] : '';
+  const forkBody = forkFn ? forkFn[0] : '';
+  const attackWhyBeforeConfirm = /teamCollusionPreconditionError[\s\S]*if\s*\(\s*why\s*\)[\s\S]*return;[\s\S]*confirm\s*\(/.test(attackBody);
+  const forkConfirmOnPass = /confirm\s*\(\s*'Propose/.test(forkBody)
+    && /hardForkPreconditionError[\s\S]*if\s*\(\s*why\s*\)[\s\S]*return;[\s\S]*confirm\s*\(/.test(forkBody);
+  if (attackWhyBeforeConfirm && !/Click Initiate Team Collusion again/.test(admin)) {
+    pass('51% checks preconditions before any confirm (no two-click arm)', '');
+  } else fail('51% checks preconditions before any confirm (no two-click arm)',
+    'whyBeforeConfirm=' + attackWhyBeforeConfirm);
+  if (forkConfirmOnPass && !/Click Propose Hard Fork again/.test(admin)) {
+    pass('Hard Fork keeps a browser confirm after preconditions pass', '');
+  } else fail('Hard Fork keeps a browser confirm after preconditions pass',
+    'confirmOnPass=' + forkConfirmOnPass);
 
   if (/teamCollusionPreconditionError/.test(admin) && /showAttackPanelFeedback/.test(admin)
       && /hardForkPreconditionError/.test(admin) && /showForkPanelFeedback/.test(admin)
@@ -603,9 +610,99 @@ const Relay = loadRelay();
       && /RelayBlockchainState\.js\?v=p3fix1/.test(partPug)
       && /participate\.js\?v=p3fix1/.test(partPug)
       && /observe\.js\?v=p3fix1/.test(obsPug)
-      && /admin\.js\?v=p3fix1/.test(adminPug)) {
-    pass('Changed assets cache-bust to p3fix1 (no leftover p2fix4/p2fix6 on those files)', '');
-  } else fail('Changed assets cache-bust to p3fix1 (no leftover p2fix4/p2fix6 on those files)', 'stale ?v=');
+      && /admin\.js\?v=p3fix2/.test(adminPug)) {
+    pass('Changed assets cache-bust (admin p3fix2; others p3fix1)', '');
+  } else fail('Changed assets cache-bust (admin p3fix2; others p3fix1)', 'stale ?v=');
+})();
+
+// --- 10. 2+ miners listed, hashing/hashrate gate fails → in-app reason, no confirm ---
+(function () {
+  function extractFunction(src, name) {
+    const start = src.search(new RegExp('function\\s+' + name + '\\s*\\('));
+    if (start < 0) throw new Error('missing ' + name);
+    let i = src.indexOf('{', start);
+    let depth = 0;
+    for (; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') {
+        depth--;
+        if (depth === 0) return src.slice(start, i + 1);
+      }
+    }
+    throw new Error('unbalanced ' + name);
+  }
+
+  const adminSrc = fs.readFileSync(
+    path.join(__dirname, '..', 'public/javascripts/lab/admin.js'),
+    'utf8'
+  );
+  const Relay = loadRelay();
+
+  function runAttackClick(miners) {
+    const parts = new Map();
+    miners.forEach(function (p) { parts.set(p.userId, p); });
+    const log = { panel: null, toast: null, confirm: 0, started: false };
+    const ctx = {
+      net: {},
+      relayState: { chain: [{ index: 0, hash: 'g' }], participants: parts },
+      window: { RelayBlockchainState: Relay },
+      RelayBlockchainState: Relay,
+      confirm: function () { log.confirm += 1; return true; },
+      showAttackPanelFeedback: function (msg) { log.panel = msg; },
+      showToastNotification: function (msg) { log.toast = msg; },
+      startTeamCollusionAttack: function () { log.started = true; },
+      $: function () {
+        return { val: function () { return '2'; } };
+      }
+    };
+    vm.createContext(ctx);
+    vm.runInContext(
+      extractFunction(adminSrc, 'listLiveMinerIds') + '\n' +
+      extractFunction(adminSrc, 'teamCollusionPreconditionError') + '\n' +
+      extractFunction(adminSrc, 'handleTeamAttackClick') + '\n' +
+      'handleTeamAttackClick();',
+      ctx
+    );
+    return log;
+  }
+
+  const idle = runAttackClick([
+    { userId: 'miner-a', role: 'miner', hashrate: 0 },
+    { userId: 'miner-b', role: 'miner', hashrate: 0 },
+    { userId: 'wallet-1', role: 'wallet', hashrate: 0, endowment: 100 }
+  ]);
+  if (idle.confirm === 0 && !idle.started && /hashing/i.test(idle.panel || '') && idle.toast === idle.panel) {
+    pass('2 miners listed but idle: 51% shows in-app hashing reason (no confirm)', idle.panel);
+  } else {
+    fail('2 miners listed but idle: 51% shows in-app hashing reason (no confirm)',
+      JSON.stringify(idle));
+  }
+
+  const weakShare = runAttackClick([
+    { userId: 'miner-a', role: 'miner', hashrate: 10000 },
+    { userId: 'miner-b', role: 'miner', hashrate: 10000 },
+    { userId: 'miner-c', role: 'miner', hashrate: 10000 },
+    { userId: 'miner-d', role: 'miner', hashrate: 10000 }
+  ]);
+  // 4 equal miners: stronger half is 50% — blocked, not a confirm that would run
+  if (weakShare.confirm === 0 && !weakShare.started && /50%|more than 50%/i.test(weakShare.panel || '')) {
+    pass('2+ miners hashing but stronger half is not >50%: in-app reason, no confirm',
+      weakShare.panel);
+  } else {
+    fail('2+ miners hashing but stronger half is not >50%: in-app reason, no confirm',
+      JSON.stringify(weakShare));
+  }
+
+  const ready = runAttackClick([
+    { userId: 'miner-a', role: 'miner', hashrate: 20000 },
+    { userId: 'miner-b', role: 'miner', hashrate: 20000 },
+    { userId: 'miner-c', role: 'miner', hashrate: 20000 }
+  ]);
+  if (ready.confirm === 1 && ready.started && !ready.panel) {
+    pass('51% opens confirm only after hashrate preconditions pass', '');
+  } else {
+    fail('51% opens confirm only after hashrate preconditions pass', JSON.stringify(ready));
+  }
 })();
 
 const failed = results.filter((r) => !r.ok).length;
