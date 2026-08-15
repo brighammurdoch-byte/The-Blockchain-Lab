@@ -103,26 +103,31 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
       }
     }
 
-    // Prefer the new RelayBlockchainState API
-    let state;
-    if (this.lab && typeof this.lab.getSanitizedStateForNewPeer === 'function') {
-      state = this.lab.getSanitizedStateForNewPeer();
-    } else if (this.lab && typeof this.lab.getSanitizedStateForNetwork === 'function') {
-      state = this.lab.getSanitizedStateForNetwork();
-    } else {
-      state = {};
-    }
+    // Yield so a join toast cannot synchronously serialize the full chain
+    // + topology + roster in the same turn (XU1J1S Aw Snap error 9).
+    const self = this;
+    const to = msg.from;
+    setTimeout(function () {
+      let state;
+      if (self.lab && typeof self.lab.getSanitizedStateForNewPeer === 'function') {
+        state = self.lab.getSanitizedStateForNewPeer();
+      } else if (self.lab && typeof self.lab.getSanitizedStateForNetwork === 'function') {
+        state = self.lab.getSanitizedStateForNetwork();
+      } else {
+        state = {};
+      }
 
-    this.net.send('initial-state', state, msg.from);
+      self.net.send('initial-state', state, to);
 
-    // Tell the room the new wallet's funded balance (so rosters update)
-    if (!isProbe && this.lab && this.lab.participants) {
-      try {
-        this.net.send('participants-roster', {
-          participants: Array.from(this.lab.participants.values())
-        });
-      } catch (e) {}
-    }
+      // Tell the room the new wallet's funded balance (so rosters update)
+      if (!isProbe && self.lab && self.lab.participants) {
+        try {
+          self.net.send('participants-roster', {
+            participants: Array.from(self.lab.participants.values())
+          });
+        } catch (e) {}
+      }
+    }, 0);
   }
 
   _handleBlockSubmitted(msg) {

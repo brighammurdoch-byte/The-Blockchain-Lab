@@ -84,6 +84,13 @@ $(document).ready(function () {
         try { sessionStorage.setItem('labAdminFreshCreate_' + roomCode, '1'); } catch (e2) {}
         try { localStorage.removeItem('blockchain-lab-admin-' + roomCode); } catch (e3) {}
       }
+      // This tab is the live hub from the moment Create succeeds — never
+      // toast "Session restored" while it stays open (XU1J1S mid-watch).
+      if (window.Persistence && typeof Persistence.markLiveAdminHub === 'function') {
+        Persistence.markLiveAdminHub(roomCode);
+      } else {
+        try { sessionStorage.setItem('labAdminLiveHub_' + roomCode, '1'); } catch (e4) {}
+      }
       localStorage.setItem('networkingMode_' + roomCode, mode);
       localStorage.setItem('joinCode_' + roomCode, roomCode);
       localStorage.setItem('isAdmin_' + roomCode, 'true');

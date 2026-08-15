@@ -303,7 +303,7 @@ const Relay = loadRelay();
   const indexPug = fs.readFileSync(path.join(__dirname, '..', 'views/lab/index.pug'), 'utf8');
   if (/observe\.js\?v=p[34]fix\d+/.test(observePug) &&
       /labPaths\.js\?v=p2fix6/.test(observePug) &&
-      /landing\.js\?v=p2fix4/.test(indexPug)) {
+      /landing\.js\?v=p[234]fix\d+/.test(indexPug)) {
     pass('Changed scripts cache-bust past p2fix3', '');
   } else fail('Changed scripts cache-bust past p2fix3', 'stale ?v=');
 

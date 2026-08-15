@@ -214,6 +214,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
   /**
    * Displayed / controller pace. If the tip has been frozen longer than the
    * claimed average, report the wait — never keep advertising 0.1s.
+   * Never advertise lastRetarget.avgMs (a stale stall sample) while the
+   * stats card shows Since Last Block 0s (XU1J1S leftover 19s).
    */
   observedPaceMs() {
     const targetMs = this._targetMs();
@@ -222,13 +224,59 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       : [];
     const median = this._medianMs(intervals.slice(-6));
     const stored = Number(this.networkStats && this.networkStats.averageBlockTimeMs);
-    const last = this.networkStats && this.networkStats.lastBlockTime;
-    const since = last ? Math.max(0, Date.now() - last) : 0;
+    const lastBlk = Number(this.networkStats && this.networkStats.lastBlockTime) || 0;
+    const tipWall = Number(this.networkStats && this.networkStats._lastTipWallClock) || 0;
+    const watchAt = Number(this.networkStats && this.networkStats._stallWatchAt) || 0;
+    const newest = Math.max(lastBlk, tipWall, watchAt);
+    const since = newest ? Math.max(0, Date.now() - newest) : 0;
     const claimed = (median > 0) ? median : (stored > 0 ? stored : 0);
+    // A tip that just moved (or a stall-watch reset) is not a freeze.
+    if (since < targetMs) return claimed;
     if (since > 0 && since > Math.max(targetMs, claimed * 1.5, 4000)) {
       return since;
     }
     return claimed;
+  }
+
+  _canonicalTipIndex() {
+    const tip = this.chain && this.chain.length ? this.chain[this.chain.length - 1] : null;
+    if (tip && tip.index != null && !isNaN(Number(tip.index))) return Number(tip.index);
+    if (this.networkStats && this.networkStats.blockHeight != null) {
+      return Math.max(0, Number(this.networkStats.blockHeight) || 0);
+    }
+    return this.chain && this.chain.length ? Math.max(0, this.chain.length - 1) : 0;
+  }
+
+  /**
+   * Stall-ease must follow canonical height, not a persist/reload wall-clock
+   * that stopped updating while students kept extending the tip (XU1J1S).
+   */
+  _syncStallWatch(tipIndex) {
+    if (!this.networkStats) this.networkStats = {};
+    const idx = tipIndex != null ? Number(tipIndex) : this._canonicalTipIndex();
+    if (this.networkStats._stallWatchHeight == null) {
+      this.networkStats._stallWatchHeight = idx;
+      this.networkStats._stallWatchAt = this.networkStats._lastTipWallClock
+        || this.networkStats.lastBlockTime
+        || Date.now();
+      return;
+    }
+    if (this.networkStats._stallWatchHeight !== idx) {
+      this.networkStats._stallWatchHeight = idx;
+      const now = Date.now();
+      this.networkStats._stallWatchAt = now;
+      this.networkStats._lastTipWallClock = now;
+      this.networkStats.lastBlockTime = now;
+    }
+  }
+
+  _resetStallClocks() {
+    if (!this.networkStats) this.networkStats = {};
+    const now = Date.now();
+    this.networkStats.lastBlockTime = now;
+    this.networkStats._lastTipWallClock = now;
+    this.networkStats._stallWatchHeight = this._canonicalTipIndex();
+    this.networkStats._stallWatchAt = now;
   }
 
   /**
@@ -419,11 +467,23 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     // blocks that landed after the last retarget — both toasted
     // "easing after a stall" at 12–13s while MYDFSN was still producing
     // multiple blocks per 10s.
+    const tipIndex = this._canonicalTipIndex();
+    this._syncStallWatch(tipIndex);
     const tipWall = this.networkStats && this.networkStats._lastTipWallClock;
-    const last = tipWall || (this.networkStats && this.networkStats.lastBlockTime);
+    const lastBlk = this.networkStats && this.networkStats.lastBlockTime;
+    const last = tipWall || lastBlk;
     const sinceTs = last || (lastRt && lastRt.at);
     const sinceMs = sinceTs ? Date.now() - sinceTs : 0;
-    if (sinceTs && sinceMs < waitMs) return null;
+    const heightFreezeMs = this.networkStats && this.networkStats._stallWatchAt
+      ? Date.now() - this.networkStats._stallWatchAt
+      : 0;
+    // Real freeze: no new canonical tip AND both wall clocks agree.
+    // A stale _lastTipWallClock after hub reload (XU1J1S) must not look
+    // like 27–34s while height is still climbing.
+    const wallSince = lastBlk ? Date.now() - lastBlk : 0;
+    if ((lastBlk && wallSince < waitMs) || (sinceTs && sinceMs < waitMs) || heightFreezeMs < waitMs) {
+      return null;
+    }
     if (!sinceTs && this.chain && this.chain.length <= 1) return null;
 
     const recent = Array.isArray(this.networkStats && this.networkStats.blockIntervals)
@@ -434,7 +494,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       ? Date.now() - tipWall
       : (last ? Date.now() - last : Infinity);
     // A tip that landed well under the 10s target is never a stall.
-    if (tipAge < targetMs) return null;
+    if (tipAge < targetMs || heightFreezeMs < targetMs) return null;
+    if (lastBlk && wallSince < targetMs) return null;
     // Still ≥3× too fast and a tip arrived within the 10s target: tighten
     // via maybeRetargetDifficulty, do not ease. Leftover 0.3s/2.1s samples
     // must not block ease on a true freeze (QT0G4E: 2.1s median, then 58s).
@@ -458,23 +519,29 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     // MYDFSN h279: 4+0x3 toasted “easing after a stall, observed 12s”, then
     // the tip sat 455s at ~30kH/s. wantL≈4 blocked any L drop, so +2 S never
     // left the 4-zero band. A freeze well past 12s must drop a zero.
-    const longFreeze = hashing && tipAge >= Math.max(targetMs * 2.5, 25000);
+    // XU1J1S: a stale 27s sample dropped 4→3→2→1 while Miner 2 still
+    // produced a new canonical block. Zero-drop needs a real tip freeze.
+    const freezeMs = Math.max(targetMs * 2.5, 25000);
+    const longFreeze = hashing
+      && tipAge >= freezeMs
+      && heightFreezeMs >= freezeMs
+      && !!lastBlk
+      && wallSince >= freezeMs;
     const lastStallZeroAt = lastRt && lastRt.stallZeroAt;
     const stallZeroCooling = !!(lastStallZeroAt &&
       (Date.now() - lastStallZeroAt) < Math.max(targetMs * 2, 20000));
     // Higher S = more permissive next nibble = easier. Score-1 walked
     // 5+0xC→0xB→0x1 (harder) and only recovered when it wrapped to 4+0xF.
+    // ~12s path is nibble-only. Dropping a leading zero requires longFreeze
+    // and the ~20s zero-drop cooldown (no 4→1 burst, no wantL shortcut).
     let nextL = curL;
     let nextS = curS;
     if (longFreeze && curL > 1 && !stallZeroCooling) {
       nextL = curL - 1;
       nextS = Math.min(15, curS + 2);
-    } else if (hashing && wantL != null && curL > wantL) {
-      nextL = curL - 1;
-      nextS = Math.min(15, curS + 2);
     } else if (curS < 15) {
       nextS = Math.min(15, curS + 2);
-    } else if (curL > 1 && (!stallZeroCooling || longFreeze)) {
+    } else if (longFreeze && curL > 1 && !stallZeroCooling) {
       nextL = curL - 1;
       nextS = 15;
     }
@@ -536,6 +603,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     if (this.networkStats) {
       this.networkStats._lastTipWallClock = now;
       this.networkStats.lastBlockTime = now;
+      this.networkStats._stallWatchHeight = this._canonicalTipIndex();
+      this.networkStats._stallWatchAt = now;
     }
     if (!prevWall) return;
     if (this.chain && this.chain.length <= 2) return;
@@ -675,7 +744,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       const r = String(p.role || '').toLowerCase();
       if (r === 'admin' || r === 'hub') return;
       if (live.has(String(id))) {
-        p.lastSeenAt = now;
+        // Presence already proves they are here. Do not rewrite lastSeenAt
+        // — that stretched "gone" to ~45s (20s presence + 25s drop) and
+        // left closed phone tabs listed forever at 0 H/s (MYDFSN).
         return;
       }
       const age = now - (p.lastSeenAt || p.joinedAt || 0);
@@ -1775,6 +1846,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       this._requeueOrphanedTransactions(priorChain, this.chain);
       this.purgeConfirmedFromMempool();
     }
+    // Persist is a snapshot. A 10s-old (or pre-crash) _lastTipWallClock
+    // must not look like a 27s freeze once this tab is live again.
+    this._resetStallClocks();
 
     return true;
   }
