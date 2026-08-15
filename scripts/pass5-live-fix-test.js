@@ -1,7 +1,7 @@
 /**
  * Headless checks for Pass 5 live-QA leftovers (session JQQC4D):
  * hashrate on instant finds, way-too-fast difficulty, late miner names,
- * bounded chain DOM.
+ * bounded chain DOM, Overview vs Copy height pairing.
  * Usage: node scripts/pass5-live-fix-test.js
  */
 const fs = require('fs');
@@ -276,6 +276,80 @@ const ChainDisplay = loadChainDisplay();
   const last = n ? lab.networkStats.blockIntervals[n - 1] : 0;
   if (n >= 1 && last >= 250) pass('Wall-clock tip pace records a capped interval', last + 'ms');
   else fail('Wall-clock tip pace records a capped interval', 'n=' + n + ' last=' + last);
+})();
+
+function chainTo(n) {
+  const out = [];
+  for (let i = 0; i <= n; i++) out.push(makeBlock(i, 'h' + i, i === 0 ? '0' : 'h' + (i - 1)));
+  return out;
+}
+
+// --- 11. Overview and Copy share one paired height (JQQC4D Miner 2) ---
+(function () {
+  if (typeof Relay.studentMinerPairedHeight !== 'function') {
+    fail('studentMinerPairedHeight exists', 'missing');
+    return;
+  }
+  const behind = Relay.studentMinerPairedHeight(chainTo(395), 406);
+  const ahead = Relay.studentMinerPairedHeight(chainTo(474), 444);
+  const equal = Relay.studentMinerPairedHeight(chainTo(200), 200);
+  const optimistic = Relay.studentMinerPairedHeight(chainTo(201), 200);
+  if (behind === 395) pass('Paired height: copy behind hub uses copy (no 406 vs 395)', String(behind));
+  else fail('Paired height: copy behind hub uses copy (no 406 vs 395)', String(behind));
+  if (ahead === 444) pass('Paired height: copy 30 ahead of hub uses hub (no 444 vs 474)', String(ahead));
+  else fail('Paired height: copy 30 ahead of hub uses hub (no 444 vs 474)', String(ahead));
+  if (equal === 200) pass('Paired height: matching tips stay equal', String(equal));
+  else fail('Paired height: matching tips stay equal', String(equal));
+  if (optimistic === 201) pass('Paired height: allows hub+1 optimistic tip', String(optimistic));
+  else fail('Paired height: allows hub+1 optimistic tip', String(optimistic));
+})();
+
+// --- 12. Fresh hub tip trims a 30-block private tail; stale compact still keeps 51 ---
+(function () {
+  const local = chainTo(474);
+  const trimmed = Relay.mergeCanonicalCopy(local, chainTo(444).slice(-20), {
+    truncated: true,
+    tipHash: 'h444',
+    tipIndex: 444,
+    confirmedHeight: 444
+  });
+  const tip = trimmed.chain[trimmed.chain.length - 1];
+  if (tip && tip.hash === 'h444' && Number(tip.index) === 444 && trimmed.applied) {
+    pass('Fresh hub tip 444 trims private tail at 474', trimmed.reason);
+  } else {
+    fail('Fresh hub tip 444 trims private tail at 474',
+      'tip=' + (tip && tip.hash) + ' applied=' + trimmed.applied + ' ' + trimmed.reason);
+  }
+  const stale = Relay.mergeCanonicalCopy(chainTo(51), chainTo(37).slice(-20), {
+    truncated: true,
+    tipHash: 'h37',
+    tipIndex: 37,
+    confirmedHeight: 51
+  });
+  const staleTip = stale.chain[stale.chain.length - 1];
+  if (staleTip && staleTip.hash === 'h51' && stale.applied === false && stale.reason === 'stale-tip') {
+    pass('Stale compact 37 with confirmed 51 still keeps 51', stale.reason);
+  } else {
+    fail('Stale compact 37 with confirmed 51 still keeps 51',
+      'tip=' + (staleTip && staleTip.hash) + ' applied=' + stale.applied + ' ' + stale.reason);
+  }
+})();
+
+// --- 13. Miner tab paints Overview and Copy from the same helper ---
+(function () {
+  const participate = loadFile('public/javascripts/lab/participate.js');
+  const paints = /function paintMinerHeights/.test(participate)
+    && /studentMinerPairedHeight/.test(participate)
+    && /participant-blockchain-copy-height/.test(participate);
+  const compactNoSolo = !/\$\('#blockHeight'\)\.text\(hubConfirmedHeight\)/.test(participate);
+  const compactTrims = /trimToHubTip\(\)/.test(participate)
+    && /tipIdx > hubConfirmedHeight \+ 1/.test(participate);
+  if (paints && compactNoSolo && compactTrims) {
+    pass('Miner tab pairs Overview+Copy and will not set Overview from hub alone', '');
+  } else {
+    fail('Miner tab pairs Overview+Copy and will not set Overview from hub alone',
+      JSON.stringify({ paints: paints, compactNoSolo: compactNoSolo, compactTrims: compactTrims }));
+  }
 })();
 
 const failed = results.filter(function (r) { return !r.ok; });
