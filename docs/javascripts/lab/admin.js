@@ -446,8 +446,21 @@ function initClientSideNetworking(mode, roomCode) {
     // A landing "Create Session" click sets labAdminFreshCreate_* and must start empty
     // — leftover Persistence for an unused code (91G5M2) used to hijack the new hub.
     const freshCreate = Persistence.consumeFreshAdminCreate(roomCode);
-    let liveHubTab = false;
-    try { liveHubTab = sessionStorage.getItem('labAdminLiveHub_' + roomCode) === '1'; } catch (eLive) {}
+    const alreadyLive = !!(window.__labAdminHubLive);
+    let liveHubTab = alreadyLive;
+    if (typeof Persistence.isLiveAdminHub === 'function') {
+      liveHubTab = liveHubTab || Persistence.isLiveAdminHub(roomCode);
+    } else {
+      try { liveHubTab = liveHubTab || sessionStorage.getItem('labAdminLiveHub_' + String(roomCode || '').toUpperCase()) === '1'; } catch (eLive) {}
+    }
+    // Mark BEFORE any persist load / MQTT replay so a reconnect or second
+    // init cannot toast "Session restored" on a tab that is already the hub.
+    window.__labAdminHubLive = true;
+    if (typeof Persistence.markLiveAdminHub === 'function') {
+      Persistence.markLiveAdminHub(roomCode);
+    } else {
+      try { sessionStorage.setItem('labAdminLiveHub_' + String(roomCode || '').toUpperCase(), '1'); } catch (eLiveSet) {}
+    }
     const allowRestore = !freshCreate &&
       (typeof Persistence.shouldRestoreAdminState !== 'function' || Persistence.shouldRestoreAdminState(roomCode));
     const restored = allowRestore ? Persistence.loadAdminState(roomCode) : null;
@@ -461,10 +474,26 @@ function initClientSideNetworking(mode, roomCode) {
         // Reload of the tab that created / is hosting this room is not a
         // "previous tab session" — the live hub is already the source of truth
         // (MYDFSN toasted restore mid-watch and on later hub re-reads).
-        if (!freshCreate && !liveHubTab) {
+        // XU1J1S: sessionStorage alone still toasted mid-watch on the open tab.
+        const restoredHeight = (restored.chain && restored.chain.length)
+          ? Math.max(0, restored.chain.length - 1)
+          : 0;
+        const toastRestore = (typeof Persistence.shouldToastAdminRestore === 'function')
+          ? Persistence.shouldToastAdminRestore(roomCode, {
+            freshCreate: freshCreate,
+            alreadyToasted: !!window.__labAdminRestoreToasted,
+            inMemoryLive: alreadyLive,
+            liveHubTab: liveHubTab,
+            hasPersistedChain: restoredHeight > 0
+          })
+          : (!freshCreate && !liveHubTab && restoredHeight > 0);
+        if (toastRestore) {
+          window.__labAdminRestoreToasted = true;
           showToastNotification('Session restored from previous tab session', 'success');
         }
-        if (liveHubTab && relayState.networkStats) {
+        if (relayState && typeof relayState._resetStallClocks === 'function') {
+          relayState._resetStallClocks();
+        } else if (relayState && relayState.networkStats) {
           // Persist is a snapshot of ourselves; don't let a 10s-old
           // lastBlockTime trip a false stall-ease after reload.
           relayState.networkStats.lastBlockTime = Date.now();
@@ -517,7 +546,11 @@ function initClientSideNetworking(mode, roomCode) {
       halvingInterval: (relayState.settings && relayState.settings.halvingInterval) || 21
     };
     relayState.updateSettings(initialSettings);
-    try { sessionStorage.setItem('labAdminLiveHub_' + roomCode, '1'); } catch (eLiveSet) {}
+    if (typeof Persistence.markLiveAdminHub === 'function') {
+      Persistence.markLiveAdminHub(roomCode);
+    } else {
+      try { sessionStorage.setItem('labAdminLiveHub_' + String(roomCode || '').toUpperCase(), '1'); } catch (eLiveSet) {}
+    }
 
     // Ensure admin registers itself so lists + viz show the hub from the start (educational).
     // Endowment gives the instructor starter coins to fund student wallets without mining.
@@ -635,7 +668,8 @@ function initClientSideNetworking(mode, roomCode) {
     const choice = payload.choice || 'classic';
     if (relayState && uid) {
       relayState.addOrUpdateParticipant(uid, 'miner', { forkChoice: choice });
-      if (typeof renderClientParticipants === 'function') renderClientParticipants();
+      if (typeof scheduleRenderClientParticipants === 'function') scheduleRenderClientParticipants();
+      else if (typeof renderClientParticipants === 'function') renderClientParticipants();
     }
   });
 
@@ -663,19 +697,33 @@ function initClientSideNetworking(mode, roomCode) {
         relayState._recomputeMiningRewards();
       }
     }
-    if (typeof renderClientParticipants === 'function') {
+    // Join toast must not rebuild chain + topology + roster in this turn
+    // (XU1J1S Aw Snap error 9 on first miner join).
+    if (typeof scheduleRenderClientParticipants === 'function') {
+      scheduleRenderClientParticipants();
+    } else if (typeof renderClientParticipants === 'function') {
       renderClientParticipants();
     }
-    if (typeof renderClientRelayChain === 'function') {
-      renderClientRelayChain(); // refreshes chain + viz + stats too
+    if (typeof scheduleRenderClientRelayChain === 'function') {
+      scheduleRenderClientRelayChain();
     }
     // Push roster so existing miners/wallets can see the new address immediately
     if (relayState && net) {
-      try {
-        net.send('participants-roster', {
-          participants: Array.from(relayState.participants.values())
-        });
-      } catch (e) {}
+      setTimeout(function () {
+        try {
+          net.send('participants-roster', {
+            participants: Array.from(relayState.participants.values())
+          });
+        } catch (e) {}
+      }, 0);
+    }
+  });
+
+  // MQTT reconnect / visibility resume must not reload Persistence or toast restore.
+  net.on('transport-reconnected', function () {
+    window.__labAdminHubLive = true;
+    if (typeof Persistence !== 'undefined' && typeof Persistence.markLiveAdminHub === 'function') {
+      Persistence.markLiveAdminHub(roomCode);
     }
   });
 
@@ -786,7 +834,8 @@ function initClientSideNetworking(mode, roomCode) {
     if (relayState && uid) {
       if (typeof relayState.touchParticipant === 'function') relayState.touchParticipant(uid);
       relayState.updateHashrate(uid, hashrate);
-      if (typeof renderClientParticipants === 'function') renderClientParticipants();
+      if (typeof scheduleRenderClientParticipants === 'function') scheduleRenderClientParticipants();
+      else if (typeof renderClientParticipants === 'function') renderClientParticipants();
       const viz = window.networkViz || networkViz;
       const p = relayState.participants.get(uid);
       if (viz && p && typeof viz.setNodeStatus === 'function') {
@@ -802,7 +851,8 @@ function initClientSideNetworking(mode, roomCode) {
     if (nackMinerIfPaused(uid) && hashrate > 0) return;
     if (relayState && uid) {
       relayState.updateHashrate(uid, hashrate);
-      if (typeof renderClientParticipants === 'function') renderClientParticipants();
+      if (typeof scheduleRenderClientParticipants === 'function') scheduleRenderClientParticipants();
+      else if (typeof renderClientParticipants === 'function') renderClientParticipants();
       const viz = window.networkViz || networkViz;
       const p = relayState.participants.get(uid);
       if (viz && p && typeof viz.setNodeStatus === 'function') {
@@ -846,7 +896,8 @@ function initClientSideNetworking(mode, roomCode) {
     if (viz && typeof viz.setNodeStatus === 'function') {
       viz.setNodeStatus(uid, 'mining');
     }
-    if (typeof renderClientParticipants === 'function') renderClientParticipants();
+    if (typeof scheduleRenderClientParticipants === 'function') scheduleRenderClientParticipants();
+    else if (typeof renderClientParticipants === 'function') renderClientParticipants();
   });
 
   // Student display-name changes → topology + participant lists
@@ -857,8 +908,9 @@ function initClientSideNetworking(mode, roomCode) {
     const uid = payload.userId || msg.from;
     const existing = uid ? relayState.participants.get(uid) : null;
     const role = (existing && existing.role) || payload.role || 'miner';
-    if (typeof renderClientParticipants === 'function') renderClientParticipants();
-    if (typeof renderClientRelayChain === 'function') renderClientRelayChain();
+    if (typeof scheduleRenderClientParticipants === 'function') scheduleRenderClientParticipants();
+    else if (typeof renderClientParticipants === 'function') renderClientParticipants();
+    if (typeof scheduleRenderClientRelayChain === 'function') scheduleRenderClientRelayChain();
     refreshLiveNodeBadge();
 
     if (net && net.isAdmin && uid) {
@@ -884,7 +936,8 @@ function initClientSideNetworking(mode, roomCode) {
       }
     }
     if (applyInboundDisplayName(msg)) {
-      if (typeof renderClientParticipants === 'function') renderClientParticipants();
+      if (typeof scheduleRenderClientParticipants === 'function') scheduleRenderClientParticipants();
+      else if (typeof renderClientParticipants === 'function') renderClientParticipants();
       refreshLiveNodeBadge();
     }
   });
@@ -962,9 +1015,14 @@ function initClientSideNetworking(mode, roomCode) {
     const requester = msg.payload && msg.payload.from ? msg.payload.from : msg.from;
     applyInboundDisplayName(msg);
     if (relayState) {
-      const state = relayState.getSanitizedStateForNewPeer();
-      net.send('initial-state', state, requester);
-      console.log('[ClientNet] Sent initial-state in response to request from', requester);
+      // Defer so a join-time request-state does not serialize the chain
+      // in the same turn as the join toast / roster paint.
+      setTimeout(function () {
+        if (!relayState || !net) return;
+        const state = relayState.getSanitizedStateForNewPeer();
+        net.send('initial-state', state, requester);
+        console.log('[ClientNet] Sent initial-state in response to request from', requester);
+      }, 0);
     }
   });
 
@@ -1755,6 +1813,7 @@ function playBlockMinedAnimation() {
 // Debounce full DOM rebuilds — fast mining otherwise makes admin controls unclickable.
 var _relayRenderTimer = null;
 var _persistAdminTimer = null;
+var _participantRenderTimer = null;
 var _lastTopoAt = 0;
 
 function schedulePersistAdminState() {
@@ -1782,6 +1841,7 @@ function scheduleRenderClientRelayChain() {
         const secondsAgo = Math.floor((Date.now() - relayState.networkStats.lastBlockTime) / 1000);
         $('#lastBlockTime').text(secondsAgo + 's');
       }
+      if (typeof refreshBlockPaceDisplay === 'function') refreshBlockPaceDisplay();
     } catch (e) {}
   }
   if (_relayRenderTimer) return;
@@ -1789,6 +1849,17 @@ function scheduleRenderClientRelayChain() {
     _relayRenderTimer = null;
     renderClientRelayChain();
   }, 500);
+}
+
+function scheduleRenderClientParticipants() {
+  if (typeof refreshLiveNodeBadge === 'function') {
+    try { refreshLiveNodeBadge(); } catch (e) {}
+  }
+  if (_participantRenderTimer) return;
+  _participantRenderTimer = setTimeout(function () {
+    _participantRenderTimer = null;
+    if (typeof renderClientParticipants === 'function') renderClientParticipants();
+  }, 350);
 }
 
 /**

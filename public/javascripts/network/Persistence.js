@@ -59,6 +59,41 @@ const Persistence = {
       if (sessionStorage.getItem('labAdminFreshCreate_' + code)) return false;
     } catch (e) {}
     return true;
+  },
+
+  liveHubKey(roomCode) {
+    return 'labAdminLiveHub_' + String(roomCode || '').toUpperCase();
+  },
+
+  /** This tab created or is hosting the room (survives reload, dies on close). */
+  markLiveAdminHub(roomCode) {
+    const code = String(roomCode || '').toUpperCase();
+    if (!code) return;
+    try { sessionStorage.setItem(this.liveHubKey(code), '1'); } catch (e) {}
+  },
+
+  isLiveAdminHub(roomCode) {
+    const code = String(roomCode || '').toUpperCase();
+    if (!code) return false;
+    try { return sessionStorage.getItem(this.liveHubKey(code)) === '1'; } catch (e) { return false; }
+  },
+
+  /**
+   * Restore toast only after the tab was closed and Persistence reloads
+   * a previous chain. Create, live-hub reload, MQTT reconnect, and
+   * in-tab autosave must never toast (XU1J1S mid-watch false restore).
+   */
+  shouldToastAdminRestore(roomCode, opts) {
+    opts = opts || {};
+    if (opts.freshCreate) return false;
+    if (opts.alreadyToasted) return false;
+    if (opts.inMemoryLive) return false;
+    const live = (opts.liveHubTab != null)
+      ? !!opts.liveHubTab
+      : this.isLiveAdminHub(roomCode);
+    if (live) return false;
+    if (!opts.hasPersistedChain) return false;
+    return true;
   }
 };
 
