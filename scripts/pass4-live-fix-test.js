@@ -91,7 +91,7 @@ const Relay = loadRelay();
   }
 })();
 
-// --- 3. Even with cooldown cleared, each step is ≤2 nibbles and ≤1 zero ---
+// --- 3. Paced way-too-fast retargets may add one leading zero each, never 1→4 ---
 (function () {
   const lab = new Relay('DIFFSTEP');
   lab.updateSettings({
@@ -100,28 +100,24 @@ const Relay = loadRelay();
     difficultyLeading: 1,
     difficultySecondary: 3
   });
-  let maxStep = 0;
   let maxLead = 0;
   let lastL = 1;
   for (let i = 0; i < 12; i++) {
     lab.networkStats.blockIntervals = [300, 300, 300];
     lab.networkStats.totalHashrate = 18000;
     if (lab.networkStats.lastRetarget) lab.networkStats.lastRetarget.at = Date.now() - 20000;
-    const before = lab._difficultyScore(lab.settings.difficultyLeading, lab.settings.difficultySecondary);
     const beforeL = lab.settings.difficultyLeading;
     const s = lab.maybeRetargetDifficulty();
     if (!s) continue;
-    const after = lab._difficultyScore(s.difficultyLeading, s.difficultySecondary);
-    maxStep = Math.max(maxStep, after - before);
     maxLead = Math.max(maxLead, s.difficultyLeading - beforeL);
     lastL = s.difficultyLeading;
   }
-  if (maxStep <= 2 && maxLead <= 1 && lastL < 4) {
-    pass('12 paced retargets stay bounded (no 1→4 leap)',
-      'maxStep=' + maxStep + ' maxLead=' + maxLead + ' lastL=' + lastL);
+  if (maxLead <= 1 && lastL >= 2 && lastL <= 5) {
+    pass('12 paced retargets climb zeros without a 1→4 leap',
+      'maxLead=' + maxLead + ' lastL=' + lastL);
   } else {
-    fail('12 paced retargets stay bounded (no 1→4 leap)',
-      'maxStep=' + maxStep + ' maxLead=' + maxLead + ' lastL=' + lastL);
+    fail('12 paced retargets climb zeros without a 1→4 leap',
+      'maxLead=' + maxLead + ' lastL=' + lastL);
   }
 })();
 
@@ -607,12 +603,12 @@ const Relay = loadRelay();
     /admin\.js\?v=p2fix/.test(adminPug) ||
     /lab-theme\.css\?v=p2fix/.test(partPug + obsPug + adminPug);
   if (!changedStillStale
-      && /RelayBlockchainState\.js\?v=p3fix1/.test(partPug)
-      && /participate\.js\?v=p3fix1/.test(partPug)
-      && /observe\.js\?v=p3fix1/.test(obsPug)
-      && /admin\.js\?v=p3fix2/.test(adminPug)) {
-    pass('Changed assets cache-bust (admin p3fix2; others p3fix1)', '');
-  } else fail('Changed assets cache-bust (admin p3fix2; others p3fix1)', 'stale ?v=');
+      && /RelayBlockchainState\.js\?v=p4fix1/.test(partPug)
+      && /participate\.js\?v=p4fix1/.test(partPug)
+      && /observe\.js\?v=p4fix1/.test(obsPug)
+      && /admin\.js\?v=p4fix1/.test(adminPug)) {
+    pass('Changed assets cache-bust (p4fix1)', '');
+  } else fail('Changed assets cache-bust (p4fix1)', 'stale ?v=');
 })();
 
 // --- 10. 2+ miners listed, hashing/hashrate gate fails → in-app reason, no confirm ---

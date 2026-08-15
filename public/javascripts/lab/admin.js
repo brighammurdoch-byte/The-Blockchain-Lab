@@ -580,7 +580,7 @@ function initClientSideNetworking(mode, roomCode) {
     coordinator.onDifficultyRetarget = function (settings) {
       if (!settings) return;
       syncDifficultyControlsFromState(settings);
-      if (!window.__lastRetargetToast || Date.now() - window.__lastRetargetToast > 8000) {
+      if (!window.__lastRetargetToast || Date.now() - window.__lastRetargetToast > 4000) {
         window.__lastRetargetToast = Date.now();
         const t = settings.targetBlockTimeSec || (relayState && relayState.settings && relayState.settings.targetBlockTimeSec) || 10;
         const lastRt = relayState && relayState.networkStats && relayState.networkStats.lastRetarget;
@@ -811,6 +811,7 @@ function initClientSideNetworking(mode, roomCode) {
       return;
     }
 
+    applyInboundDisplayName(msg);
     relayState.addOrUpdateParticipant(uid, 'miner');
     relayState.setParticipantStatus(uid, 'mining');
     const viz = window.networkViz || networkViz;

@@ -134,6 +134,43 @@
   }
 
   /**
+   * Keep genesis + the last `maxVisible` heights so a 200-block class
+   * does not rebuild hundreds of panels every tip (Chrome Aw Snap).
+   */
+  function windowBlocksForDisplay(blocks, maxVisible) {
+    var list = Array.isArray(blocks) ? blocks.slice() : [];
+    var cap = maxVisible == null ? 24 : Math.max(4, Number(maxVisible) || 24);
+    if (list.length <= cap) {
+      return { blocks: list, omitted: 0, keptGenesis: false };
+    }
+    var genesis = [];
+    var rest = [];
+    for (var i = 0; i < list.length; i++) {
+      var b = list[i];
+      if (b && (b.index === 0 || b.miner === 'genesis')) genesis.push(b);
+      else rest.push(b);
+    }
+    var keepTail = Math.max(1, cap - (genesis.length ? 1 : 0));
+    var tail = rest.slice(-keepTail);
+    var omitted = Math.max(0, list.length - genesis.length - tail.length);
+    var out = genesis.length ? genesis.slice(0, 1).concat(tail) : tail;
+    return { blocks: out, omitted: omitted, keptGenesis: genesis.length > 0 };
+  }
+
+  function omittedRowHtml(omitted) {
+    if (!(omitted > 0)) return '';
+    return (
+      '<div class="chain-omitted text-muted" style="text-align:center;padding:10px 8px;margin:4px 0 10px;border:1px dashed #c5d0d6;border-radius:4px;font-size:12px;">' +
+      '… ' +
+      omitted +
+      ' earlier block' +
+      (omitted === 1 ? '' : 's') +
+      ' hidden to keep this tab responsive …' +
+      '</div>'
+    );
+  }
+
+  /**
    * Render main chain + orphans with parent-aligned columns and simple arrows.
    * @param {object} opts
    * @param {Array} opts.mainChain
@@ -145,7 +182,10 @@
    */
   function renderChainHtml(opts) {
     opts = opts || {};
-    var mainChain = opts.mainChain || [];
+    var maxVisible = opts.maxVisible == null ? 24 : opts.maxVisible;
+    var rawMain = opts.mainChain || [];
+    var windowed = windowBlocksForDisplay(rawMain, maxVisible);
+    var mainChain = windowed.blocks;
     var orphans = opts.orphans || [];
     var hubHeight = opts.hubHeight;
     if (hubHeight != null && !isNaN(Number(hubHeight))) {
@@ -154,6 +194,21 @@
         if (!b) return false;
         if (b.index == null) return true;
         return Number(b.index) <= cap;
+      });
+    }
+    var visibleMin = 0;
+    for (var wi = 0; wi < mainChain.length; wi++) {
+      if (mainChain[wi] && mainChain[wi].index != null && Number(mainChain[wi].index) > 0) {
+        visibleMin = Number(mainChain[wi].index);
+        break;
+      }
+    }
+    if (visibleMin > 1) {
+      orphans = orphans.filter(function (b) {
+        if (!b) return false;
+        if (b.index == null) return true;
+        var oidx = Number(b.index);
+        return oidx === 0 || oidx >= visibleMin;
       });
     }
     var participants = opts.participants || [];
@@ -217,6 +272,7 @@
     }
 
     var html = '<div class="chain-view" style="display:flex;flex-direction:column;width:100%;gap:0;">';
+    html += omittedRowHtml(windowed.omitted);
     var prevLevel = null;
 
     for (var i = 0; i <= maxIndex; i++) {
@@ -403,6 +459,7 @@
     buildParticipantNameLookup: buildParticipantNameLookup,
     formatChainParticipantHtml: formatChainParticipantHtml,
     renderChainHtml: renderChainHtml,
+    windowBlocksForDisplay: windowBlocksForDisplay,
     sideChainLabel: sideChainLabel,
     shortAddress: shortAddress
   };

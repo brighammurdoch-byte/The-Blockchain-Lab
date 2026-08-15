@@ -133,6 +133,8 @@ function mineBatch() {
     if (isValidHash(hash, difficulty)) {
       block.hash = hash;
       block.nonce = nonce;
+      elapsed = Math.max(0.05, (Date.now() - startTime) / 1000);
+      hashrate = Math.max(1, Math.floor((totalIterations + 1) / elapsed));
       self.postMessage({
         type: 'found',
         gen: job.gen,
@@ -140,6 +142,7 @@ function mineBatch() {
         hash: hash,
         nonce: nonce,
         totalIterations: totalIterations + 1,
+        hashrate: hashrate,
         startTime: startTime
       });
       // Pause until main thread sends the next start (or stop)

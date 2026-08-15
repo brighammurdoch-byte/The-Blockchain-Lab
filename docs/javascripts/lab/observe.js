@@ -221,6 +221,11 @@ function setupEventHandlers() {
       $('#setNodeNameBtn').trigger('click');
     }
   });
+  $('#nodeName').on('blur', function () {
+    const typed = ($(this).val() || '').trim();
+    if (!typed || typed.length > 50) return;
+    $('#setNodeNameBtn').trigger('click');
+  });
 }
 
 // Legacy initSocket removed (client-relay only)
