@@ -41,17 +41,11 @@ function drainToastQueue() {
   const bgColor = next.type === 'success' ? '#28a745' : next.type === 'error' ? '#dc3545' : next.type === 'warning' ? '#d97706' : '#17a2b8';
   const toast = $(`
     <div id="toastNotification" class="lab-toast lab-toast-${next.type}" style="
-      position: fixed;
-      top: 20px;
-      right: 20px;
       background: ${bgColor};
       color: white;
-      padding: 15px 25px;
+      padding: 12px 16px;
       border-radius: 5px;
       box-shadow: 0 4px 6px rgba(0,0,0,0.2);
-      z-index: 9999;
-      max-width: 400px;
-      word-wrap: break-word;
       animation: slideIn 0.3s ease-out;
     ">
       ${next.message}
@@ -263,6 +257,11 @@ function initClientSideNetworkingForObserver(mode) {
         newHeight: state.newHeight != null ? state.newHeight : state.tipIndex,
         hubHeight: state.tipIndex != null ? state.tipIndex : (state.chainHeight != null ? state.chainHeight : state.newHeight)
       });
+      if (state.requeuedTransactions && state.requeuedTransactions.length) {
+        showToastNotification('Transfer returned to mempool after a reorg', 'warning');
+      } else if (state.droppedTransactions && state.droppedTransactions.length) {
+        showToastNotification('Transfer dropped after a reorg (no longer valid on this chain)', 'warning');
+      }
       return;
     }
     // Compact tip-extension (common over MQTT): only the new block is sent

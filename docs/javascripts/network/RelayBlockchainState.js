@@ -205,8 +205,10 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
   /**
    * Nudge difficulty so recent block intervals approach targetBlockTimeSec.
-   * Steps are capped so the classroom climbs toward the target instead of
-   * jumping too-hard and then collapsing back to 1+0x0.
+   *
+   * Classroom constraint: a 3× hashrate change is ~0.4 leading zeros, not +3
+   * zeros. Steps are nibble-sized, cooldown-gated, and never skip more than
+   * one leading-zero boundary. Hashrate is a gentle pull, not a snap-to-target.
    * Returns updated settings object if changed, else null.
    */
   maybeRetargetDifficulty() {
@@ -214,9 +216,18 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     if (this.settings.parametersLocked) return null;
 
     const targetMs = this._targetMs();
+    const lastRt = this.networkStats && this.networkStats.lastRetarget;
+    const lastAt = lastRt && lastRt.at;
+    // One retarget per ~half target. Without this, 0.3s blocks + hashrate
+    // snap climbed 1 leading zero → 4 zeros in a dozen tip extensions.
+    const cooldownMs = Math.max(targetMs * 0.5, 5000);
+    if (lastAt && Date.now() - lastAt < cooldownMs) return null;
+
     const intervals = Array.isArray(this.networkStats.blockIntervals)
       ? this.networkStats.blockIntervals
       : [];
+    // After a retarget we clear samples; wait for two fresh intervals so the
+    // next step measures the new difficulty, not the pre-retarget burst.
     if (intervals.length < 2) return null;
 
     const recent = intervals.slice(-6);
@@ -225,10 +236,10 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
     const ratio = avg / targetMs;
     let delta = 0;
-    if (ratio < 0.25) delta = 3;
+    if (ratio < 0.25) delta = 2;
     else if (ratio < 0.5) delta = 2;
     else if (ratio < 0.8) delta = 1;
-    else if (ratio > 2.2) delta = -3;
+    else if (ratio > 2.2) delta = -2;
     else if (ratio > 1.6) delta = -2;
     else if (ratio > 1.25) delta = -1;
 
@@ -237,22 +248,30 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       this.settings.difficultyLeading,
       this.settings.difficultySecondary
     );
+    const curLeading = Math.floor(curScore / 16);
     if (hs > 500) {
       const wantHashes = hs * (targetMs / 1000);
       const wantScore = this._scoreForTargetHashes(wantHashes);
       const gap = wantScore - curScore;
+      // Hashrate may point at 4 zeros while we are still at 1. Walk toward
+      // it one/two nibbles at a time — never jump the whole gap.
       let toward = 0;
-      if (gap > 0) toward = Math.min(4, gap);
-      else if (gap < 0) toward = Math.max(-4, gap);
+      if (gap > 0) toward = Math.min(2, gap);
+      else if (gap < 0) toward = Math.max(-2, gap);
       if (toward > 0 && ratio < 0.9) delta = Math.max(delta, toward);
       else if (toward < 0 && ratio > 1.1) delta = Math.min(delta, toward);
       else if (Math.abs(ratio - 1) < 0.25 && Math.abs(toward) <= 2) delta = toward;
     }
 
-    delta = Math.max(-4, Math.min(4, delta));
+    delta = Math.max(-2, Math.min(2, delta));
     if (delta === 0) return null;
 
-    const next = this._scoreToDifficulty(curScore + delta);
+    let nextScore = curScore + delta;
+    const nextLeading = Math.floor(nextScore / 16);
+    if (nextLeading > curLeading + 1) nextScore = (curLeading + 1) * 16 + 0;
+    if (nextLeading < curLeading - 1) nextScore = curLeading * 16 + 0;
+
+    const next = this._scoreToDifficulty(nextScore);
     if (
       next.difficultyLeading === this.settings.difficultyLeading &&
       next.difficultySecondary === this.settings.difficultySecondary
@@ -265,16 +284,15 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       secondary: this.settings.difficultySecondary
     };
     this.updateSettings(next);
-    // Drop stale fast/slow samples so the next retarget measures the new target.
-    if (Math.abs(delta) >= 2 && Array.isArray(this.networkStats.blockIntervals)) {
-      this.networkStats.blockIntervals = this.networkStats.blockIntervals.slice(-2);
-    }
+    // Drop pre-retarget burst/stall samples so the next step and stall-ease
+    // measure the new difficulty (stale 0.3s medians were blocking ease).
+    this.networkStats.blockIntervals = [];
     this.networkStats.lastRetarget = {
       at: Date.now(),
       avgMs: avg,
       targetMs: targetMs,
       ratio: ratio,
-      delta: delta,
+      delta: nextScore - curScore,
       leading: next.difficultyLeading,
       secondary: next.difficultySecondary
     };
@@ -293,13 +311,20 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
     const targetMs = this._targetMs();
     const last = this.networkStats && this.networkStats.lastBlockTime;
-    const waitMs = Math.max(targetMs * 2.5, 22000);
-    const since = last || (this.networkStats && this.networkStats.lastRetarget && this.networkStats.lastRetarget.at);
+    const lastRt = this.networkStats && this.networkStats.lastRetarget;
+    const lastDelta = lastRt ? Number(lastRt.delta) || 0 : 0;
+    // After an upward retarget, ease sooner — that freeze is the overshoot,
+    // not a 25s "wait then one nibble" stall that left height frozen.
+    const waitMs = lastDelta > 0
+      ? Math.max(targetMs * 1.5, 12000)
+      : Math.max(targetMs * 2.5, 22000);
+    const since = last || (lastRt && lastRt.at);
     if (since && Date.now() - since < waitMs) return null;
     if (!since && this.chain && this.chain.length <= 1) return null;
 
-    // A freeze after blocks that were already too fast is a sync/mining stall,
-    // not "difficulty too hard". Easing here caused 4+0x1 → 3+0x6 after a 101s snap.
+    // Fast-sample guard only applies to intervals mined at the CURRENT
+    // difficulty. Retarget clears the list; leftover 0.3s samples from
+    // before a 1→4 jump must not block ease (that was the 25s tip freeze).
     const recent = Array.isArray(this.networkStats && this.networkStats.blockIntervals)
       ? this.networkStats.blockIntervals.slice(-6)
       : [];
@@ -1111,6 +1136,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     }
 
     const oldTip = this.chain[this.chain.length - 1] || null;
+    const oldChain = this.chain.slice();
 
     if (!this.allBlocks.has(block.previousHash) && block.previousHash !== '0') {
       console.warn('[RelayState] Block parent not yet known — storing as orphan until parent arrives');
@@ -1143,21 +1169,24 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       }
     }
 
-    // First-seen wins at a given parent + height + fork. Extra hashes at the
-    // same slot are stale (one miner remine-spam, or a late racer).
+    // First-seen stays the tip at equal height (`_selectBestChain`). Still
+    // store ONE competing sibling so a later extension can reorg — otherwise
+    // a race that later loses (#30 with a transfer, then a longer empty fork)
+    // can never be unwound and the transfer vanishes. Extra remine-spam
+    // beyond two blocks at the same parent+index+fork is dropped.
     const slotFid = block.forkId || 'classic';
     const slotIndex = block.index != null ? Number(block.index) : null;
     if (slotIndex != null) {
-      let sibling = null;
+      let siblingCount = 0;
       this.allBlocks.forEach((existing) => {
-        if (sibling || !existing) return;
+        if (!existing) return;
         if (existing.hash === block.hash) return;
         if (String(existing.previousHash) !== String(block.previousHash)) return;
         if (Number(existing.index) !== slotIndex) return;
         if ((existing.forkId || 'classic') !== slotFid) return;
-        sibling = existing;
+        siblingCount += 1;
       });
-      if (sibling) {
+      if (siblingCount >= 2) {
         return {
           accepted: false,
           reason: 'Stale block — already have #' + slotIndex + ' on this parent',
@@ -1196,6 +1225,16 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
     this._recomputeMiningRewards();
 
+    // If a confirmed transfer's block lost the race, put it back in the
+    // mempool (or drop it with a reason if it is invalid on the new tip).
+    let requeuedTransactions = [];
+    let droppedTransactions = [];
+    if (didReorg) {
+      const rq = this._requeueOrphanedTransactions(oldChain, this.chain);
+      requeuedTransactions = rq.restored || [];
+      droppedTransactions = rq.dropped || [];
+    }
+
     // Drop confirmed mempool txs whenever the canonical tip moves
     if (onBest) {
       if (typeof this.clearIncludedTransactions === 'function') {
@@ -1222,7 +1261,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       chain: this.chain.slice(),
       tipHash: tipOut && tipOut.hash,
       tipIndex: tipOut && tipOut.index != null ? tipOut.index : Math.max(0, this.chain.length - 1),
-      retargetSettings: retargetSettings
+      retargetSettings: retargetSettings,
+      requeuedTransactions: requeuedTransactions,
+      droppedTransactions: droppedTransactions
     };
   }
 
@@ -1281,6 +1322,76 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const confirmed = this._confirmedTxIds();
     if (!confirmed.size) return;
     this.pendingTransactions = this.pendingTransactions.filter((t) => !this._txMatchesSet(t, confirmed));
+  }
+
+  /**
+   * After a reorg, restore transfers that were only in orphaned blocks.
+   * Spendability is checked against the new canonical balances plus anything
+   * already sitting in the mempool (applied in original order).
+   *
+   * GHPEHS Miner 2 (`user_x64uho1mu`): Wallet 1 → Miner 2 for 5 landed once
+   * (55 = 5×10+5, then 75 = 7×10+5, never +10). A later reorg dropped them
+   * to 2 blocks / 20 coins (exactly 2×10) with mempool 0 and every remaining
+   * main-chain block Txs 0. The including block left the canonical chain;
+   * this puts that single transfer back pending unless it is invalid now.
+   */
+  _requeueOrphanedTransactions(oldChain, newChain) {
+    const restored = [];
+    const dropped = [];
+    const newHashes = new Set();
+    (newChain || []).forEach(function (b) {
+      if (b && b.hash) newHashes.add(b.hash);
+    });
+    const orphaned = (oldChain || []).filter(function (b) {
+      return !!(b && b.hash && !newHashes.has(b.hash) && b.miner !== 'genesis');
+    });
+    if (!orphaned.length) return { restored: restored, dropped: dropped };
+
+    const confirmed = this._confirmedTxIds();
+    const inPool = new Set();
+    (this.pendingTransactions || []).forEach((t) => this._addTxKeys(inPool, t));
+
+    const candidates = [];
+    const seenCand = new Set();
+    orphaned.forEach((block) => {
+      const txs = (block && Array.isArray(block.transactions)) ? block.transactions : [];
+      txs.forEach((tx) => {
+        if (!tx || !(Number(tx.amount) > 0) || !tx.from || !tx.to) return;
+        if (this._txMatchesSet(tx, confirmed)) return;
+        if (this._txMatchesSet(tx, inPool) || this._txMatchesSet(tx, seenCand)) return;
+        this._addTxKeys(seenCand, tx);
+        candidates.push({
+          from: tx.from,
+          to: tx.to,
+          amount: Number(tx.amount),
+          timestamp: tx.timestamp || Date.now(),
+          id: tx.id || (String(tx.from || '') + ':' + String(tx.to || '') + ':' + String(tx.timestamp || Date.now()))
+        });
+      });
+    });
+
+    const reserved = {};
+    (this.pendingTransactions || []).forEach(function (t) {
+      if (!t || !t.from) return;
+      reserved[t.from] = (reserved[t.from] || 0) + Number(t.amount || 0);
+    });
+
+    candidates.forEach((tx) => {
+      const sender = this.participants.get(tx.from);
+      const bal = sender ? (Number(sender.balance) || 0) : 0;
+      const used = reserved[tx.from] || 0;
+      if (bal - used >= tx.amount) {
+        this.pendingTransactions.push(tx);
+        reserved[tx.from] = used + tx.amount;
+        restored.push(tx);
+      } else {
+        dropped.push({
+          transaction: tx,
+          reason: 'insufficient-balance'
+        });
+      }
+    });
+    return { restored: restored, dropped: dropped };
   }
 
   // What we send to a newly joined peer
@@ -1361,12 +1472,18 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     });
 
     // Re-run fork choice in case orphans are longer
+    const priorChain = this.chain.slice();
     this.chain = this._selectBestChain();
     const restoredTip = this.chain[this.chain.length - 1];
     this.networkStats.blockHeight = (restoredTip && restoredTip.index != null)
       ? Number(restoredTip.index)
       : Math.max(0, this.chain.length - 1);
     this._recomputeMiningRewards();
+    const priorTip = priorChain.length ? priorChain[priorChain.length - 1] : null;
+    if (priorTip && restoredTip && priorTip.hash !== restoredTip.hash) {
+      this._requeueOrphanedTransactions(priorChain, this.chain);
+      this.purgeConfirmedFromMempool();
+    }
 
     return true;
   }

@@ -71,6 +71,30 @@ body.lab-app .navbar-inverse {
   backdrop-filter: blur(10px);
 }
 
+/* Hamburger must stay above toasts. Bootstrap's navbar-fixed-top is z-index
+   1030; participate toasts used the same value and painted over the toggle. */
+body.lab-app .navbar-inverse.navbar-fixed-top {
+  z-index: 1100;
+}
+body.lab-app .navbar-toggle {
+  position: relative;
+  z-index: 1101;
+}
+
+/* Sit below the fixed navbar. pointer-events:none so a wrap/overlap cannot
+   steal taps from the hamburger. */
+body.lab-app .lab-toast {
+  position: fixed !important;
+  top: 58px !important;
+  left: 12px !important;
+  right: 12px !important;
+  margin: 0 auto !important;
+  z-index: 1025 !important;
+  max-width: min(400px, calc(100vw - 24px)) !important;
+  pointer-events: none;
+  word-wrap: break-word;
+}
+
 body.lab-app .navbar-inverse .navbar-brand {
   font-family: var(--lab-display);
   font-weight: 700;
@@ -538,6 +562,23 @@ body.lab-app #blockchainView .panel:hover {
 }
 
 @media (max-width: 767px) {
+  /* Keep brand + hamburger on one row so the toggle stays at a known x. */
+  body.lab-app .navbar-brand {
+    font-size: 15px;
+    max-width: calc(100vw - 72px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Inset from the right so a full-width bar cannot cover x≈331 hamburger. */
+  body.lab-app .lab-toast {
+    top: 58px !important;
+    left: 8px !important;
+    right: 56px !important;
+    max-width: calc(100vw - 72px) !important;
+  }
+
   html,
   body.lab-app {
     overflow-x: hidden;
