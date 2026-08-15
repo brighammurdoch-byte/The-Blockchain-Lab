@@ -43,8 +43,9 @@ function fail(n, d) { results.push({ ok: false, n }); console.log('FAIL  ' + n +
         max: rs._autoMaxScore && rs._autoMaxScore()
       };
     });
-    if (retarget.L >= 4) pass('Auto-diff jumps toward 10s at 80kH/s', JSON.stringify(retarget));
-    else fail('Auto-diff jumps toward 10s at 80kH/s', JSON.stringify(retarget));
+    if (retarget.L === 1 && retarget.S != null && retarget.S > 2) {
+      pass('Auto-diff nudges toward 10s without a 1→4 zero jump', JSON.stringify(retarget));
+    } else fail('Auto-diff nudges toward 10s without a 1→4 zero jump', JSON.stringify(retarget));
 
     async function join(role, uid) {
       const p = await ctx.newPage();

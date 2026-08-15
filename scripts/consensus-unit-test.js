@@ -106,22 +106,28 @@ const Eth = loadEth();
   const score1 = lab._difficultyScore(s1.difficultyLeading, s1.difficultySecondary);
   const start = 1 * 16 + 2;
   const jump = score1 - start;
-  if (jump > 0 && jump <= 4) pass('First retarget is damped (≤4 steps)', 'delta ' + jump + ' → ' + s1.difficultyLeading + '+0x' + s1.difficultySecondary.toString(16));
-  else fail('First retarget is damped (≤4 steps)', 'delta ' + jump);
+  if (jump > 0 && jump <= 2) pass('First retarget is damped (≤2 steps)', 'delta ' + jump + ' → ' + s1.difficultyLeading + '+0x' + s1.difficultySecondary.toString(16));
+  else fail('First retarget is damped (≤2 steps)', 'delta ' + jump);
 
-  // Climb many times with still-fast intervals; must not leap to 3+F in one step
+  // Climb many times with still-fast intervals; must not leap a leading zero
   let maxStep = jump;
+  let maxLeadJump = 0;
   for (let i = 0; i < 20; i++) {
     lab.networkStats.blockIntervals = [400, 400, 400];
     lab.networkStats.totalHashrate = 80000;
+    if (lab.networkStats.lastRetarget) lab.networkStats.lastRetarget.at = Date.now() - 10000;
+    const beforeL = lab.settings.difficultyLeading;
     const before = lab._difficultyScore(lab.settings.difficultyLeading, lab.settings.difficultySecondary);
     const s = lab.maybeRetargetDifficulty();
     if (!s) continue;
     const after = lab._difficultyScore(s.difficultyLeading, s.difficultySecondary);
     maxStep = Math.max(maxStep, after - before);
+    maxLeadJump = Math.max(maxLeadJump, s.difficultyLeading - beforeL);
   }
-  if (maxStep <= 4) pass('No retarget jumps more than 4 ladder steps', 'max step ' + maxStep);
-  else fail('No retarget jumps more than 4 ladder steps', 'max step ' + maxStep);
+  if (maxStep <= 2) pass('No retarget jumps more than 2 ladder steps', 'max step ' + maxStep);
+  else fail('No retarget jumps more than 2 ladder steps', 'max step ' + maxStep);
+  if (maxLeadJump <= 1) pass('No retarget adds more than 1 leading zero', 'max lead +' + maxLeadJump);
+  else fail('No retarget adds more than 1 leading zero', 'max lead +' + maxLeadJump);
 
   const want = lab._scoreForTargetHashes(80000 * 10);
   const wantDiff = lab._scoreToDifficulty(want);

@@ -39,19 +39,11 @@ function drainToastQueue() {
   const bgColor = next.type === 'success' ? '#28a745' : next.type === 'error' ? '#dc3545' : next.type === 'warning' ? '#d97706' : '#17a2b8';
   const toast = $(`
     <div id="toastNotification" class="lab-toast" style="
-      position: fixed;
-      top: 72px;
-      left: 12px;
-      right: 12px;
-      margin: 0 auto;
       background: ${bgColor};
       color: white;
       padding: 12px 16px;
       border-radius: 5px;
       box-shadow: 0 4px 6px rgba(0,0,0,0.2);
-      z-index: 1080;
-      max-width: min(400px, calc(100vw - 24px));
-      word-wrap: break-word;
       animation: slideIn 0.3s ease-out;
     ">
       ${next.message}
@@ -560,6 +552,31 @@ function initClientSideNetworking(mode, roomCode) {
     console.log('[ClientNet] AdminRelayCoordinator + RelayBlockchainState attached (with strong persistence)');
 
     // When auto-difficulty retargets, keep admin sliders + badge in sync
+    coordinator.onMempoolRequeue = function (result) {
+      if (!result) return;
+      const n = (result.requeuedTransactions || []).length;
+      const d = (result.droppedTransactions || []).length;
+      if (n) {
+        showToastNotification(n + ' transfer(s) returned to mempool after a reorg', 'warning');
+      }
+      if (d) {
+        showToastNotification(d + ' transfer(s) dropped after a reorg (invalid on new tip)', 'warning');
+      }
+      if (typeof updatePendingTransactions === 'function') {
+        try {
+          updatePendingTransactions({
+            pendingTransactions: Array.isArray(relayState.pendingTransactions)
+              ? relayState.pendingTransactions.slice()
+              : [],
+            participants: Array.from(relayState.participants.values())
+          });
+        } catch (e) {}
+      }
+      if (typeof renderClientParticipants === 'function') {
+        try { renderClientParticipants(); } catch (e) {}
+      }
+    };
+
     coordinator.onDifficultyRetarget = function (settings) {
       if (!settings) return;
       syncDifficultyControlsFromState(settings);
@@ -889,8 +906,24 @@ function initClientSideNetworking(mode, roomCode) {
         tipIndex: result.tipIndex,
         chain: result.chain || relayState.chain.slice(),
         participants: Array.from(relayState.participants.values()),
-        networkStats: { ...relayState.networkStats }
+        pendingTransactions: Array.isArray(relayState.pendingTransactions)
+          ? relayState.pendingTransactions.slice()
+          : [],
+        networkStats: { ...relayState.networkStats },
+        requeuedTransactions: result.requeuedTransactions || [],
+        droppedTransactions: result.droppedTransactions || []
       });
+      if (result.requeuedTransactions && result.requeuedTransactions.length) {
+        showToastNotification(
+          result.requeuedTransactions.length + ' transfer(s) returned to mempool after a reorg',
+          'warning'
+        );
+      } else if (result.droppedTransactions && result.droppedTransactions.length) {
+        showToastNotification(
+          result.droppedTransactions.length + ' transfer(s) dropped after a reorg (invalid on new tip)',
+          'warning'
+        );
+      }
       if (typeof renderClientRelayChain === 'function') renderClientRelayChain();
     }
   });

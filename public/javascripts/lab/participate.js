@@ -1750,19 +1750,11 @@ function drainToastQueue() {
   const bgColor = next.type === 'success' ? '#28a745' : next.type === 'error' ? '#dc3545' : next.type === 'warning' ? '#d97706' : '#17a2b8';
   const toast = $(`
     <div id="toastNotification" class="lab-toast lab-toast-${next.type}" style="
-      position: fixed;
-      top: 72px;
-      left: 12px;
-      right: 12px;
-      margin: 0 auto;
       background: ${bgColor};
       color: white;
       padding: 12px 16px;
       border-radius: 5px;
       box-shadow: 0 4px 6px rgba(0,0,0,0.2);
-      z-index: 1030;
-      max-width: min(400px, calc(100vw - 24px));
-      word-wrap: break-word;
       animation: slideIn 0.3s ease-out;
     ">
       ${next.message}
@@ -2177,7 +2169,11 @@ function initClientSideNetworkingForParticipant(mode) {
         chainHeight: payload.chainHeight != null ? payload.chainHeight : payload.newHeight
       });
       if (payload.tipHash) markHubChainSeen(payload.tipHash, payload.tipIndex != null ? payload.tipIndex : payload.newHeight);
-      if (payload.reorg) {
+      if (payload.requeuedTransactions && payload.requeuedTransactions.length) {
+        showToastNotification('Chain reorg — transfer returned to mempool', 'warning');
+      } else if (payload.droppedTransactions && payload.droppedTransactions.length) {
+        showToastNotification('Chain reorg — transfer dropped (invalid on new tip)', 'warning');
+      } else if (payload.reorg) {
         showToastNotification('Chain reorg — following longest chain', 'warning');
       } else if (payload.isFork && block && isNewForkId(block.forkId)) {
         // Hard-fork NEW side is intentional, not a lost race

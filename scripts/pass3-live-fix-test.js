@@ -291,9 +291,11 @@ const Relay = loadRelay();
     pass('Legacy 51% helper text removed from admin.pug', '');
   } else fail('Legacy 51% helper text removed from admin.pug', 'still present');
 
-  if (/observe\.js\?v=p2fix6/.test(fs.readFileSync(path.join(__dirname, '..', 'views/lab/observe.pug'), 'utf8')) &&
-      /labPaths\.js\?v=p2fix6/.test(fs.readFileSync(path.join(__dirname, '..', 'views/lab/observe.pug'), 'utf8')) &&
-      /landing\.js\?v=p2fix4/.test(fs.readFileSync(path.join(__dirname, '..', 'views/lab/index.pug'), 'utf8'))) {
+  const observePug = fs.readFileSync(path.join(__dirname, '..', 'views/lab/observe.pug'), 'utf8');
+  const indexPug = fs.readFileSync(path.join(__dirname, '..', 'views/lab/index.pug'), 'utf8');
+  if (/observe\.js\?v=p3fix1/.test(observePug) &&
+      /labPaths\.js\?v=p2fix6/.test(observePug) &&
+      /landing\.js\?v=p2fix4/.test(indexPug)) {
     pass('Changed scripts cache-bust past p2fix3', '');
   } else fail('Changed scripts cache-bust past p2fix3', 'stale ?v=');
 

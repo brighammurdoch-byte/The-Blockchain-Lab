@@ -187,8 +187,18 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
         participants: participants,
         pendingTransactions: snap.pendingTransactions || [],
         networkStats: snap.networkStats || (this.lab && this.lab.networkStats ? { ...this.lab.networkStats } : undefined),
-        pendingFork: this.lab && this.lab.pendingFork ? this.lab.pendingFork : undefined
+        pendingFork: this.lab && this.lab.pendingFork ? this.lab.pendingFork : undefined,
+        requeuedTransactions: result.requeuedTransactions || [],
+        droppedTransactions: result.droppedTransactions || []
       });
+
+      if (
+        typeof this.onMempoolRequeue === 'function' &&
+        ((result.requeuedTransactions && result.requeuedTransactions.length) ||
+          (result.droppedTransactions && result.droppedTransactions.length))
+      ) {
+        try { this.onMempoolRequeue(result); } catch (e) {}
+      }
 
       // Auto-difficulty: push new target to miners after a tip extension
       if (result.retargetSettings) {
