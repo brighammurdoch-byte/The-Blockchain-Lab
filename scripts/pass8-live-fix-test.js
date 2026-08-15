@@ -138,6 +138,88 @@ function classroomLab(leading, secondary) {
   }
 })();
 
+// --- 5b. 13s at 4+0x3 (hashrate-implied L) only eases the nibble ---
+(function () {
+  const lab = classroomLab(4, 3);
+  lab.networkStats.totalHashrate = 29900;
+  lab.networkStats.lastBlockTime = Date.now() - 13000;
+  lab.networkStats._lastTipWallClock = Date.now() - 13000;
+  const eased = lab.maybeEaseDifficultyIfStalled();
+  if (eased && eased.difficultyLeading === 4 && Number(eased.difficultySecondary) > 3) {
+    pass('13s at 4+0x3 eases nibble only (no instant 4→3)',
+      eased.difficultyLeading + '+0x' + Number(eased.difficultySecondary).toString(16));
+  } else {
+    fail('13s at 4+0x3 eases nibble only (no instant 4→3)',
+      eased ? (eased.difficultyLeading + '+0x' + Number(eased.difficultySecondary).toString(16)) : 'no ease');
+  }
+})();
+
+// --- 5c. MYDFSN h279: 25s+ freeze at 4+0x3 / 30kH/s drops a zero ---
+(function () {
+  const lab = classroomLab(4, 3);
+  lab.networkStats.totalHashrate = 29900;
+  lab.networkStats.lastBlockTime = Date.now() - 26000;
+  lab.networkStats._lastTipWallClock = Date.now() - 26000;
+  lab.networkStats.lastRetarget = {
+    at: Date.now() - 14000,
+    stalled: true,
+    avgMs: 12000,
+    leading: 4,
+    secondary: 3
+  };
+  const eased = lab.maybeEaseDifficultyIfStalled();
+  if (eased && eased.difficultyLeading === 3) {
+    pass('25s freeze at 4+0x3 drops a leading zero (unstick)',
+      eased.difficultyLeading + '+0x' + Number(eased.difficultySecondary).toString(16));
+  } else {
+    fail('25s freeze at 4+0x3 drops a leading zero (unstick)',
+      eased ? (eased.difficultyLeading + '+0x' + Number(eased.difficultySecondary).toString(16)) : 'no ease');
+  }
+})();
+
+// --- 5d. Long-freeze zero drops are rate-limited (no 4→1 in one burst) ---
+(function () {
+  const lab = classroomLab(4, 3);
+  lab.networkStats.totalHashrate = 29900;
+  lab.networkStats.lastBlockTime = Date.now() - 40000;
+  lab.networkStats._lastTipWallClock = Date.now() - 40000;
+  const first = lab.maybeEaseDifficultyIfStalled();
+  const second = lab.maybeEaseDifficultyIfStalled();
+  const L1 = first ? first.difficultyLeading : lab.settings.difficultyLeading;
+  const L2 = lab.settings.difficultyLeading;
+  if (first && L1 === 3 && L2 === 3 && !second) {
+    pass('Second stall-ease within 5s does not drop another zero',
+      'L=' + L2);
+  } else {
+    fail('Second stall-ease within 5s does not drop another zero',
+      JSON.stringify({
+        first: first && (first.difficultyLeading + '+0x' + Number(first.difficultySecondary).toString(16)),
+        second: second && (second.difficultyLeading + '+0x' + Number(second.difficultySecondary).toString(16)),
+        L2: L2
+      }));
+  }
+})();
+
+// --- 5e. After a stall zero-drop, 5s later must not add the zero back ---
+(function () {
+  const lab = classroomLab(4, 3);
+  lab.networkStats.totalHashrate = 29900;
+  lab.networkStats.lastBlockTime = Date.now() - 26000;
+  lab.networkStats._lastTipWallClock = Date.now() - 26000;
+  lab.maybeEaseDifficultyIfStalled();
+  lab.networkStats.blockIntervals = [300, 300, 280];
+  if (lab.networkStats.lastRetarget) lab.networkStats.lastRetarget.at = Date.now() - 6000;
+  const back = lab.maybeRetargetDifficulty();
+  const L = lab.settings.difficultyLeading;
+  if (L === 3 && !(back && back.difficultyLeading >= 4)) {
+    pass('Stall zero-drop is not immediately reversed by way-too-fast',
+      L + '+0x' + Number(lab.settings.difficultySecondary).toString(16));
+  } else {
+    fail('Stall zero-drop is not immediately reversed by way-too-fast',
+      back ? (back.difficultyLeading + '+0x' + Number(back.difficultySecondary).toString(16)) : ('L=' + L));
+  }
+})();
+
 // --- 6. Inter-zero cooldown + hashrate L cap still hold (no 1→5) ---
 (function () {
   const lab = classroomLab(1, 0);

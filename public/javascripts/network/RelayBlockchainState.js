@@ -449,21 +449,39 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const curS = Math.max(0, Math.min(15, Number(this.settings.difficultySecondary) || 0));
     if (curL <= 1 && curS >= 15) return null;
 
+    // Reject storms can call this every packet. Keep nibble steps ~5s apart.
+    if (lastRt && lastRt.stalled && lastRt.at && Date.now() - lastRt.at < 5000) {
+      return null;
+    }
+
     const wantL = this._wantLeadingFromHashrate();
+    // MYDFSN h279: 4+0x3 toasted “easing after a stall, observed 12s”, then
+    // the tip sat 455s at ~30kH/s. wantL≈4 blocked any L drop, so +2 S never
+    // left the 4-zero band. A freeze well past 12s must drop a zero.
+    const longFreeze = hashing && tipAge >= Math.max(targetMs * 2.5, 25000);
+    const lastStallZeroAt = lastRt && lastRt.stallZeroAt;
+    const stallZeroCooling = !!(lastStallZeroAt &&
+      (Date.now() - lastStallZeroAt) < Math.max(targetMs * 2, 20000));
     // Higher S = more permissive next nibble = easier. Score-1 walked
     // 5+0xC→0xB→0x1 (harder) and only recovered when it wrapped to 4+0xF.
     let nextL = curL;
     let nextS = curS;
-    if (hashing && wantL != null && curL > wantL) {
+    if (longFreeze && curL > 1 && !stallZeroCooling) {
+      nextL = curL - 1;
+      nextS = Math.min(15, curS + 2);
+    } else if (hashing && wantL != null && curL > wantL) {
       nextL = curL - 1;
       nextS = Math.min(15, curS + 2);
     } else if (curS < 15) {
       nextS = Math.min(15, curS + 2);
-    } else if (curL > 1) {
+    } else if (curL > 1 && (!stallZeroCooling || longFreeze)) {
       nextL = curL - 1;
       nextS = 15;
     }
-    if (wantL != null && nextL < Math.max(1, wantL - 1)) {
+    // Gentle 12s path stays within one zero of hashrate-implied L.
+    // A ≥25s hashing freeze may drop further so the class is not stuck
+    // at 4+0x3 for minutes (floor would return null at 3+0xF forever).
+    if (!longFreeze && wantL != null && nextL < Math.max(1, wantL - 1)) {
       nextL = Math.max(1, wantL - 1);
       if (nextL === curL && nextS === curS) return null;
     }
@@ -480,6 +498,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       secondary: this.settings.difficultySecondary
     };
     this.updateSettings(next);
+    // Drop leftover burst samples so the first block after a freeze does
+    // not look like 0.3s and immediately add a zero back.
+    this.networkStats.blockIntervals = [];
     this.networkStats.lastRetarget = {
       at: Date.now(),
       avgMs: sinceMs > 0 ? sinceMs : (recentMedian > 0 ? recentMedian : targetMs),
@@ -491,7 +512,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       stalled: true,
       addedLeadingZero: false,
       // Dropping a zero must not bounce straight back up (4→5→4).
-      leadingZeroAt: nextL < curL ? Date.now() : prevZeroAt
+      leadingZeroAt: nextL < curL ? Date.now() : prevZeroAt,
+      stallZeroAt: nextL < curL ? Date.now() : lastStallZeroAt
     };
     return Object.assign({}, this.settings);
   }
