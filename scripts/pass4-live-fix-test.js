@@ -603,12 +603,12 @@ const Relay = loadRelay();
     /admin\.js\?v=p2fix/.test(adminPug) ||
     /lab-theme\.css\?v=p2fix/.test(partPug + obsPug + adminPug);
   if (!changedStillStale
-      && /RelayBlockchainState\.js\?v=p4fix2/.test(partPug)
-      && /participate\.js\?v=p4fix2/.test(partPug)
+      && /RelayBlockchainState\.js\?v=p4fix3/.test(partPug)
+      && /participate\.js\?v=p4fix3/.test(partPug)
       && /observe\.js\?v=p4fix1/.test(obsPug)
-      && /admin\.js\?v=p4fix1/.test(adminPug)) {
-    pass('Changed assets cache-bust (p4fix2)', '');
-  } else fail('Changed assets cache-bust (p4fix2)', 'stale ?v=');
+      && /admin\.js\?v=p4fix3/.test(adminPug)) {
+    pass('Changed assets cache-bust (p4fix3)', '');
+  } else fail('Changed assets cache-bust (p4fix3)', 'stale ?v=');
 })();
 
 // --- 10. 2+ miners listed, hashing/hashrate gate fails → in-app reason, no confirm ---

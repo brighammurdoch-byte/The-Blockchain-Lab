@@ -42,6 +42,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       blockIntervals: []
     };
     this.allBlocks = new Map(); // hash -> block (for simple fork/orphan handling)
+    this.knownNames = new Map(); // userId -> last applied classroom name (survives prune)
     this.genesisCreated = false;
     this.networkPaused = false;
     /** { height, name } when a classroom hard fork is proposed */
@@ -265,8 +266,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     }
 
     // Way-too-fast: ≥3× quicker than target for several fresh samples.
-    // One leading-zero step is allowed (1→2), never 1→4 in a single retarget.
-    // Nibble-only walk left 3 miners at 1+0x6 while blocks landed every 0.5s.
+    // Repeatable: 1→2, then after cooldown 2→3, then 3→4. Never 1→4 / 2→5
+    // in one retarget. 4W4KV3 froze at 2+0x0 because the climb path only
+    // ran once and the hub redraw kept resetting lastRetarget.at.
     const wayTooFast = ratio > 0 && ratio < (1 / 3) && recent.length >= 2;
     if (wayTooFast && curLeading < 5) {
       const nextLeading = curLeading + 1;
@@ -445,7 +447,13 @@ if (typeof window.RelayBlockchainState === 'undefined') {
   // Called when a new peer joins via the relay
   addOrUpdateParticipant(userId, role = 'miner', extra = {}) {
     extra = extra || {};
-    const incomingName = String(extra.displayName || extra.name || '').trim();
+    if (!this.knownNames) this.knownNames = new Map();
+    let incomingName = String(extra.displayName || extra.name || '').trim();
+    if (incomingName && /^unnamed$/i.test(incomingName)) incomingName = '';
+    // Empty hello after prune/reload must not drop a name we already applied.
+    if (!incomingName) {
+      incomingName = this.knownNames.get(String(userId)) || '';
+    }
     // Never clobber a known classroom name with empty/null from a later join/hashrate packet
     if (!incomingName) {
       extra = Object.assign({}, extra);
@@ -477,6 +485,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
         ? Math.max(0, Number(extra.endowment) || 0)
         : endow;
       if (extra.balance == null) row.balance = row.endowment;
+      if (incomingName) this.knownNames.set(String(userId), incomingName);
       this.participants.set(userId, row);
     } else {
       const p = this.participants.get(userId);
@@ -497,6 +506,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       if (incomingName && allowRename) {
         p.name = incomingName;
         p.displayName = incomingName;
+        this.knownNames.set(String(userId), incomingName);
       } else if (!p.displayName && p.name) {
         p.displayName = p.name;
       }
@@ -900,6 +910,38 @@ if (typeof window.RelayBlockchainState === 'undefined') {
    * During a hard-fork simulation, main is restricted to classic-compatible paths so
    * the NEW side never "wins" via pure length and erases the permanent split.
    */
+  /**
+   * Drop race-loser blocks that are far behind the tip so the hub Map and
+   * projector cannot grow without bound (admin Aw Snap at height 264+).
+   * Keeps the canonical chain plus recent orphans for short 51% / reorg demos.
+   */
+  pruneDistantOrphans(keepBehind) {
+    keepBehind = keepBehind == null ? 32 : Math.max(8, Number(keepBehind) || 32);
+    const tip = this.chain && this.chain.length ? this.chain[this.chain.length - 1] : null;
+    const tipIndex = tip && tip.index != null
+      ? Number(tip.index)
+      : (this.chain && this.chain.length ? this.chain.length - 1 : 0);
+    if (!(tipIndex > keepBehind)) return 0;
+    const mainHashes = new Set();
+    (this.chain || []).forEach(function (b) {
+      if (b && b.hash) mainHashes.add(b.hash);
+    });
+    const drop = [];
+    this.allBlocks.forEach((b, hash) => {
+      if (!b || !hash || mainHashes.has(hash)) return;
+      if (b.miner === 'genesis' || b.index === 0) return;
+      const idx = b.index != null ? Number(b.index) : -1;
+      if (idx >= 0 && tipIndex - idx > keepBehind) drop.push(hash);
+    });
+    drop.forEach((h) => this.allBlocks.delete(h));
+    return drop.length;
+  }
+
+  _blocksForPersist() {
+    if (typeof this.pruneDistantOrphans === 'function') this.pruneDistantOrphans(32);
+    return Array.from(this.allBlocks.values());
+  }
+
   _selectBestChain() {
     const hardFork = !!(this.pendingFork && this.pendingFork.height != null);
     let best = [];
@@ -1293,7 +1335,25 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       this.addOrUpdateParticipant(fromUserId, 'miner');
     }
 
-    const bestChain = this._selectBestChain();
+    // Direct tip extension: skip the O(n) walk of every stored hash. At
+    // height 200+ with 3–4 racing miners that walk OOMs the admin tab.
+    let bestChain;
+    const stored = this.allBlocks.get(block.hash);
+    const storedIdx = stored && stored.index != null ? Number(stored.index) : NaN;
+    const oldIdx = oldTip && oldTip.index != null ? Number(oldTip.index) : NaN;
+    if (
+      !(this.pendingFork && this.pendingFork.height != null) &&
+      oldTip &&
+      stored &&
+      stored.previousHash === oldTip.hash &&
+      !isNaN(storedIdx) &&
+      !isNaN(oldIdx) &&
+      storedIdx === oldIdx + 1
+    ) {
+      bestChain = this.chain.concat([stored]);
+    } else {
+      bestChain = this._selectBestChain();
+    }
     const newTip = bestChain[bestChain.length - 1] || null;
     const tipChanged = !!(newTip && (!oldTip || oldTip.hash !== newTip.hash));
     const isDirectExtension = !!(oldTip && newTip && newTip.previousHash === oldTip.hash);
@@ -1315,6 +1375,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     }
 
     this._recomputeMiningRewards();
+    if (typeof this.pruneDistantOrphans === 'function') {
+      this.pruneDistantOrphans(32);
+    }
 
     // If a confirmed transfer's block lost the race, put it back in the
     // mempool (or drop it with a reason if it is invalid on the new tip).
@@ -1507,7 +1570,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       tipHash: compact.tipHash || (tip && tip.hash),
       tipIndex: compact.tipIndex,
       genesis: compact.chainTruncated ? (this.chain[0] || null) : undefined,
-      orphans: compact.chainTruncated ? orphans.slice(-6) : orphans,
+      orphans: (compact.chainTruncated ? orphans.slice(-6) : orphans).slice(-12),
       participants: Array.from(this.participants.values()),
       adminSettings: { ...this.settings },
       networkStats: { ...this.networkStats },
@@ -1522,8 +1585,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     return {
       roomCode: this.roomCode,
       chain: this.chain,
-      allBlocks: Array.from(this.allBlocks.values()),
+      allBlocks: this._blocksForPersist(),
       participants: Array.from(this.participants.values()),
+      knownNames: this.knownNames ? Array.from(this.knownNames.entries()) : [],
       settings: { ...this.settings },
       networkStats: { ...this.networkStats },
       pendingTransactions: [...this.pendingTransactions],
@@ -1545,6 +1609,20 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       this.participants = new Map();
       persisted.participants.forEach(p => this.participants.set(p.userId, p));
     }
+    if (!this.knownNames) this.knownNames = new Map();
+    if (Array.isArray(persisted.knownNames)) {
+      persisted.knownNames.forEach(function (pair) {
+        if (pair && pair[0] && pair[1]) this.knownNames.set(String(pair[0]), String(pair[1]));
+      }, this);
+    } else if (persisted.knownNames && typeof persisted.knownNames === 'object') {
+      Object.keys(persisted.knownNames).forEach((id) => {
+        if (persisted.knownNames[id]) this.knownNames.set(String(id), String(persisted.knownNames[id]));
+      });
+    }
+    this.participants.forEach((p, id) => {
+      const n = String((p && (p.displayName || p.name)) || '').trim();
+      if (n && !/^unnamed$/i.test(n)) this.knownNames.set(String(id), n);
+    });
     if (persisted.settings) this.settings = { ...this.settings, ...persisted.settings };
     if (persisted.networkStats) this.networkStats = { ...this.networkStats, ...persisted.networkStats };
     if (persisted.pendingTransactions) this.pendingTransactions = persisted.pendingTransactions;

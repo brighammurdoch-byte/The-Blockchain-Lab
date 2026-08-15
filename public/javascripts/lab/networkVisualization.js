@@ -237,8 +237,12 @@ class NetworkVisualization {
       const existing = existingNodes.get(miner.userId);
       const nextStatus = miner.status || 'idle';
       if (existing) {
-        existing.label = miner.name || miner.userId.substring(0, 8);
-        existing.displayName = miner.name || '';
+        if (miner.name) {
+          existing.label = miner.name;
+          existing.displayName = miner.name;
+        } else {
+          existing.label = existing.displayName || existing.label || miner.userId.substring(0, 8);
+        }
         // Don't clobber short-lived flash statuses from live animations
         if (!this._statusTimers.has(miner.userId) ||
             (nextStatus !== 'idle' && nextStatus !== existing.status)) {
@@ -275,7 +279,7 @@ class NetworkVisualization {
 
     miners.forEach(miner => {
       this.nodeData.set(miner.userId, {
-        name: miner.name || 'Unnamed Node',
+        name: miner.name || this.nodeNames.get(miner.userId) || 'Unnamed Node',
         address: miner.address || miner.userId,
         chainHeight: miner.chainHeight || 0,
         hashrate: miner.hashrate || 0,

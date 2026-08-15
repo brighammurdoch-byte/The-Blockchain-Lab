@@ -134,6 +134,7 @@ function syncDifficultyControlsFromState(settings) {
   refreshBlockPaceDisplay();
 }
 
+var _lastPausedUi = null;
 function applyNetworkPausedUi(paused) {
   const on = !!paused;
   const $badge = $('#networkPausedBadge');
@@ -147,9 +148,13 @@ function applyNetworkPausedUi(paused) {
   if (on && relayState && typeof relayState.zeroHashratesForPause === 'function') {
     relayState.zeroHashratesForPause();
   }
-  if (!on && relayState && typeof relayState.noteNetworkResumed === 'function') {
+  // Only reset the retarget/ease clock on a real pause→live edge.
+  // renderClientRelayChain used to call this every block, which rewrote
+  // lastRetarget.at and froze auto-diff at 2+0x0 (session 4W4KV3).
+  if (!on && _lastPausedUi === true && relayState && typeof relayState.noteNetworkResumed === 'function') {
     relayState.noteNetworkResumed();
   }
+  _lastPausedUi = on;
   $('#totalHashrate').text((on ? 0 : ((relayState && relayState.networkStats && relayState.networkStats.totalHashrate) || 0)).toFixed(0) + ' H/s');
 }
 
@@ -586,9 +591,11 @@ function initClientSideNetworking(mode, roomCode) {
         const lastRt = relayState && relayState.networkStats && relayState.networkStats.lastRetarget;
         const avgMs = (lastRt && lastRt.stalled)
           ? (lastRt.avgMs || t * 1000)
-          : (relayState && typeof relayState.observedPaceMs === 'function'
-            ? relayState.observedPaceMs()
-            : (relayState && relayState.networkStats && relayState.networkStats.averageBlockTimeMs));
+          : ((lastRt && lastRt.avgMs > 0)
+            ? lastRt.avgMs
+            : (relayState && typeof relayState.observedPaceMs === 'function'
+              ? relayState.observedPaceMs()
+              : (relayState && relayState.networkStats && relayState.networkStats.averageBlockTimeMs)));
         const avgBit = (lastRt && lastRt.stalled)
           ? '; easing after a stall'
           : ((avgMs != null && !isNaN(avgMs) && avgMs > 0)
@@ -1726,6 +1733,7 @@ function playBlockMinedAnimation() {
 // Debounce full DOM rebuilds — fast mining otherwise makes admin controls unclickable.
 var _relayRenderTimer = null;
 var _persistAdminTimer = null;
+var _lastTopoAt = 0;
 
 function schedulePersistAdminState() {
   if (_persistAdminTimer) return;
@@ -1758,7 +1766,7 @@ function scheduleRenderClientRelayChain() {
   _relayRenderTimer = setTimeout(function () {
     _relayRenderTimer = null;
     renderClientRelayChain();
-  }, 400);
+  }, 500);
 }
 
 /**
@@ -2051,12 +2059,16 @@ function renderClientRelayChain(opts) {
   const chain = relayState.chain;
   const participants = Array.from(relayState.participants.values());
   const mainHashes = new Set(chain.map(function (b) { return b.hash; }));
+  const tip = chain[chain.length - 1];
+  const tipIdx = tip && tip.index != null ? Number(tip.index) : Math.max(0, chain.length - 1);
   const orphans = [];
   if (relayState.allBlocks && typeof relayState.allBlocks.forEach === 'function') {
     relayState.allBlocks.forEach(function (block, hash) {
-      if (hash && !mainHashes.has(hash) && block && block.miner !== 'genesis') {
-        orphans.push(block);
-      }
+      if (!hash || mainHashes.has(hash) || !block || block.miner === 'genesis') return;
+      const idx = block.index != null ? Number(block.index) : -1;
+      // Only recent race-losers — a 200-block orphan dump OOMs the hub tab.
+      if (idx >= 0 && tipIdx - idx > 28) return;
+      orphans.push(block);
     });
   }
 
@@ -2108,9 +2120,24 @@ function renderClientRelayChain(opts) {
     });
   }
 
-  // Feed live data to network visualization
+  // Feed live data to network visualization (throttled — D3 relayout every
+  // 0.3s block was a second Aw Snap path on the hub).
   const viz = window.networkViz || networkViz;
-  if (viz && typeof viz.updateTopology === 'function') {
+  if (viz) {
+    try {
+      const tipNow = chain[chain.length - 1];
+      if (tipNow && tipNow.miner && tipNow.miner !== 'genesis' && tipNow.hash) {
+        if (viz._lastTipHash !== tipNow.hash) {
+          viz._lastTipHash = tipNow.hash;
+          if (typeof viz.blockFound === 'function') viz.blockFound(tipNow.miner);
+        }
+      }
+    } catch (e) {}
+  }
+  const nowTopo = Date.now();
+  const forceTopo = !!opts.forceTopologyRelayout || !!opts.forceGossipRewire;
+  if (viz && typeof viz.updateTopology === 'function' && (forceTopo || !_lastTopoAt || nowTopo - _lastTopoAt > 1000)) {
+    _lastTopoAt = nowTopo;
     try {
       const participantsArr = Array.from(relayState.participants.values())
         .filter(function (p) {
@@ -2146,15 +2173,6 @@ function renderClientRelayChain(opts) {
         forceRelayout: !!opts.forceTopologyRelayout || rewired
       });
       updateTopologyModeCaption(mode);
-
-      const tip = chain[chain.length - 1];
-      if (tip && tip.miner && tip.miner !== 'genesis' && tip.hash) {
-        // Pulse when tip changes (avoid constant yellow flash)
-        if (viz._lastTipHash !== tip.hash) {
-          viz._lastTipHash = tip.hash;
-          if (typeof viz.blockFound === 'function') viz.blockFound(tip.miner);
-        }
-      }
     } catch (e) {
       console.warn('[Viz] updateTopology non-fatal:', e && e.message);
     }
