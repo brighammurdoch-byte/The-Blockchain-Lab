@@ -3988,6 +3988,9 @@ function renderParticipantBlockchainViewNow(chainData, participants) {
   }
 
   $('#blockchainView').html(html || '<p class="text-muted">No blocks yet</p>');
+  if (window.ChainDisplay && typeof ChainDisplay.pinChainPanelToTip === 'function') {
+    ChainDisplay.pinChainPanelToTip(document.getElementById('blockchainView'));
+  }
 }
 
 function updateNetworkBlockchainView(mainChain, orphans, participants) {
@@ -4003,7 +4006,8 @@ function updateNetworkBlockchainView(mainChain, orphans, participants) {
       orphans: orphanList,
       participants: parts,
       openTxPanels: openTxPanels,
-      hubHeight: hubConfirmedHeight
+      hubHeight: hubConfirmedHeight,
+      maxVisible: 24
     });
     const newSide = (orphanList || []).filter(function (b) {
       return b && (b.forkId === 'new' || b.forkId === 'NEW');
@@ -4033,6 +4037,9 @@ function updateNetworkBlockchainView(mainChain, orphans, participants) {
         html;
     }
     $('#networkBlockchainView').html(html);
+    if (typeof ChainDisplay.pinChainPanelToTip === 'function') {
+      ChainDisplay.pinChainPanelToTip(document.getElementById('networkBlockchainView'));
+    }
     return;
   }
   $('#networkBlockchainView').html('<p class="text-muted">No blocks yet</p>');

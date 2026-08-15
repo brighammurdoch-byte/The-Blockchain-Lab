@@ -640,22 +640,59 @@ function loadBlockchainState() {
   // no-op in client-relay mode; population handled via net messages in populateObserverUIFromState
 }
 
+var _observerChainTimer = null;
+var _observerChainPending = null;
+var _observerFollowTip = true;
+
+function bindObserverChainScrollFollow() {
+  if (!window.ChainDisplay || typeof ChainDisplay.chainScrollParent !== 'function') return;
+  const view = document.getElementById('blockchainView');
+  const scroller = ChainDisplay.chainScrollParent(view);
+  if (!scroller || scroller._labFollowBound) return;
+  scroller._labFollowBound = true;
+  scroller.addEventListener('scroll', function () {
+    const slack = 96;
+    _observerFollowTip = (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight) < slack;
+  }, { passive: true });
+}
+
 function updateBlockchainView(mainChain, orphans, participants) {
+  _observerChainPending = {
+    mainChain: mainChain,
+    orphans: orphans,
+    participants: participants
+  };
+  if (_observerChainTimer) return;
+  _observerChainTimer = setTimeout(function () {
+    _observerChainTimer = null;
+    const pending = _observerChainPending;
+    _observerChainPending = null;
+    if (pending) renderObserverChainNow(pending.mainChain, pending.orphans, pending.participants);
+  }, 350);
+}
+
+function renderObserverChainNow(mainChain, orphans, participants) {
   const parts = rememberObserverParticipants(participants || []);
-  $('#blockchainView').css('background-color', '#fcfcfc').css('padding', '15px').css('border-radius', '4px');
+  const $view = $('#blockchainView');
+  $view.css('background-color', '#fcfcfc').css('padding', '15px').css('border-radius', '4px');
   if (window.ChainDisplay && typeof ChainDisplay.renderChainHtml === 'function') {
-    $('#blockchainView').html(
+    $view.html(
       ChainDisplay.renderChainHtml({
         mainChain: mainChain || [],
         orphans: orphans || [],
         participants: parts,
         openTxPanels: openTxPanels,
-        hubHeight: window._observerHubHeight
+        hubHeight: window._observerHubHeight,
+        maxVisible: 24
       })
     );
+    bindObserverChainScrollFollow();
+    if (typeof ChainDisplay.pinChainPanelToTip === 'function' && _observerFollowTip) {
+      ChainDisplay.pinChainPanelToTip($view[0], { force: true });
+    }
     return;
   }
-  $('#blockchainView').html('<p class="text-muted">Chain display unavailable</p>');
+  $view.html('<p class="text-muted">Chain display unavailable</p>');
 }
 
 function toggleTransactions(blockIndex) {

@@ -1315,9 +1315,13 @@ function updateBlockchainView(mainChain, orphans, participants) {
         orphans: orphans || [],
         participants: participants || [],
         openTxPanels: openTxPanels,
-        hubHeight: (typeof getHubBlockHeight === 'function') ? getHubBlockHeight() : undefined
+        hubHeight: (typeof getHubBlockHeight === 'function') ? getHubBlockHeight() : undefined,
+        maxVisible: 24
       })
     );
+    if (typeof ChainDisplay.pinChainPanelToTip === 'function') {
+      ChainDisplay.pinChainPanelToTip(document.getElementById('blockchainView'));
+    }
     return;
   }
   $('#blockchainView').html('<p class="text-muted">Chain display unavailable</p>');

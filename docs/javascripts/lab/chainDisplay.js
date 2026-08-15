@@ -454,12 +454,42 @@
     return html;
   }
 
+  function chainScrollParent(viewEl) {
+    if (!viewEl) return null;
+    var p = viewEl.parentElement;
+    while (p && p !== document.body) {
+      var overflowY = '';
+      try {
+        overflowY = (window.getComputedStyle ? window.getComputedStyle(p).overflowY : p.style.overflowY) || '';
+      } catch (e) {}
+      if (overflowY === 'auto' || overflowY === 'scroll') return p;
+      p = p.parentElement;
+    }
+    return viewEl;
+  }
+
+  /**
+   * Keep the inner chain panel on the tip unless the student scrolled up
+   * to inspect earlier cards (Wallet 1 was stuck at genesis at height 163).
+   */
+  function pinChainPanelToTip(viewEl, opts) {
+    opts = opts || {};
+    var scroller = chainScrollParent(viewEl);
+    if (!scroller) return;
+    var slack = opts.slack != null ? opts.slack : 96;
+    var fromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    if (!opts.force && fromBottom > slack) return;
+    scroller.scrollTop = scroller.scrollHeight;
+  }
+
   window.ChainDisplay = {
     escapeHtml: escapeHtml,
     buildParticipantNameLookup: buildParticipantNameLookup,
     formatChainParticipantHtml: formatChainParticipantHtml,
     renderChainHtml: renderChainHtml,
     windowBlocksForDisplay: windowBlocksForDisplay,
+    pinChainPanelToTip: pinChainPanelToTip,
+    chainScrollParent: chainScrollParent,
     sideChainLabel: sideChainLabel,
     shortAddress: shortAddress
   };

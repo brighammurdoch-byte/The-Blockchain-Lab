@@ -234,6 +234,25 @@ const ChainDisplay = loadChainDisplay();
   }
 })();
 
+// --- 8b. Wallet observe.html also windows + throttles (JQQC4D Aw Snap at height 163) ---
+(function () {
+  const observe = loadFile('public/javascripts/lab/observe.js');
+  const throttled = /_observerChainTimer/.test(observe) && /renderObserverChainNow/.test(observe);
+  const capped = /maxVisible:\s*24/.test(observe);
+  const pinsTip = /pinChainPanelToTip/.test(observe);
+  if (throttled && capped && pinsTip) {
+    pass('observe.html throttles chain redraws and caps visible blocks', '');
+  } else {
+    fail('observe.html throttles chain redraws and caps visible blocks',
+      JSON.stringify({ throttled: throttled, capped: capped, pinsTip: pinsTip }));
+  }
+  if (typeof ChainDisplay.pinChainPanelToTip === 'function') {
+    pass('ChainDisplay exposes pinChainPanelToTip for student tabs', '');
+  } else {
+    fail('ChainDisplay exposes pinChainPanelToTip for student tabs', 'missing');
+  }
+})();
+
 // --- 9. Overview height still uses the full tip, not the window ---
 (function () {
   const suffix = [];
