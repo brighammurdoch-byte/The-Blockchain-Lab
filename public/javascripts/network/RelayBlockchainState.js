@@ -588,10 +588,20 @@ if (typeof window.RelayBlockchainState === 'undefined') {
         ? Number(meta.chainHeight)
         : (incomingTip && incomingTip.index != null ? Number(incomingTip.index) : null));
     const truncated = !!meta.truncated;
+    const confirmedHeight = (meta.confirmedHeight != null && !isNaN(Number(meta.confirmedHeight)))
+      ? Number(meta.confirmedHeight)
+      : null;
     const localTip = local.length ? local[local.length - 1] : null;
     const localTipIndex = (localTip && localTip.index != null)
       ? Number(localTip.index)
       : (local.length ? local.length - 1 : -1);
+    // Fresh hub tip vs stale MQTT redelivery. A live tip at/above the height
+    // we already confirmed means trim a private tail (474 vs hub 444). An
+    // older tip below confirmedHeight is a redelivered compact window — keep
+    // the longer genesis-rooted copy (51 vs stale 37).
+    function isFreshHubTip() {
+      return tipIndex != null && confirmedHeight != null && confirmedHeight > 0 && tipIndex >= confirmedHeight;
+    }
 
     function isGenesisRooted(chain) {
       if (!chain || !chain.length) return false;
@@ -638,6 +648,15 @@ if (typeof window.RelayBlockchainState === 'undefined') {
         localTipIndex > tipIndex &&
         isGenesisRooted(local)
       ) {
+        if (isFreshHubTip()) {
+          return {
+            chain: local.slice(0, idx + 1),
+            applied: true,
+            reason: 'trim-private-tail',
+            tipHash: tipHash,
+            tipIndex: tipIndex
+          };
+        }
         return { chain: local, applied: false, reason: 'stale-tip', tipHash: tipHash, tipIndex: tipIndex };
       }
       return {
@@ -656,6 +675,18 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       tipIndex < localTipIndex &&
       isGenesisRooted(local)
     ) {
+      if (isFreshHubTip()) {
+        const splicedFresh = spliceSuffix(local, incoming);
+        if (splicedFresh && splicedFresh.length) {
+          return { chain: splicedFresh, applied: true, reason: 'spliced-suffix', tipHash: tipHash, tipIndex: tipIndex };
+        }
+        const trimmed = local.filter(function (b) {
+          return b && (b.index == null || Number(b.index) <= tipIndex);
+        });
+        if (trimmed.length) {
+          return { chain: trimmed, applied: true, reason: 'trim-private-tail', tipHash: tipHash, tipIndex: tipIndex };
+        }
+      }
       return { chain: local, applied: false, reason: 'stale-tip', tipHash: tipHash, tipIndex: tipIndex };
     }
 
@@ -685,6 +716,22 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
     // Cannot connect and incoming is not ahead — keep the current copy.
     return { chain: local, applied: false, reason: 'keep-local', tipHash: tipHash, tipIndex: tipIndex };
+  }
+
+  /**
+   * One number for miner Overview Block Height and "Your Blockchain Copy".
+   * JQQC4D Miner 2: Overview 406 vs Copy 395, then Overview 444 vs Copy 474.
+   * Copy must not read 10–30 ahead of the hub; Overview must not race ahead
+   * of the painted copy. Optimistic hub+1 is allowed (±1).
+   */
+  static studentMinerPairedHeight(chain, hubHeight) {
+    const copyTip = RelayBlockchainState.copyTipIndex(chain);
+    const hub = (hubHeight != null && !isNaN(Number(hubHeight))) ? Number(hubHeight) : 0;
+    const copy = copyTip != null ? Number(copyTip) : 0;
+    if (hub > 0 && copy > hub + 1) return hub;
+    if (copy > 0 && hub > copy + 1) return copy;
+    if (copy > 0) return copy;
+    return Math.max(hub, 0);
   }
 
   /** Display height for a (possibly truncated) student copy. Never use length-1 of a suffix. */

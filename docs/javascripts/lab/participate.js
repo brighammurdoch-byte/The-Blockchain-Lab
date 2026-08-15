@@ -1079,7 +1079,8 @@ function applyCanonicalChain(chain, opts) {
       truncated: !!opts.truncated,
       tipHash: opts.tipHash || (newTip && newTip.hash),
       tipIndex: incomingHeight,
-      chainHeight: incomingHeight
+      chainHeight: incomingHeight,
+      confirmedHeight: hubConfirmedHeight
     });
     const prevMain = local.slice();
     window.lastRelayedChain = merged.chain;
@@ -1216,11 +1217,18 @@ function applyCanonicalChain(chain, opts) {
       hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(appliedTip.index) || 0);
     }
   }
-  const ResolveFn = window.RelayBlockchainState && RelayBlockchainState.resolveOverviewHeight;
-  const displayH = (typeof ResolveFn === 'function')
-    ? ResolveFn(window.lastRelayedChain, { tipIndex: hubConfirmedHeight, chainHeight: incomingHeight }, hubConfirmedHeight)
-    : hubConfirmedHeight;
-  $('#blockHeight').text(displayH);
+  if (myForkChoice !== 'new' && window.lastRelayedChain && window.lastRelayedChain.length) {
+    const appliedTipIdx = window.lastRelayedChain[window.lastRelayedChain.length - 1];
+    if (
+      appliedTipIdx &&
+      appliedTipIdx.index != null &&
+      hubConfirmedHeight > 0 &&
+      Number(appliedTipIdx.index) > hubConfirmedHeight + 1
+    ) {
+      trimToHubTip();
+    }
+  }
+  const displayH = paintMinerHeights();
   markHubChainSeen(
     opts.tipHash || (window.lastRelayedChain && window.lastRelayedChain.length
       ? window.lastRelayedChain[window.lastRelayedChain.length - 1].hash
@@ -2318,18 +2326,27 @@ function initClientSideNetworkingForParticipant(mode) {
           });
         } catch (e) {}
       }
+      const compactH = payload.tipIndex != null ? payload.tipIndex
+        : (payload.newHeight != null ? payload.newHeight
+          : (payload.chainHeight != null ? payload.chainHeight : null));
+      if (compactH != null && !isNaN(Number(compactH))) {
+        hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(compactH));
+      }
+      if (myForkChoice !== 'new' && window.lastRelayedChain && window.lastRelayedChain.length) {
+        const tipB = window.lastRelayedChain[window.lastRelayedChain.length - 1];
+        const tipIdx = tipB && tipB.index != null ? Number(tipB.index) : NaN;
+        if (!isNaN(tipIdx) && hubConfirmedHeight > 0 && tipIdx > hubConfirmedHeight + 1) {
+          trimToHubTip();
+        } else if (!isNaN(tipIdx) && hubConfirmedHeight > tipIdx + 1) {
+          requestHubResync('forced');
+        }
+      }
+      paintMinerHeights();
       try {
         rememberParticipants(payload.participants || []);
         updateParticipantBlockchainView({ chain: getPersonalChainBlocks() }, lastKnownParticipants);
         refreshSharedNetworkView(lastKnownParticipants);
       } catch (e) {}
-      const compactH = payload.tipIndex != null ? payload.tipIndex
-        : (payload.newHeight != null ? payload.newHeight
-          : (payload.chainHeight != null ? payload.chainHeight : hubConfirmedHeight));
-      if (compactH != null && !isNaN(Number(compactH))) {
-        hubConfirmedHeight = Math.max(hubConfirmedHeight, Number(compactH));
-        $('#blockHeight').text(hubConfirmedHeight);
-      }
     }
   });
 
@@ -3833,9 +3850,11 @@ function getPersonalChainBlocks() {
       const path = pathFromTipHash(localClassicForkTip.hash);
       const pathTip = path && path.length ? path[path.length - 1] : null;
       const pathH = pathTip && pathTip.index != null ? Number(pathTip.index) : -1;
-      if (path && path.length >= main.length && pathH <= hubConfirmedHeight) return path;
+      if (path && path.length >= main.length && pathH <= hubConfirmedHeight) {
+        return capDisplayedChainToHub(path);
+      }
     }
-    return main.slice();
+    return capDisplayedChainToHub(main.slice());
   }
 
   // NEW side: path to sticky NEW tip (shared history + NEW blocks)
@@ -3876,7 +3895,49 @@ function pathFromTipHash(tipHash) {
   return path.length ? path : null;
 }
 
+/** Cap a classic displayed copy at hub+1 so the list cannot run 10–30 ahead. */
+function capDisplayedChainToHub(blocks) {
+  if (!Array.isArray(blocks) || !blocks.length) return Array.isArray(blocks) ? blocks : [];
+  if (!(hubConfirmedHeight > 0)) return blocks;
+  const cap = hubConfirmedHeight + 1;
+  const tip = blocks[blocks.length - 1];
+  if (!tip || tip.index == null || Number(tip.index) <= cap) return blocks;
+  const out = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    if (!b || b.index == null || Number(b.index) <= cap) out.push(b);
+  }
+  return out.length ? out : blocks;
+}
+
+/**
+ * Overview Block Height and "Your Blockchain Copy (Height: N)" must stay
+ * paired. Compact block-accepted used to set Overview from hubConfirmedHeight
+ * immediately while the H4 waited on the 350ms throttle — JQQC4D 406 vs 395,
+ * then 444 vs 474 after a private tail.
+ */
+function paintMinerHeights() {
+  const blocks = capDisplayedChainToHub(getPersonalChainBlocks());
+  const Pair = window.RelayBlockchainState && RelayBlockchainState.studentMinerPairedHeight;
+  let h;
+  if (typeof Pair === 'function') {
+    h = Pair(blocks, hubConfirmedHeight);
+  } else {
+    const tip = blocks.length ? blocks[blocks.length - 1] : null;
+    const copy = tip && tip.index != null ? Number(tip.index) : 0;
+    if (hubConfirmedHeight > 0 && copy > hubConfirmedHeight + 1) h = hubConfirmedHeight;
+    else if (copy > 0 && hubConfirmedHeight > copy + 1) h = copy;
+    else h = copy > 0 ? copy : hubConfirmedHeight;
+  }
+  h = Math.max(0, Number(h) || 0);
+  $('#blockHeight').text(h);
+  const $num = $('#participant-blockchain-copy-height');
+  if ($num.length) $num.text(h);
+  return h;
+}
+
 function updateParticipantBlockchainView(chainData, participants) {
+  paintMinerHeights();
   window.__pendingChainViewArgs = { chainData: chainData, participants: participants };
   if (_chainRenderTimer) return;
   _chainRenderTimer = setTimeout(function () {
@@ -3904,21 +3965,24 @@ function renderParticipantBlockchainViewNow(chainData, participants) {
   const nameLookup = CD ? CD.buildParticipantNameLookup(parts) : {};
   const fmtAddr = (addr) => (CD ? CD.formatChainParticipantHtml(addr, nameLookup) : `<code>${addr || ''}</code>`);
 
-  if (blocks.length > 0) {
-    localChainTipHash = blocks[blocks.length - 1].hash;
-  }
-
   const sideNote =
     myForkChoice === 'new' && pendingForkHeight != null
       ? ' <span class="label label-info">Following NEW chain</span>'
       : '';
-  const copyHeight = (window.RelayBlockchainState && typeof RelayBlockchainState.canonicalCopyHeight === 'function')
-    ? RelayBlockchainState.canonicalCopyHeight(blocks, { tipIndex: hubConfirmedHeight })
-    : hubConfirmedHeight;
+  if (myForkChoice !== 'new') blocks = capDisplayedChainToHub(blocks);
+  if (blocks.length > 0) {
+    localChainTipHash = blocks[blocks.length - 1].hash;
+  }
+  const copyHeight = (window.RelayBlockchainState && typeof RelayBlockchainState.studentMinerPairedHeight === 'function')
+    ? RelayBlockchainState.studentMinerPairedHeight(blocks, hubConfirmedHeight)
+    : ((window.RelayBlockchainState && typeof RelayBlockchainState.canonicalCopyHeight === 'function')
+      ? RelayBlockchainState.canonicalCopyHeight(blocks, { tipIndex: hubConfirmedHeight })
+      : hubConfirmedHeight);
+  $('#blockHeight').text(Math.max(0, copyHeight));
   let html =
-    '<h4>Your Blockchain Copy (Height: ' +
+    '<h4>Your Blockchain Copy (Height: <span id="participant-blockchain-copy-height">' +
     Math.max(0, copyHeight) +
-    ')' +
+    '</span>)' +
     sideNote +
     '</h4>';
 
@@ -4159,21 +4223,7 @@ function updatePendingTransactions(blockchain) {
 
 function updateNetworkStats(blockchain) {
   const stats = blockchain.networkStats || {};
-  const ResolveFn = window.RelayBlockchainState && RelayBlockchainState.resolveOverviewHeight;
-  const chain = window.lastRelayedChain || blockchain.chain;
-  let height = (typeof ResolveFn === 'function')
-    ? ResolveFn(chain, {
-      tipIndex: hubConfirmedHeight,
-      hubHeight: blockchain.hubHeight,
-      chainHeight: blockchain.chainHeight,
-      networkStats: stats
-    }, hubConfirmedHeight)
-    : stats.blockHeight;
-  if (height == null && blockchain.hubHeight != null) height = blockchain.hubHeight;
-  if (height == null) height = hubConfirmedHeight;
-  if (height == null) height = 0;
-  height = Math.max(Number(height) || 0, Number(hubConfirmedHeight) || 0);
-  $('#blockHeight').text(height);
+  paintMinerHeights();
   $('#participantCount').text(blockchain.participants ? blockchain.participants.length : 0);
   $('#totalHashrate').text((stats.totalHashrate || 0).toFixed(0) + ' H/s');
 }
