@@ -244,6 +244,145 @@ const Relay = loadRelay();
   }
 })();
 
+// --- 6b. GHPEHS Miner 2: 7×10+5 → 2×10, single include, then reorg ---
+(function () {
+  const lab = new Relay('GHPEHS M2');
+  lab.ensureGenesis();
+  lab.updateSettings({ difficultyLeading: 1, difficultySecondary: 15, autoDifficulty: false });
+  lab.addOrUpdateParticipant('wallet-1', 'wallet', { endowment: 100, balance: 100, displayName: 'Wallet 1' });
+  lab.addOrUpdateParticipant('user_x64uho1mu', 'miner', { displayName: 'Miner 2' });
+  lab.addOrUpdateParticipant('user_vtxh3dg6e', 'miner', { displayName: 'Miner 3' });
+  lab.addOrUpdateParticipant('miner-1', 'miner', { displayName: 'Miner 1' });
+
+  const genesis = lab.chain[0];
+  const tx = {
+    id: 'tx-ghpehs-5',
+    from: 'wallet-1',
+    to: 'user_x64uho1mu',
+    amount: 5,
+    timestamp: 500031
+  };
+  lab.tryAddTransaction(tx);
+
+  // Shared prefix: Miner 2 has 2 blocks (the post-reorg remainder).
+  const s1 = makeBlock(1, '0000m21', genesis.hash, { miner: 'user_x64uho1mu' });
+  const s2 = makeBlock(2, '0000m22', s1.hash, { miner: 'user_x64uho1mu' });
+  const p1 = lab.tryAddBlock(s1, 'user_x64uho1mu');
+  const p2 = lab.tryAddBlock(s2, 'user_x64uho1mu');
+  if (!p1.accepted || !p2.accepted) {
+    fail('GHPEHS shared prefix accepted', (p1.reason || p2.reason || 'prefix'));
+    return;
+  }
+
+  // Grow both forks in parallel so stale-parent (>4 back) does not reject.
+  // Losing side: Miner 2 mines #3–#5, Miner 3 includes the 5-coin tx at #6
+  // (55 = 5×10+5), Miner 2 mines #7–#8 (75 = 7×10+5). Never a second +5.
+  let losePrev = s2.hash;
+  let winPrev = s2.hash;
+  for (let i = 3; i <= 5; i++) {
+    const lose = makeBlock(i, '0000l' + i, losePrev, { miner: 'user_x64uho1mu' });
+    const win = makeBlock(i, '0000w' + i, winPrev, { miner: 'miner-1' });
+    const rl = lab.tryAddBlock(lose, 'user_x64uho1mu');
+    const rw = lab.tryAddBlock(win, 'miner-1');
+    if (!rl.accepted || !rw.accepted) {
+      fail('GHPEHS parallel race stored', (rl.reason || rw.reason || ''));
+      return;
+    }
+    losePrev = lose.hash;
+    winPrev = win.hash;
+  }
+
+  const include = makeBlock(6, '0000l6tx', losePrev, {
+    miner: 'user_vtxh3dg6e',
+    transactions: [tx]
+  });
+  const rInc = lab.tryAddBlock(include, 'user_vtxh3dg6e');
+  const m2at5 = lab.participants.get('user_x64uho1mu');
+  const wAt5 = lab.participants.get('wallet-1');
+  if (!rInc.accepted || !m2at5 || m2at5.blocksMined !== 5 || m2at5.balance !== 55 || !wAt5 || wAt5.balance !== 95) {
+    fail('GHPEHS single include: Miner 2 is 55/5 once',
+      rInc.accepted
+        ? ('m2=' + (m2at5 && m2at5.balance) + '/' + (m2at5 && m2at5.blocksMined) + ' w=' + (wAt5 && wAt5.balance))
+        : rInc.reason);
+    return;
+  }
+  if (lab.pendingTransactions.length !== 0) {
+    fail('GHPEHS mempool empty after the one include', String(lab.pendingTransactions.length));
+    return;
+  }
+  losePrev = include.hash;
+
+  const win6 = makeBlock(6, '0000w6', winPrev, { miner: 'miner-1' });
+  if (!lab.tryAddBlock(win6, 'miner-1').accepted) {
+    fail('GHPEHS winning #6 stored', 'rejected');
+    return;
+  }
+  winPrev = win6.hash;
+
+  for (let i = 7; i <= 8; i++) {
+    const lose = makeBlock(i, '0000l' + i, losePrev, { miner: 'user_x64uho1mu' });
+    const win = makeBlock(i, '0000w' + i, winPrev, { miner: 'miner-1' });
+    if (!lab.tryAddBlock(lose, 'user_x64uho1mu').accepted || !lab.tryAddBlock(win, 'miner-1').accepted) {
+      fail('GHPEHS continue race to 7 blocks', 'rejected');
+      return;
+    }
+    losePrev = lose.hash;
+    winPrev = win.hash;
+  }
+
+  const m2at7 = lab.participants.get('user_x64uho1mu');
+  if (!(m2at7 && m2at7.blocksMined === 7 && m2at7.balance === 75)) {
+    fail('GHPEHS Miner 2 reaches 75/7 (70+5, not 80)',
+      m2at7 ? (m2at7.balance + '/' + m2at7.blocksMined) : 'missing');
+    return;
+  }
+  pass('GHPEHS Miner 2 hits 55/5 then 75/7 from one +5', '75/7');
+
+  // One extra empty block on the winning fork — same 5-block unwind as 7→2.
+  const win9 = makeBlock(9, '0000w9', winPrev, { miner: 'miner-1' });
+  const reorg = lab.tryAddBlock(win9, 'miner-1');
+  const m2 = lab.participants.get('user_x64uho1mu');
+  const w1 = lab.participants.get('wallet-1');
+  const pending = lab.pendingTransactions || [];
+  const back = pending.some(function (t) {
+    return t && t.from === 'wallet-1' && t.to === 'user_x64uho1mu' && Number(t.amount) === 5;
+  });
+  const onNewChain = (lab.chain || []).some(function (b) {
+    return (b.transactions || []).some(function (t) {
+      return t && t.from === 'wallet-1' && Number(t.amount) === 5;
+    });
+  });
+  const anyTxs = (lab.chain || []).some(function (b) {
+    return b && b.miner !== 'genesis' && Array.isArray(b.transactions) && b.transactions.length > 0;
+  });
+
+  if (reorg.accepted && reorg.reorg && m2 && m2.blocksMined === 2 && m2.balance === 20) {
+    pass('GHPEHS reorg drops Miner 2 75/7 → 20/2 (exactly 2×10, +5 gone)',
+      m2.balance + '/' + m2.blocksMined);
+  } else {
+    fail('GHPEHS reorg drops Miner 2 75/7 → 20/2 (exactly 2×10, +5 gone)',
+      JSON.stringify({
+        accepted: reorg.accepted,
+        reorg: reorg.reorg,
+        reason: reorg.reason,
+        m2: m2 && (m2.balance + '/' + m2.blocksMined)
+      }));
+  }
+  if (w1 && w1.balance === 100 && !onNewChain && back && pending.length === 1) {
+    pass('GHPEHS 5-coin tx leaves the replacement chain and re-enters mempool',
+      'wallet ' + w1.balance + ', pending ' + pending.length);
+  } else {
+    fail('GHPEHS 5-coin tx leaves the replacement chain and re-enters mempool',
+      'wallet=' + (w1 && w1.balance) + ' onChain=' + onNewChain + ' pending=' + pending.length +
+      ' requeued=' + ((reorg.requeuedTransactions || []).length));
+  }
+  if (!anyTxs) pass('GHPEHS winning main-chain blocks are all Txs 0', '');
+  else fail('GHPEHS winning main-chain blocks are all Txs 0', 'a main block still has txs');
+  if (m2 && m2.balance !== 25 && m2.balance !== 80) {
+    pass('GHPEHS never double-credits the 5-coin send', String(m2.balance));
+  } else fail('GHPEHS never double-credits the 5-coin send', String(m2 && m2.balance));
+})();
+
 // --- 7. Tx that is still on the winning fork is not re-queued ---
 (function () {
   const lab = new Relay('REORG KEEP');

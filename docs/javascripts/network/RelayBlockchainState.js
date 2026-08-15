@@ -1328,6 +1328,12 @@ if (typeof window.RelayBlockchainState === 'undefined') {
    * After a reorg, restore transfers that were only in orphaned blocks.
    * Spendability is checked against the new canonical balances plus anything
    * already sitting in the mempool (applied in original order).
+   *
+   * GHPEHS Miner 2 (`user_x64uho1mu`): Wallet 1 → Miner 2 for 5 landed once
+   * (55 = 5×10+5, then 75 = 7×10+5, never +10). A later reorg dropped them
+   * to 2 blocks / 20 coins (exactly 2×10) with mempool 0 and every remaining
+   * main-chain block Txs 0. The including block left the canonical chain;
+   * this puts that single transfer back pending unless it is invalid now.
    */
   _requeueOrphanedTransactions(oldChain, newChain) {
     const restored = [];
