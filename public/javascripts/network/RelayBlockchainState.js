@@ -201,6 +201,34 @@ if (typeof window.RelayBlockchainState === 'undefined') {
   }
 
   /**
+   * Stall-ease zero-drop cooldown. ≥20s was not enough to stop 3→1 in ~22s
+   * (ST0R8T): first drop as soon as the 25s freeze armed, second the moment
+   * the 20s timer expired. 25s means two drops cannot fit in a 22s watch.
+   * Stored on networkStats._stallZeroAt so _commitRetarget cannot wipe it.
+   */
+  _stallZeroCooldownMs() {
+    return Math.max(this._targetMs() * 2.5, 25000);
+  }
+
+  /**
+   * Wall-clock ms since the last canonical tip. Height change resets the
+   * stamps; this must keep incrementing while the tip is frozen (ST0R8T
+   * Since Last stuck at 31s because the UI only painted on a new block).
+   */
+  sinceLastBlockMs(now) {
+    now = now != null ? Number(now) : Date.now();
+    if (!isFinite(now)) now = Date.now();
+    const lastBlk = Number(this.networkStats && this.networkStats.lastBlockTime) || 0;
+    const tipWall = Number(this.networkStats && this.networkStats._lastTipWallClock) || 0;
+    const last = Math.max(lastBlk, tipWall);
+    return last ? Math.max(0, now - last) : 0;
+  }
+
+  sinceLastBlockSec(now) {
+    return Math.floor(this.sinceLastBlockMs(now) / 1000);
+  }
+
+  /**
    * Bound one observed interval so a 0.1s burst or a 101s stall recovery
    * cannot snap the controller. Floor keeps "too fast" visible; cap is 2.5× target.
    */
@@ -277,6 +305,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     this.networkStats._lastTipWallClock = now;
     this.networkStats._stallWatchHeight = this._canonicalTipIndex();
     this.networkStats._stallWatchAt = now;
+    // Persist/reload must not inherit a leftover stall-zero timestamp
+    // that would either burst-drop or block a real later ease.
+    this.networkStats._stallZeroAt = 0;
   }
 
   /**
@@ -473,7 +504,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const lastBlk = this.networkStats && this.networkStats.lastBlockTime;
     const last = tipWall || lastBlk;
     const sinceTs = last || (lastRt && lastRt.at);
-    const sinceMs = sinceTs ? Date.now() - sinceTs : 0;
+    const sinceMs = this.sinceLastBlockMs();
     const heightFreezeMs = this.networkStats && this.networkStats._stallWatchAt
       ? Date.now() - this.networkStats._stallWatchAt
       : 0;
@@ -508,7 +539,21 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
     const curL = Math.max(1, Math.min(6, Number(this.settings.difficultyLeading) || 1));
     const curS = Math.max(0, Math.min(15, Number(this.settings.difficultySecondary) || 0));
-    if (curL <= 1 && curS >= 15) return null;
+    const freezeMs = Math.max(targetMs * 2.5, 25000);
+    const longFreeze = hashing
+      && tipAge >= freezeMs
+      && heightFreezeMs >= freezeMs
+      && !!lastBlk
+      && wallSince >= freezeMs;
+    // Already at the easiest rung: keep asking the hub to republish the
+    // tip so miners hashing a rejected fork remine (ST0R8T sat at 1+0xF
+    // for 4+ minutes at 80k H/s). Do not toast another retarget.
+    if (curL <= 1 && curS >= 15) {
+      if (longFreeze && hashing) {
+        return { republishTip: true, difficultyUnchanged: true };
+      }
+      return null;
+    }
 
     // Reject storms can call this every packet. Keep nibble steps ~5s apart.
     if (lastRt && lastRt.stalled && lastRt.at && Date.now() - lastRt.at < 5000) {
@@ -521,19 +566,17 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     // left the 4-zero band. A freeze well past 12s must drop a zero.
     // XU1J1S: a stale 27s sample dropped 4→3→2→1 while Miner 2 still
     // produced a new canonical block. Zero-drop needs a real tip freeze.
-    const freezeMs = Math.max(targetMs * 2.5, 25000);
-    const longFreeze = hashing
-      && tipAge >= freezeMs
-      && heightFreezeMs >= freezeMs
-      && !!lastBlk
-      && wallSince >= freezeMs;
-    const lastStallZeroAt = lastRt && lastRt.stallZeroAt;
+    // ST0R8T: 3→1 in ~22s — persist _stallZeroAt off lastRetarget so a
+    // nibble/_commitRetarget cannot clear the ≥25s zero-drop cooldown.
+    const lastStallZeroAt = (this.networkStats && this.networkStats._stallZeroAt)
+      || (lastRt && lastRt.stallZeroAt)
+      || 0;
     const stallZeroCooling = !!(lastStallZeroAt &&
-      (Date.now() - lastStallZeroAt) < Math.max(targetMs * 2, 20000));
+      (Date.now() - lastStallZeroAt) < this._stallZeroCooldownMs());
     // Higher S = more permissive next nibble = easier. Score-1 walked
     // 5+0xC→0xB→0x1 (harder) and only recovered when it wrapped to 4+0xF.
     // ~12s path is nibble-only. Dropping a leading zero requires longFreeze
-    // and the ~20s zero-drop cooldown (no 4→1 burst, no wantL shortcut).
+    // and the ≥25s zero-drop cooldown (no 3→1 in 22s, no wantL shortcut).
     let nextL = curL;
     let nextS = curS;
     if (longFreeze && curL > 1 && !stallZeroCooling) {
@@ -545,6 +588,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       nextL = curL - 1;
       nextS = 15;
     }
+    // Never jump more than one leading zero in a single ease.
+    if (nextL < curL - 1) nextL = curL - 1;
     // Gentle 12s path stays within one zero of hashrate-implied L.
     // A ≥25s hashing freeze may drop further so the class is not stuck
     // at 4+0x3 for minutes (floor would return null at 3+0xF forever).
@@ -568,6 +613,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     // Drop leftover burst samples so the first block after a freeze does
     // not look like 0.3s and immediately add a zero back.
     this.networkStats.blockIntervals = [];
+    if (nextL < curL) {
+      this.networkStats._stallZeroAt = Date.now();
+    }
     this.networkStats.lastRetarget = {
       at: Date.now(),
       avgMs: sinceMs > 0 ? sinceMs : (recentMedian > 0 ? recentMedian : targetMs),

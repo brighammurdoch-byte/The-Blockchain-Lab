@@ -259,14 +259,14 @@ const ChainDisplay = loadChainDisplay();
   const partPug = loadFile('views/lab/participate.pug');
   const obsPug = loadFile('views/lab/observe.pug');
   const ok =
-    /RelayBlockchainState\.js\?v=p4fix6/.test(adminPug + partPug + obsPug) &&
-    /admin\.js\?v=p4fix6/.test(adminPug) &&
+    /RelayBlockchainState\.js\?v=p4fix7/.test(adminPug + partPug + obsPug) &&
+    /admin\.js\?v=p4fix7/.test(adminPug) &&
     /participate\.js\?v=p4fix3/.test(partPug) &&
     /chainDisplay\.js\?v=p4fix3/.test(adminPug + partPug) &&
-    /networkVisualization\.js\?v=p4fix3/.test(adminPug) &&
-    /AdminRelayCoordinator\.js\?v=p4fix6/.test(adminPug);
-  if (ok) pass('Changed assets cache-bust (p4fix6 on edited scripts)', '');
-  else fail('Changed assets cache-bust (p4fix6 on edited scripts)', 'stale ?v=');
+    /networkVisualization\.js\?v=p4fix7/.test(adminPug) &&
+    /AdminRelayCoordinator\.js\?v=p4fix7/.test(adminPug);
+  if (ok) pass('Changed assets cache-bust (p4fix7 on edited scripts)', '');
+  else fail('Changed assets cache-bust (p4fix7 on edited scripts)', 'stale ?v=');
 })();
 
 const failed = results.filter(function (r) { return !r.ok; });
