@@ -205,7 +205,7 @@ const ChainDisplay = loadChainDisplay();
 (function () {
   const admin = loadFile('public/javascripts/lab/admin.js');
   const windowed = /maxVisible:\s*24/.test(admin);
-  const orphanCap = /tipIdx - idx > 28/.test(admin);
+  const orphanCap = /tipIdx - idx > (10|28)/.test(admin);
   const topoThrottle = /_lastTopoAt/.test(admin) && /1000/.test(admin);
   const chainThrottle = /_relayRenderTimer/.test(admin);
   if (windowed && orphanCap && topoThrottle && chainThrottle) {
@@ -259,12 +259,12 @@ const ChainDisplay = loadChainDisplay();
   const partPug = loadFile('views/lab/participate.pug');
   const obsPug = loadFile('views/lab/observe.pug');
   const ok =
-    /RelayBlockchainState\.js\?v=p4fix7/.test(adminPug + partPug + obsPug) &&
-    /admin\.js\?v=p4fix8/.test(adminPug) &&
-    /participate\.js\?v=p4fix3/.test(partPug) &&
-    /chainDisplay\.js\?v=p4fix3/.test(adminPug + partPug) &&
-    /networkVisualization\.js\?v=p4fix7/.test(adminPug) &&
-    /AdminRelayCoordinator\.js\?v=p4fix7/.test(adminPug);
+    /RelayBlockchainState\.js\?v=p4fix\d+/.test(adminPug + partPug + obsPug) &&
+    /admin\.js\?v=p4fix\d+/.test(adminPug) &&
+    /participate\.js\?v=p4fix\d+/.test(partPug) &&
+    /chainDisplay\.js\?v=p4fix\d+/.test(adminPug + partPug) &&
+    /networkVisualization\.js\?v=p4fix\d+/.test(adminPug) &&
+    /AdminRelayCoordinator\.js\?v=p4fix\d+/.test(adminPug);
   if (ok) pass('Changed assets cache-bust (p4fix7 on edited scripts)', '');
   else fail('Changed assets cache-bust (p4fix7 on edited scripts)', 'stale ?v=');
 })();

@@ -24,6 +24,10 @@ class NetworkVisualization {
     this._lastTipHash = null;
     this.topologyMode = 'star'; // 'star' | 'gossip' — drives layout + packet paths
     this.adjacency = new Map(); // userId -> [peerIds] for gossip animation
+    this._inflightPackets = 0;
+    this._lastFloodAt = 0;
+    this.maxInflightPackets = 6;
+    this.floodMinIntervalMs = 1100;
 
     this.simulation = d3.forceSimulation()
       .force('link', d3.forceLink().id(d => d.id).distance(120))
@@ -652,6 +656,24 @@ class NetworkVisualization {
     }, ms || 900);
   }
 
+  /**
+   * Fast 0.3s classroom pace stacked gossip floods + SVG transitions
+   * until Chrome Aw Snap error 9 (0HU8XV). Cap in-flight packets and
+   * refuse a new flood while the last one is still on screen.
+   */
+  shouldStartFlood() {
+    const now = Date.now();
+    if (this._inflightPackets >= this.maxInflightPackets) {
+      this.clearAnimations();
+      this._inflightPackets = 0;
+    }
+    if (this._lastFloodAt && now - this._lastFloodAt < this.floodMinIntervalMs) {
+      return false;
+    }
+    this._lastFloodAt = now;
+    return true;
+  }
+
   /** Alias used by admin projector */
   blockFound(minerId) {
     this.animateBlockMined(minerId);
@@ -686,6 +708,7 @@ class NetworkVisualization {
   animateGossipFlood(fromId, packetOpts) {
     packetOpts = packetOpts || {};
     if (!fromId || !this.nodes.find(n => n.id === fromId)) return;
+    if (!this.shouldStartFlood()) return;
 
     const hopMs = packetOpts.hopMs != null ? packetOpts.hopMs : 280;
     const visited = new Set([fromId]);
@@ -740,6 +763,7 @@ class NetworkVisualization {
     }
 
     // Star / fallback: direct legs to listed recipients
+    if (!this.shouldStartFlood()) return;
     const ids = (recipientIds || []).filter(id => id && id !== minerId);
     ids.forEach((recipientId, index) => {
       const recipientNode = this.nodes.find(n => n.id === recipientId);
@@ -795,6 +819,8 @@ class NetworkVisualization {
       }, delay);
     };
 
+    if (!this.shouldStartFlood()) return;
+
     const hubId = this._findHubId();
     const others = this.nodes.map(n => n.id).filter(id => id !== fromId);
     if (hubId && fromId !== hubId) {
@@ -816,6 +842,9 @@ class NetworkVisualization {
     const label = opts.label != null ? String(opts.label) : '';
     const duration = opts.duration || 750;
     const kind = opts.kind || 'block';
+
+    if (this._inflightPackets >= this.maxInflightPackets) return;
+    this._inflightPackets += 1;
 
     this._highlightLink(sourceNode.id, targetNode.id, opts.linkClass || 'nv-link-active', duration + 100);
 
@@ -869,6 +898,7 @@ class NetworkVisualization {
           };
         })
         .on('end', () => {
+          this._inflightPackets = Math.max(0, this._inflightPackets - 1);
           this.flashNodeStatus(
             targetNode.id,
             'receiving',
@@ -884,6 +914,7 @@ class NetworkVisualization {
         .attr('cx', tx)
         .attr('cy', ty)
         .on('end', () => {
+          this._inflightPackets = Math.max(0, this._inflightPackets - 1);
           this.flashNodeStatus(
             targetNode.id,
             'receiving',
@@ -913,6 +944,7 @@ class NetworkVisualization {
 
   clearAnimations() {
     this.animLayer.selectAll('*').remove();
+    this._inflightPackets = 0;
   }
 }
 

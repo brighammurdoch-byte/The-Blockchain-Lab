@@ -1272,10 +1272,12 @@ function mergeKnownOrphans(list) {
   lastKnownOrphans = lastKnownOrphans.filter(function (b) {
     if (isNewForkId(b.forkId)) return true;
     if (b.index == null) return true;
-    return Number(b.index) >= tipIdx - 40;
+    return Number(b.index) >= tipIdx - 16;
   });
-  if (lastKnownOrphans.length > 60) {
-    lastKnownOrphans = lastKnownOrphans.slice(-60);
+  if (lastKnownOrphans.length > 24) {
+    const newSide = lastKnownOrphans.filter(function (b) { return isNewForkId(b.forkId); });
+    const rest = lastKnownOrphans.filter(function (b) { return !isNewForkId(b.forkId); });
+    lastKnownOrphans = newSide.concat(rest.slice(-Math.max(0, 24 - newSide.length)));
   }
   // Keep NEW-side tip sticky for miners that chose the new chain
   refreshLocalNewForkTip();
@@ -3990,8 +3992,9 @@ function renderParticipantBlockchainViewNow(chainData, participants) {
     sideNote +
     '</h4>';
 
+  const personalCap = (CD && CD.HARD_MAX_VISIBLE) ? CD.HARD_MAX_VISIBLE : 10;
   const windowed = (CD && typeof CD.windowBlocksForDisplay === 'function')
-    ? CD.windowBlocksForDisplay(blocks, 24)
+    ? CD.windowBlocksForDisplay(blocks, personalCap)
     : { blocks: blocks, omitted: 0, keptGenesis: false };
   if (windowed.omitted > 0) {
     html +=

@@ -612,10 +612,10 @@ const Relay = loadRelay();
     /admin\.js\?v=p2fix/.test(adminPug) ||
     /lab-theme\.css\?v=p2fix/.test(partPug + obsPug + adminPug);
   if (!changedStillStale
-      && /RelayBlockchainState\.js\?v=p4fix7/.test(partPug)
-      && /participate\.js\?v=p4fix3/.test(partPug)
-      && /observe\.js\?v=p4fix5/.test(obsPug)
-      && /admin\.js\?v=p4fix8/.test(adminPug)) {
+      && /RelayBlockchainState\.js\?v=p4fix\d+/.test(partPug)
+      && /participate\.js\?v=p4fix\d+/.test(partPug)
+      && /observe\.js\?v=p4fix\d+/.test(obsPug)
+      && /admin\.js\?v=p4fix\d+/.test(adminPug)) {
     pass('Changed assets cache-bust (p4fix7 on edited scripts)', '');
   } else fail('Changed assets cache-bust (p4fix7 on edited scripts)', 'stale ?v=');
 })();

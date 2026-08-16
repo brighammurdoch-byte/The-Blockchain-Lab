@@ -1671,6 +1671,11 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       tipHash: tip && tip.hash,
       tipIndex: tip && tip.index != null ? tip.index : Math.max(0, chain.length - 1)
     };
+    // Height 28+ classroom chains exceed the MQTT budget; skip JSON.stringify
+    // of the full array on every join / reorg (0HU8XV Aw Snap allocation path).
+    if (chain.length > 28) {
+      return Object.assign({ chain: chain.slice(-20), chainTruncated: true }, meta);
+    }
     let size = 0;
     try { size = JSON.stringify(chain).length; } catch (e) { size = 999999; }
     if (size <= maxBytes) return Object.assign({ chain: chain, chainTruncated: false }, meta);

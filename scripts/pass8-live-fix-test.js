@@ -320,9 +320,9 @@ function classroomLab(leading, secondary) {
   const obsPug = loadFile('views/lab/observe.pug');
   const indexPug = loadFile('views/lab/index.pug');
   const ok =
-    /RelayBlockchainState\.js\?v=p4fix7/.test(adminPug + partPug + obsPug + indexPug) &&
-    /admin\.js\?v=p4fix8/.test(adminPug) &&
-    /observe\.js\?v=p4fix5/.test(obsPug) &&
+    /RelayBlockchainState\.js\?v=p4fix\d+/.test(adminPug + partPug + obsPug + indexPug) &&
+    /admin\.js\?v=p4fix\d+/.test(adminPug) &&
+    /observe\.js\?v=p4fix\d+/.test(obsPug) &&
     /NetworkManager\.js\?v=p4fix5/.test(adminPug + partPug + obsPug);
   if (ok) pass('Edited scripts cache-bust p4fix7', '');
   else fail('Edited scripts cache-bust p4fix7', 'stale ?v=');

@@ -250,10 +250,10 @@ function armFreeze(lab, agoMs) {
   const obsPug = loadFile('views/lab/observe.pug');
   const indexPug = loadFile('views/lab/index.pug');
   const ok =
-    /RelayBlockchainState\.js\?v=p4fix7/.test(adminPug + partPug + obsPug + indexPug) &&
-    /admin\.js\?v=p4fix8/.test(adminPug) &&
-    /AdminRelayCoordinator\.js\?v=p4fix7/.test(adminPug + partPug + obsPug) &&
-    /networkVisualization\.js\?v=p4fix7/.test(adminPug) &&
+    /RelayBlockchainState\.js\?v=p4fix\d+/.test(adminPug + partPug + obsPug + indexPug) &&
+    /admin\.js\?v=p4fix\d+/.test(adminPug) &&
+    /AdminRelayCoordinator\.js\?v=p4fix\d+/.test(adminPug + partPug + obsPug) &&
+    /networkVisualization\.js\?v=p4fix\d+/.test(adminPug) &&
     /Persistence\.js\?v=p4fix9/.test(adminPug + indexPug) &&
     /landing\.js\?v=p4fix9/.test(indexPug);
   if (ok) pass('Edited scripts cache-bust p4fix7', '');

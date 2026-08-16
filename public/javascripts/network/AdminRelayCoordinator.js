@@ -161,22 +161,45 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
       // Duplicate delivery — already on chain; don't rebroadcast or reject
       if (result.duplicate) return;
 
-      const snap = (this.lab && typeof this.lab.getSanitizedStateForNewPeer === 'function')
-        ? this.lab.getSanitizedStateForNewPeer()
-        : {};
+      // Compact MQTT payloads: full chain only on reorg / missing tip / hard-fork.
+      // Race losers (isFork without reorg) used to JSON.stringify the whole
+      // chain + walk allBlocks on every 0.3s find (0HU8XV / O5E46U Aw Snap 9).
+      const hardForkLive = !!(this.lab && this.lab.pendingFork && this.lab.pendingFork.height != null);
+      const needFullChain = !!(result.reorg || !result.tipChanged || hardForkLive);
+      const needOrphans = needFullChain || hardForkLive || !!result.isFork ||
+        !!(block && block.forkId && block.forkId !== 'classic');
+
+      let snap;
+      if (needFullChain && this.lab && typeof this.lab.getSanitizedStateForNewPeer === 'function') {
+        snap = this.lab.getSanitizedStateForNewPeer();
+      } else {
+        snap = {
+          participants: (this.lab && this.lab.participants instanceof Map)
+            ? Array.from(this.lab.participants.values())
+            : [],
+          pendingTransactions: (this.lab && Array.isArray(this.lab.pendingTransactions))
+            ? this.lab.pendingTransactions.slice(0, 20)
+            : [],
+          networkStats: (this.lab && this.lab.networkStats)
+            ? Object.assign({}, this.lab.networkStats)
+            : undefined,
+          orphans: []
+        };
+        if (needOrphans && this.lab && this.lab.allBlocks && typeof this.lab.allBlocks.forEach === 'function') {
+          const main = new Set((this.lab.chain || []).map(function (b) { return b && b.hash; }));
+          const cheapOrphans = [];
+          this.lab.allBlocks.forEach(function (ob, hash) {
+            if (hash && !main.has(hash) && ob && ob.miner !== 'genesis') cheapOrphans.push(ob);
+          });
+          snap.orphans = cheapOrphans.slice(-12);
+        }
+      }
       const chain = result.chain || snap.chain ||
         (this.lab && Array.isArray(this.lab.chain) ? this.lab.chain.slice() : null);
       const participants = snap.participants ||
         ((this.lab && this.lab.participants instanceof Map)
           ? Array.from(this.lab.participants.values())
           : []);
-
-      // Compact MQTT payloads: full chain only on reorg/orphan — tip extensions send the new block only.
-      // Flooding the full chain on every block kills public MQTT brokers in fast classroom demos.
-      // During a hard-fork simulation, always include orphans so NEW-side miners can extend their tip.
-      const hardForkLive = !!(this.lab && this.lab.pendingFork && this.lab.pendingFork.height != null);
-      const needFullChain = !!(result.reorg || result.isFork || !result.tipChanged || hardForkLive);
-      const needOrphans = needFullChain || hardForkLive || !!(block && block.forkId && block.forkId !== 'classic');
       const packed = (needFullChain && this.lab && typeof this.lab.compactChainForTransport === 'function')
         ? this.lab.compactChainForTransport(50000)
         : null;
