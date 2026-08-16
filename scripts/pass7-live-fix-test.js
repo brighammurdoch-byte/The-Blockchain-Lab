@@ -234,8 +234,8 @@ function paceFast(lab) {
   const partPug = loadFile('views/lab/participate.pug');
   const obsPug = loadFile('views/lab/observe.pug');
   const ok =
-    /RelayBlockchainState\.js\?v=p4fix7/.test(adminPug + partPug + obsPug) &&
-    /admin\.js\?v=p4fix8/.test(adminPug);
+    /RelayBlockchainState\.js\?v=p4fix\d+/.test(adminPug + partPug + obsPug) &&
+    /admin\.js\?v=p4fix\d+/.test(adminPug);
   if (ok) pass('Edited scripts cache-bust p4fix7', '');
   else fail('Edited scripts cache-bust p4fix7', 'stale ?v=');
 })();

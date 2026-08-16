@@ -729,11 +729,19 @@ function updateBlockchainView(mainChain, orphans, participants) {
   }, 350);
 }
 
+var _observerChainPaintKey = '';
 function renderObserverChainNow(mainChain, orphans, participants) {
   const parts = rememberObserverParticipants(participants || []);
   const $view = $('#blockchainView');
   $view.css('background-color', '#fcfcfc').css('padding', '15px').css('border-radius', '4px');
   if (window.ChainDisplay && typeof ChainDisplay.renderChainHtml === 'function') {
+    const tip = mainChain && mainChain.length ? mainChain[mainChain.length - 1] : null;
+    const nameKey = parts.map(function (p) {
+      return (p && (p.userId || p.id) || '') + ':' + ((p && (p.displayName || p.name)) || '');
+    }).join(',');
+    const paintKey = (tip && tip.hash) + '|' + (mainChain ? mainChain.length : 0) + '|' + nameKey;
+    if (paintKey === _observerChainPaintKey && $view.find('.chain-view').length) return;
+    _observerChainPaintKey = paintKey;
     $view.html(
       ChainDisplay.renderChainHtml({
         mainChain: mainChain || [],
@@ -793,11 +801,17 @@ function updateNetworkStats(blockchain) {
   }
 }
 
+var _observerRosterKey = '';
 function updateParticipantList(blockchain) {
   const participants = (blockchain.participants || []).filter(function (p) {
     const id = p.userId || p.address || p.id || '';
     return id && String(id).indexOf('probe-') !== 0;
   });
+  const rosterKey = participants.map(function (p) {
+    return [p.userId || p.address || p.id, p.displayName || p.name || '', p.balance, p.blocksMined || p.minedBlocks || 0, p.role].join(':');
+  }).join('|');
+  if (rosterKey === _observerRosterKey && $('#participantList li').length) return;
+  _observerRosterKey = rosterKey;
   let html = '';
 
   participants.forEach(p => {
@@ -842,8 +856,14 @@ function updateParticipantList(blockchain) {
   $('#participantList').html(html);
 }
 
+var _observerMempoolKey = '';
 function updatePendingTransactions(blockchain) {
   const transactions = blockchain.pendingTransactions || [];
+  const memKey = transactions.map(function (tx) {
+    return (tx && (tx.id || (tx.from + '>' + tx.to + ':' + tx.amount))) || '';
+  }).join('|');
+  if (memKey === _observerMempoolKey && $('#pendingTransactions tr').length) return;
+  _observerMempoolKey = memKey;
   const CD = window.ChainDisplay;
   const nameLookup = CD ? CD.buildParticipantNameLookup(blockchain.participants || []) : {};
   const fmtAddr = (addr) => (CD ? CD.formatChainParticipantHtml(addr, nameLookup) : `<code>${addr || ''}</code>`);

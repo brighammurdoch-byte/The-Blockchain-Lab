@@ -134,12 +134,24 @@
   }
 
   /**
+   * Hard caps for projector / wallet / miner chain cards.
+   * Windowing to 24 still painted a long vertical stack of full Bootstrap
+   * panels (O5E46U wallet Aw Snap; 0HU8XV hub at 5 seats / 0.3s).
+   * Callers may request 24; renderChainHtml never exceeds these.
+   */
+  var HARD_MAX_VISIBLE = 10;
+  var MAX_ORPHANS_PER_HEIGHT = 2;
+  var MAX_ORPHAN_CARDS = 6;
+  var MAX_TOTAL_CARDS = 14;
+  var MAX_TX_ROWS = 6;
+
+  /**
    * Keep genesis + the last `maxVisible` heights so a 200-block class
    * does not rebuild hundreds of panels every tip (Chrome Aw Snap).
    */
   function windowBlocksForDisplay(blocks, maxVisible) {
     var list = Array.isArray(blocks) ? blocks.slice() : [];
-    var cap = maxVisible == null ? 24 : Math.max(4, Number(maxVisible) || 24);
+    var cap = maxVisible == null ? HARD_MAX_VISIBLE : Math.max(4, Number(maxVisible) || HARD_MAX_VISIBLE);
     if (list.length <= cap) {
       return { blocks: list, omitted: 0, keptGenesis: false };
     }
@@ -182,7 +194,8 @@
    */
   function renderChainHtml(opts) {
     opts = opts || {};
-    var maxVisible = opts.maxVisible == null ? 24 : opts.maxVisible;
+    var requested = opts.maxVisible == null ? HARD_MAX_VISIBLE : opts.maxVisible;
+    var maxVisible = Math.min(HARD_MAX_VISIBLE, Math.max(4, Number(requested) || HARD_MAX_VISIBLE));
     var rawMain = opts.mainChain || [];
     var windowed = windowBlocksForDisplay(rawMain, maxVisible);
     var mainChain = windowed.blocks;
@@ -251,17 +264,52 @@
     }
     // Cap race-losers per height so the hub/wallet panel cannot grow a
     // full competing column for every miner at every height.
-    Object.keys(byIndex).forEach(function (key) {
+    // Walk tip→genesis so the newest race is kept when the budget runs out.
+    var orphanBudget = MAX_ORPHAN_CARDS;
+    Object.keys(byIndex).map(Number).sort(function (a, b) { return b - a; }).forEach(function (key) {
       var level = byIndex[key];
-      if (!level || level.length <= 4) return;
+      if (!level || !level.length) return;
       var mains = [];
       var others = [];
       for (var li = 0; li < level.length; li++) {
         if (mainHashes[level[li].hash]) mains.push(level[li]);
         else others.push(level[li]);
       }
-      byIndex[key] = mains.concat(others.slice(0, 3));
+      var extraRoom = Math.min(
+        Math.max(0, MAX_ORPHANS_PER_HEIGHT - mains.length),
+        Math.max(0, orphanBudget)
+      );
+      if (others.length > extraRoom) others = others.slice(0, extraRoom);
+      orphanBudget -= others.length;
+      byIndex[key] = mains.concat(others);
     });
+
+    function countCards() {
+      var n = 0;
+      Object.keys(byIndex).forEach(function (k) {
+        n += byIndex[k] ? byIndex[k].length : 0;
+      });
+      return n;
+    }
+    if (countCards() > MAX_TOTAL_CARDS) {
+      var heights = Object.keys(byIndex).map(Number).sort(function (a, b) { return a - b; });
+      var keep = {};
+      var used = 0;
+      if (byIndex[0] && byIndex[0].length) {
+        keep[0] = byIndex[0];
+        used += byIndex[0].length;
+      }
+      for (var hi = heights.length - 1; hi >= 0 && used < MAX_TOTAL_CARDS; hi--) {
+        var h = heights[hi];
+        if (h === 0) continue;
+        var lvl = byIndex[h];
+        if (!lvl || !lvl.length) continue;
+        var room = MAX_TOTAL_CARDS - used;
+        keep[h] = lvl.length > room ? lvl.slice(0, room) : lvl;
+        used += keep[h].length;
+      }
+      byIndex = keep;
+    }
 
     function sortLevel(blocks, parentOrder) {
       // Main-chain block first, then by parent position, then hash
@@ -284,7 +332,7 @@
       });
     }
 
-    var html = '<div class="chain-view" style="display:flex;flex-direction:column;width:100%;gap:0;">';
+    var html = '<div class="chain-view" style="display:flex;flex-direction:column;width:100%;gap:0;contain:content;">';
     html += omittedRowHtml(windowed.omitted);
     var prevLevel = null;
 
@@ -295,7 +343,7 @@
       html +=
         '<div class="chain-level" data-height="' +
         i +
-        '">';
+        '" style="content-visibility:auto;contain-intrinsic-size:auto 160px;">';
 
       for (var li = 0; li < level.length; li++) {
         var block = level[li];
@@ -345,7 +393,8 @@
             ';margin-top:10px;max-height:150px;overflow-y:auto;">';
           txHtml +=
             '<table class="table table-condensed"><thead><tr><th>From</th><th>To</th><th>Amt</th></tr></thead><tbody>';
-          for (var t = 0; t < block.transactions.length; t++) {
+          var txLimit = Math.min(block.transactions.length, MAX_TX_ROWS);
+          for (var t = 0; t < txLimit; t++) {
             var tx = block.transactions[t];
             txHtml +=
               '<tr><td>' +
@@ -355,6 +404,12 @@
               '</td><td>' +
               escapeHtml(tx.amount) +
               '</td></tr>';
+          }
+          if (block.transactions.length > txLimit) {
+            txHtml +=
+              '<tr><td colspan="3" class="text-muted small">+' +
+              (block.transactions.length - txLimit) +
+              ' more</td></tr>';
           }
           txHtml += '</tbody></table></div>';
         }
@@ -504,6 +559,10 @@
     pinChainPanelToTip: pinChainPanelToTip,
     chainScrollParent: chainScrollParent,
     sideChainLabel: sideChainLabel,
-    shortAddress: shortAddress
+    shortAddress: shortAddress,
+    HARD_MAX_VISIBLE: HARD_MAX_VISIBLE,
+    MAX_ORPHANS_PER_HEIGHT: MAX_ORPHANS_PER_HEIGHT,
+    MAX_ORPHAN_CARDS: MAX_ORPHAN_CARDS,
+    MAX_TOTAL_CARDS: MAX_TOTAL_CARDS
   };
 })(typeof window !== 'undefined' ? window : this);

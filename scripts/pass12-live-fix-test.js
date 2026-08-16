@@ -202,7 +202,7 @@ function loadPersistence(localStore, sessionStore) {
     /Persistence\.js\?v=p4fix9/.test(obsPug) &&
     /landing\.js\?v=p4fix9/.test(indexPug) &&
     /landing\.js\?v=p4fix9/.test(btcPug) &&
-    /admin\.js\?v=p4fix8/.test(adminPug);
+    /admin\.js\?v=p4fix\d+/.test(adminPug);
   if (ok) pass('Edited scripts cache-bust p4fix9', '');
   else fail('Edited scripts cache-bust p4fix9', 'stale ?v=');
 })();

@@ -28,6 +28,7 @@ function showToastNotification(message, type = 'info', durationMs) {
   const item = { message: message, type: type, hold: hold };
   if (isResume) toastQueue.unshift(item);
   else toastQueue.push(item);
+  if (toastQueue.length > 4) toastQueue = toastQueue.slice(-4);
   drainToastQueue();
 }
 
@@ -790,12 +791,13 @@ function initClientSideNetworking(mode, roomCode) {
     const block = payload.block;
     const minerId = payload.minerId || (block && block.miner) || msg.from;
 
-    // Live topology: flash finder + send block packets along edges
+    // Live topology: flash finder. Gossip floods only on tip changes —
+    // race-loser floods at 0.3s pace stacked SVG until Aw Snap (0HU8XV).
     try {
       const viz = window.networkViz || networkViz;
       if (viz && minerId && minerId !== 'genesis') {
         if (typeof viz.animateBlockMined === 'function') viz.animateBlockMined(minerId);
-        if (relayState && typeof viz.animateBlockPropagation === 'function') {
+        if (!payload.isFork && relayState && typeof viz.animateBlockPropagation === 'function') {
           // Prefer live topology neighbors (gossip/star); fall back to all peers
           let recipients = [];
           if (typeof viz.getNeighborIds === 'function') {
@@ -1446,8 +1448,17 @@ function broadcastNetworkPausedState(paused, opts) {
 
 // Legacy loadBlockchainState removed (client-relay only now uses renderClientRelayChain)
 
+var _hubChainPaintKey = '';
 function updateBlockchainView(mainChain, orphans, participants) {
   if (window.ChainDisplay && typeof ChainDisplay.renderChainHtml === 'function') {
+    const tip = mainChain && mainChain.length ? mainChain[mainChain.length - 1] : null;
+    const orphanKey = (orphans || []).map(function (b) { return b && b.hash; }).filter(Boolean).slice(-8).join(',');
+    const nameKey = (participants || []).map(function (p) {
+      return (p && (p.userId || p.id) || '') + ':' + ((p && (p.displayName || p.name)) || '');
+    }).join(',');
+    const paintKey = (tip && tip.hash) + '|' + (mainChain ? mainChain.length : 0) + '|' + orphanKey + '|' + nameKey;
+    if (paintKey === _hubChainPaintKey && $('#blockchainView .chain-view').length) return;
+    _hubChainPaintKey = paintKey;
     $('#blockchainView').html(
       ChainDisplay.renderChainHtml({
         mainChain: mainChain || [],
@@ -2271,7 +2282,7 @@ function renderClientRelayChain(opts) {
       if (!hash || mainHashes.has(hash) || !block || block.miner === 'genesis') return;
       const idx = block.index != null ? Number(block.index) : -1;
       // Only recent race-losers — a 200-block orphan dump OOMs the hub tab.
-      if (idx >= 0 && tipIdx - idx > 28) return;
+      if (idx >= 0 && tipIdx - idx > 10) return;
       orphans.push(block);
     });
   }
@@ -2390,8 +2401,14 @@ function renderClientRelayChain(opts) {
 }
 
 /** Render the shared mempool table (pending transactions). */
+var _hubMempoolKey = '';
 function updatePendingTransactions(blockchain) {
   const transactions = (blockchain && blockchain.pendingTransactions) || [];
+  const memKey = transactions.map(function (tx) {
+    return (tx && (tx.id || (tx.from + '>' + tx.to + ':' + tx.amount))) || '';
+  }).join('|');
+  if (memKey === _hubMempoolKey && $('#pendingTransactions tr').length) return;
+  _hubMempoolKey = memKey;
   const participants = (blockchain && blockchain.participants) ||
     (relayState ? Array.from(relayState.participants.values()) : []);
   const CD = window.ChainDisplay;

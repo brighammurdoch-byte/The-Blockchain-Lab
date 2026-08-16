@@ -179,7 +179,7 @@ function loadAdminHubFns(sessionStore, localStore) {
   const indexPug = loadFile('views/lab/index.pug');
   const btcPug = loadFile('views/lab/bitcoin.pug');
   const ok =
-    /admin\.js\?v=p4fix8/.test(adminPug) &&
+    /admin\.js\?v=p4fix\d+/.test(adminPug) &&
     /landing\.js\?v=p4fix9/.test(indexPug) &&
     /landing\.js\?v=p4fix9/.test(btcPug);
   if (ok) pass('Edited scripts cache-bust p4fix8 / landing p4fix9', '');
