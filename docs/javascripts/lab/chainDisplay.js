@@ -365,6 +365,9 @@
         toggle.textContent = archiveOpen
           ? 'Hide earlier blocks'
           : 'Browse ' + n + ' earlier block' + (n === 1 ? '' : 's');
+        if (archiveOpen && typeof window.LabOnArchiveOpen === 'function') {
+          try { window.LabOnArchiveOpen(); } catch (e) {}
+        }
         return;
       }
       var row = t.closest('[data-chain-archive-hash]');

@@ -105,7 +105,7 @@
   }
 
   /**
-   * @param {'index'|'admin'|'participate'|'observe'|'demos'|'code'|'bitcoin'|'ethereum'|'bitcoin-rules'} page
+   * @param {'index'|'admin'|'participate'|'observe'|'demos'|'code'|'bitcoin'|'ethereum'|'bitcoin-rules'|'ethereum-rules'} page
    * @param {string} [sessionId]
    */
   function labUrl(page, sessionId, extra) {
@@ -117,6 +117,9 @@
 
     if (page === 'bitcoin-rules') {
       return staticMode ? (base + '/bitcoin/rules/') : (base + '/bitcoin/rules');
+    }
+    if (page === 'ethereum-rules') {
+      return staticMode ? (base + '/ethereum/rules/') : (base + '/ethereum/rules');
     }
 
     if (page === 'bitcoin' || page === 'ethereum') {
@@ -166,10 +169,8 @@
         document.documentElement.setAttribute('data-chain-flavor', flavor);
       }
     } catch (e) {}
-    if (flavor !== 'bitcoin') return flavor;
-
     var $ = global.jQuery || global.$;
-    if ($) {
+    if (flavor === 'bitcoin' && $) {
       $('.js-unit-label').text('BTC');
       $('#miningRewardLabel').text('Block subsidy (BTC)');
       $('.js-endowment-note').text('Classroom faucet so wallets can send before they mine.');
@@ -183,9 +184,28 @@
         );
       }
     }
+    if (flavor === 'ethereum' && $) {
+      $('.js-unit-label').text('ETH');
+      $('#miningRewardLabel').text('Block issuance (ETH)');
+      $('.js-endowment-note').text('Classroom faucet so wallets can send before they mine.');
+      if (!$('#chainFlavorBanner').length && $('.lab-session-banner').length) {
+        $('.lab-session-banner').prepend(
+          '<div class="col-md-12" id="chainFlavorBanner">' +
+            '<div class="alert alert-warning" style="margin-bottom:12px;">' +
+            '<strong>Ethereum classroom.</strong> Same hub / miner / wallet flow as the main lab. ' +
+            'Accounts hold ETH-units. Issuance starts at 5 ETH per block (a teaching twin of old PoW issuance). ' +
+            'This is not geth and not the EVM.</div></div>'
+        );
+      }
+    }
     try {
-      if (typeof document !== 'undefined' && document.title && !/bitcoin/i.test(document.title)) {
-        document.title = document.title.replace('Blockchain Lab', 'Bitcoin Lab');
+      if (typeof document !== 'undefined' && document.title) {
+        if (flavor === 'bitcoin' && !/bitcoin/i.test(document.title)) {
+          document.title = document.title.replace('Blockchain Lab', 'Bitcoin Lab');
+        }
+        if (flavor === 'ethereum' && !/ethereum/i.test(document.title)) {
+          document.title = document.title.replace('Blockchain Lab', 'Ethereum Lab');
+        }
       }
     } catch (e2) {}
     return flavor;

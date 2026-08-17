@@ -157,25 +157,36 @@ function setupEventHandlers() {
       return;
     }
     
-    if (net) {
-      if (networkPaused) {
-        showToastNotification('Network is paused by admin — transactions blocked', 'warning');
-        return;
-      }
-      const tx = {
-        from: userId,
-        to: toUserId,
-        amount: amount,
-        timestamp: Date.now()
-      };
-      net.send('transaction-submitted', { transaction: tx });
-      showToastNotification('Transaction submitted via relay (no server)!', 'success');
-      $('#recipientAddress').val('');
-      $('#transactionAmount').val('');
-      // The admin will include it in next state broadcast; for now just note
-    } else {
-      showToastNotification('No relay connection', 'error');
+    if (networkPaused) {
+      showToastNotification('Network is paused by admin — transactions blocked', 'warning');
+      return;
     }
+    if (window._txSendInFlight) return;
+    if (!net || !userId) {
+      window._pendingWalletTx = { to: toUserId, amount: amount };
+      showToastNotification('Connecting to hub — send will retry automatically', 'info');
+      setTimeout(function () {
+        if (window._pendingWalletTx && net && userId) {
+          $('#recipientAddress').val(window._pendingWalletTx.to);
+          $('#transactionAmount').val(window._pendingWalletTx.amount);
+          window._pendingWalletTx = null;
+          $('#transactionForm').trigger('submit');
+        }
+      }, 600);
+      return;
+    }
+    window._txSendInFlight = true;
+    const tx = {
+      from: userId,
+      to: toUserId,
+      amount: amount,
+      timestamp: Date.now()
+    };
+    net.send('transaction-submitted', { transaction: tx });
+    showToastNotification('Transaction submitted via relay (no server)!', 'success');
+    $('#recipientAddress').val('');
+    $('#transactionAmount').val('');
+    setTimeout(function () { window._txSendInFlight = false; }, 400);
   });
 
   // Copy address button
@@ -242,6 +253,22 @@ function initClientSideNetworkingForObserver(mode) {
   net = new NetworkManager(mode);
 
   // Attach listeners BEFORE join, so we don't miss the response 'initial-state'
+  net.on('chain-slice', (msg) => {
+    const payload = msg.payload || msg;
+    const incoming = payload.blocks || payload.chain || [];
+    if (!incoming.length) return;
+    const Merge = window.RelayBlockchainState && RelayBlockchainState.mergeHistorySlice;
+    if (typeof Merge === 'function') {
+      window._observerChain = Merge(window._observerChain || [], incoming).chain;
+    }
+    populateObserverUIFromState({
+      chain: window._observerChain,
+      participants: window._observerParticipants || [],
+      pendingTransactions: window._observerPending || []
+    });
+    if (payload.more) requestObserverHistoryFill();
+  });
+
   net.on('admin-settings-updated', (msg) => {
     const s = msg.payload || msg;
     if (s.networkMode && net && typeof net.setRoutingMode === 'function') {
@@ -440,6 +467,7 @@ function initClientSideNetworkingForObserver(mode) {
     restoreNodeNameInput(joinName);
     // Explicitly request the state
     net.send('request-state', { from: userId });
+    requestObserverHistoryFill();
     window.addEventListener('pagehide', function () {
       try { if (net) net.send('peer-left', { from: userId }); } catch (e) {}
     });
@@ -527,6 +555,34 @@ function restoreNodeNameInput(preferred) {
   $el.val(name);
 }
 
+function requestObserverHistoryFill() {
+  if (!net) return;
+  const chain = window._observerChain || [];
+  const have = new Set();
+  let tipIdx = 0;
+  chain.forEach(function (b) {
+    if (!b || b.index == null) return;
+    const n = Number(b.index);
+    have.add(n);
+    if (n > tipIdx) tipIdx = n;
+  });
+  let missingFrom = null;
+  for (let i = 0; i <= tipIdx && i < 500; i++) {
+    if (!have.has(i)) { missingFrom = i; break; }
+  }
+  if (missingFrom == null) return;
+  try {
+    net.send('request-chain-slice', {
+      from: userId,
+      fromIndex: missingFrom,
+      toIndex: missingFrom + 24,
+      limit: 25
+    });
+  } catch (e) {}
+}
+
+window.LabOnArchiveOpen = requestObserverHistoryFill;
+
 function adoptObserverHubChain(incoming, meta) {
   meta = meta || {};
   const local = window._observerChain || [];
@@ -539,6 +595,7 @@ function adoptObserverHubChain(incoming, meta) {
       chainHeight: meta.chainHeight != null ? meta.chainHeight : meta.newHeight
     });
     window._observerChain = merged.chain;
+    if (meta.chainTruncated) requestObserverHistoryFill();
   } else {
     const newTip = incoming[incoming.length - 1];
     const sameTip = newTip && local.some(function (b) { return b && b.hash === newTip.hash; });

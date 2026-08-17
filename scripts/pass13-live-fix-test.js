@@ -239,7 +239,7 @@ const ChainDisplay = loadChainDisplay();
   }
 })();
 
-// --- 8. Cache-bust p4fix11 on changed assets; held p4fix10 on the rest ---
+// --- 8. Cache-bust p4fix12 on changed assets ---
 (function () {
   const adminPug = loadFile('views/lab/admin.pug');
   const partPug = loadFile('views/lab/participate.pug');
@@ -247,15 +247,34 @@ const ChainDisplay = loadChainDisplay();
   const indexPug = loadFile('views/lab/index.pug');
   const btcPug = loadFile('views/lab/bitcoin.pug');
   const ok =
-    /chainDisplay\.js\?v=p4fix11/.test(adminPug + partPug + obsPug) &&
-    /observe\.js\?v=p4fix10/.test(obsPug) &&
-    /admin\.js\?v=p4fix11/.test(adminPug) &&
-    /participate\.js\?v=p4fix11/.test(partPug) &&
+    /chainDisplay\.js\?v=p4fix12/.test(adminPug + partPug + obsPug) &&
+    /observe\.js\?v=p4fix12/.test(obsPug) &&
+    /admin\.js\?v=p4fix12/.test(adminPug) &&
+    /participate\.js\?v=p4fix12/.test(partPug) &&
     /networkVisualization\.js\?v=p4fix10/.test(adminPug) &&
-    /AdminRelayCoordinator\.js\?v=p4fix10/.test(adminPug + partPug + obsPug + indexPug + btcPug) &&
-    /RelayBlockchainState\.js\?v=p4fix11/.test(adminPug + partPug + obsPug + indexPug + btcPug);
-  if (ok) pass('Edited scripts cache-bust p4fix11', '');
-  else fail('Edited scripts cache-bust p4fix11', 'stale ?v=');
+    /AdminRelayCoordinator\.js\?v=p4fix12/.test(adminPug + partPug + obsPug + indexPug + btcPug) &&
+    /RelayBlockchainState\.js\?v=p4fix12/.test(adminPug + partPug + obsPug + indexPug + btcPug);
+  if (ok) pass('Edited scripts cache-bust p4fix12', '');
+  else fail('Edited scripts cache-bust p4fix12', 'stale ?v=');
+})();
+
+// --- 9. History slice can restore omitted heights without dropping the tip ---
+(function () {
+  const lab = new Relay();
+  lab.chain = [];
+  for (let i = 0; i <= 40; i++) lab.chain.push(makeBlock(i, 'h' + i, i === 0 ? '0' : 'h' + (i - 1)));
+  const slice = lab.getChainSlice(5, 14, 25);
+  const tail = lab.chain.slice(-10);
+  const merged = Relay.mergeHistorySlice(tail, slice.blocks);
+  const hasMid = merged.chain.some(function (b) { return b && b.index === 8; });
+  const hasTip = merged.chain.some(function (b) { return b && b.index === 40; });
+  if (slice.blocks.length === 10 && hasMid && hasTip) {
+    pass('getChainSlice + mergeHistorySlice restores middle without losing tip',
+      'slice=' + slice.blocks.length + ' merged=' + merged.chain.length);
+  } else {
+    fail('getChainSlice + mergeHistorySlice restores middle without losing tip',
+      JSON.stringify({ n: slice.blocks.length, hasMid: hasMid, hasTip: hasTip }));
+  }
 })();
 
 const failed = results.filter(function (r) { return !r.ok; });

@@ -270,27 +270,18 @@ See the `.env` file (copy `.env.example`) for all tunables:
 ### Adding Features
 The modular architecture makes it easy to add features:
 
-**New blockchain feature?** Modify `lib/blockchainLab.js`
-**New mining parameter?** Update `lib/miningUtils.js`
-**New student facing feature?** Add route in `routes/lab.js` and view in `views/lab/`
+**New classroom rule?** Modify `public/javascripts/network/RelayBlockchainState.js`
+**New student-facing page?** Add a route in `routes/lab.js` and a view in `views/lab/`
 
 ### Code Structure
 ```
 blockchain-demo/
-├── lib/
-│   ├── blockchainLab.js    # Core blockchain logic
-│   ├── miningUtils.js       # Mining algorithms
-│   └── socketHandlers.js    # Real-time events
-├── public/
-│   └── javascripts/lab/      # Client-side code
-├── routes/
-│   └── lab.js               # Lab HTTP routes
-├── views/lab/                # UI templates
-│   ├── index.pug            # Landing page
-│   ├── admin.pug            # Admin dashboard
-│   ├── observe.pug          # Observer view
-│   └── participate.pug      # Participant mining view
-└── app.js                   # Express app setup
+├── public/javascripts/
+│   ├── lab/                  # Admin / miner / wallet / landing UI
+│   └── network/              # Admin-hub relay + chain state
+├── routes/lab.js             # Serves pages only (no session server)
+├── views/lab/                # Pug templates
+└── app.js                    # Express file server for local prep
 ```
 
 ## Future Enhancements

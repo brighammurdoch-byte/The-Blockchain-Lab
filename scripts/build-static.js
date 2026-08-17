@@ -122,17 +122,18 @@ function main() {
   writeFile('lab/demos.html', renderLabPage('lab/demos.pug', { title: 'Blockchain Lab - Guided Demos', sessionId: '' }));
   writeFile('lab/code.html', renderLabPage('lab/code-editor.pug', { title: 'Blockchain Lab - Code Editor', sessionId: '' }));
   writeFile('lab/bitcoin.html', renderLabPage('lab/bitcoin.pug', { title: 'Bitcoin Lab', page: 'bitcoin' }));
-  writeFile('lab/ethereum.html', renderLabPage('lab/ethereum.pug', { title: 'Ethereum rules lab', page: 'ethereum' }));
+  writeFile('lab/ethereum.html', renderLabPage('lab/ethereum.pug', { title: 'Ethereum Lab', page: 'ethereum' }));
 
   // Anders Brownworth learning demos — /hash, /block, … via directory index.html
   LEARNING_PAGES.forEach((pageName) => {
     writeFile(pageName + '/index.html', renderLearningPage(pageName));
   });
 
-  // Bitcoin classroom + leftover standalone editor; Ethereum rules page
+  // Bitcoin / Ethereum classrooms + optional standalone editors
   writeFile('bitcoin/index.html', renderLabPage('lab/bitcoin.pug', { title: 'Bitcoin Lab', page: 'bitcoin' }));
   writeFile('bitcoin/rules/index.html', renderLabPage('lab/bitcoin-rules.pug', { title: 'Bitcoin-like C++ rules', page: 'bitcoin' }));
-  writeFile('ethereum/index.html', renderLabPage('lab/ethereum.pug', { title: 'Ethereum rules lab', page: 'ethereum' }));
+  writeFile('ethereum/index.html', renderLabPage('lab/ethereum.pug', { title: 'Ethereum Lab', page: 'ethereum' }));
+  writeFile('ethereum/rules/index.html', renderLabPage('lab/ethereum-rules.pug', { title: 'Ethereum-like Solidity rules', page: 'ethereum' }));
 
   // Root redirect into the lab
   writeFile('index.html', `<!DOCTYPE html>

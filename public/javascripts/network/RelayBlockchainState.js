@@ -1662,6 +1662,43 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     };
   }
 
+  getChainSlice(fromIndex, toIndex, limit) {
+    limit = Math.max(1, Math.min(30, Number(limit) || 25));
+    fromIndex = Math.max(0, Number(fromIndex) || 0);
+    toIndex = (toIndex == null || isNaN(Number(toIndex))) ? fromIndex + limit - 1 : Number(toIndex);
+    const chain = Array.isArray(this.chain) ? this.chain : [];
+    const blocks = [];
+    for (let i = 0; i < chain.length && blocks.length < limit; i++) {
+      const b = chain[i];
+      const idx = b && b.index != null ? Number(b.index) : i;
+      if (idx >= fromIndex && idx <= toIndex) blocks.push(b);
+    }
+    const last = blocks.length ? Number(blocks[blocks.length - 1].index) : fromIndex;
+    const tip = chain.length ? chain[chain.length - 1] : null;
+    const tipIndex = tip && tip.index != null ? Number(tip.index) : Math.max(0, chain.length - 1);
+    return {
+      blocks: blocks,
+      fromIndex: fromIndex,
+      toIndex: last,
+      more: last < Math.min(toIndex, tipIndex),
+      tipIndex: tipIndex
+    };
+  }
+
+  static mergeHistorySlice(local, incoming) {
+    const byHash = new Map();
+    (Array.isArray(local) ? local : []).forEach(function (b) {
+      if (b && b.hash) byHash.set(String(b.hash), b);
+    });
+    (Array.isArray(incoming) ? incoming : []).forEach(function (b) {
+      if (b && b.hash) byHash.set(String(b.hash), b);
+    });
+    const chain = Array.from(byHash.values()).sort(function (a, b) {
+      return Number(a.index) - Number(b.index);
+    });
+    return { chain: chain, applied: !!(incoming && incoming.length) };
+  }
+
   compactChainForTransport(maxBytes) {
     maxBytes = maxBytes || 70000;
     const chain = Array.isArray(this.chain) ? this.chain : [];

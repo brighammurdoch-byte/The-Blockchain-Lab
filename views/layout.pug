@@ -26,7 +26,7 @@ html
     script(src='/javascripts/lib/sha256.js')
     script(src='https://d3js.org/d3.v7.min.js')
     script(src='/javascripts/blockchain.js')
-    script(src='/javascripts/lab/labPaths.js?v=p2fix6')
+    script(src='/javascripts/lab/labPaths.js?v=p4fix12')
 
   block config
   body(class=bodyClass || '')
@@ -62,7 +62,7 @@ html
                 li(class={active: page === 'bitcoin'})
                   a(href='/bitcoin') #{__('Bitcoin classroom')}
                 li(class={active: page === 'ethereum'})
-                  a(href='/ethereum') #{__('Ethereum rules')}
+                  a(href='/ethereum') #{__('Ethereum classroom')}
             li(class={active: page === 'lab'})
               a(href='/lab')
                 | #{__('Full Simulation')}

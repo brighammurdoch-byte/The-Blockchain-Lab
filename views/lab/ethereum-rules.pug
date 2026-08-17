@@ -1,0 +1,155 @@
+extends ../layout
+
+block config
+  - bodyClass = 'lab-app'
+  - page = 'ethereum'
+
+block extra_css
+  link(rel='stylesheet', href='/stylesheets/lab-theme.css?v=p3fix1')
+
+block content
+  .container-fluid
+    .lab-protocol
+      span.lab-landing__eyebrow Optional standalone
+      h1 Ethereum-like Solidity rules
+      p.lead
+        a(href="/ethereum") ← Back to Ethereum classroom
+        |  · solo editor for issuance / gas experiments. The live class uses
+        a(href="/ethereum")  the classroom hub
+        |  instead.
+
+      .alert.alert-warning
+        strong This is not solc and not the EVM.
+        |
+        | Real Ethereum contracts are compiled by
+        code  solc
+        |  to EVM bytecode and executed by clients such as geth (Go). Your browser does neither.
+        | The editor is Solidity that
+        em  looks
+        |  like a transfer contract. On Apply, a translator reads
+        code  INITIAL_SUPPLY
+        | ,
+        code  BLOCK_REWARD
+        | ,
+        code  TRANSFER_GAS
+        | , and whether
+        code  require(balanceOf[msg.sender] >= amount)
+        |  is present, then a JavaScript account engine follows those rules. Remove the
+        code  require
+        |  and overdrafts succeed — the same
+        em  class
+        |  of experiment as breaking a Solidity check, not the same as deploying on mainnet.
+
+      .row
+        .col-md-5
+          .panel.panel-primary
+            .panel-heading
+              h3.panel-title Chain
+            .panel-body
+              .row.text-center
+                .col-xs-4
+                  h3#ethNumber 0
+                  small Block
+                .col-xs-4
+                  h3#ethReward —
+                  small Issuance
+                .col-xs-4
+                  h3#ethBalance —
+                  small 0xStudent
+              p
+                small Tip:
+                |
+                code#ethTip
+              p
+                small Gas limit:
+                |
+                span#ethGas
+                |  · mempool:
+                |
+                span#ethMempool 0
+              p
+                button.btn.btn-success#ethMineBtn Propose a block
+                |
+                |
+                button.btn.btn-default#ethFaucetBtn Faucet +5
+              form.form-inline(style="margin-top:10px;")
+                .form-group
+                  input.form-control#ethSendTo(type="text" placeholder="0xStudent" value="" autocomplete="off")
+                .form-group
+                  input.form-control#ethSendAmt(type="number" step="0.01" min="0" value="1" style="width:100px")
+                button.btn.btn-primary#ethSendBtn(type="button") Transfer
+
+          .panel.panel-default
+            .panel-heading
+              h3.panel-title Recent blocks
+            .panel-body(style="max-height:220px;overflow:auto;")
+              table.table.table-condensed
+                thead
+                  tr
+                    th #
+                    th Hash
+                    th Proposer
+                    th Reward
+                    th Txs
+                tbody#ethBlocks
+
+          .panel.panel-default
+            .panel-heading
+              h3.panel-title Accounts
+            .panel-body(style="max-height:200px;overflow:auto;")
+              table.table.table-condensed
+                thead
+                  tr
+                    th Address
+                    th ETH-units
+                    th Nonce
+                tbody#ethAccounts
+
+        .col-md-7
+          .panel.panel-info
+            .panel-heading
+              h3.panel-title
+                | Standalone —
+                code LabCoin.sol
+            .panel-body
+              #ethEditor(style="height:380px;border:1px solid #ddd;")
+              p(style="margin-top:10px;")
+                button.btn.btn-success#ethApplyBtn Apply Solidity rules
+                |
+                |
+                button.btn.btn-default#ethResetBtn Reset + rebuild genesis
+              #ethTranslateNotes.alert.alert-success(style="display:none;margin-top:10px;")
+
+          .panel.panel-default
+            .panel-heading
+              h3.panel-title What happens when you click Apply
+            .panel-body
+              ol
+                li The page does
+                  strong  not
+                  |  run
+                  code  solc
+                  |  or an EVM.
+                li
+                  | A reader scans this Solidity for
+                  code  INITIAL_SUPPLY
+                  | ,
+                  code  BLOCK_REWARD
+                  | ,
+                  code  TRANSFER_GAS
+                  | ,
+                  code  BLOCK_GAS_LIMIT
+                  | , and the
+                  code  require(balanceOf[msg.sender] >= amount)
+                  |  check.
+                li Those become the live JavaScript account model’s parameters.
+                li Transfers you send then follow the new rules. Changing
+                  code  INITIAL_SUPPLY
+                  |  only affects a rebuilt genesis (use Reset).
+
+  script(src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/ace.min.js")
+  script(src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/mode-javascript.min.js")
+  script(src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.15.0/theme-monokai.min.js")
+  script(src="/javascripts/chains/ethereumRules.js?v=cons13")
+  script(src="/javascripts/chains/ethereumTranslate.js?v=eth1")
+  script(src="/javascripts/lab/ethereumPage.js?v=cons13")

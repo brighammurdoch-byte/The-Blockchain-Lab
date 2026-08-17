@@ -590,13 +590,16 @@ function initClientSideNetworking(mode, roomCode) {
     if (flavor === 'bitcoin' && (!$('#miningReward').val() || $('#miningReward').val() === '10')) {
       $('#miningReward').val(50);
     }
+    if (flavor === 'ethereum' && (!$('#miningReward').val() || $('#miningReward').val() === '10')) {
+      $('#miningReward').val(5);
+    }
     const initialSettings = {
       difficultyLeading: parseInt($('#difficultyLeading').val(), 10) || 3,
       difficultySecondary: (function () {
         var s = parseInt($('#difficultySecondary').val(), 10);
         return isNaN(s) ? 8 : s;
       })(),
-      miningRewardCoins: parseInt($('#miningReward').val(), 10) || (flavor === 'bitcoin' ? 50 : 10),
+      miningRewardCoins: parseInt($('#miningReward').val(), 10) || (flavor === 'bitcoin' ? 50 : (flavor === 'ethereum' ? 5 : 10)),
       parametersLocked: $('#lockParameters').is(':checked'),
       targetBlockTimeSec: parseInt($('#targetBlockTimeSec').val(), 10) || 10,
       autoDifficulty: $('#autoDifficulty').length ? $('#autoDifficulty').is(':checked') : true,
@@ -1078,6 +1081,14 @@ function initClientSideNetworking(mode, roomCode) {
         console.log('[ClientNet] Sent initial-state in response to request from', requester);
       }, 0);
     }
+  });
+
+  net.on('request-chain-slice', (msg) => {
+    const payload = msg.payload || msg;
+    const requester = payload.from || msg.from;
+    if (!relayState || typeof relayState.getChainSlice !== 'function' || !requester) return;
+    const slice = relayState.getChainSlice(payload.fromIndex, payload.toIndex, payload.limit);
+    net.send('chain-slice', slice, requester);
   });
 
   // Expose for easy console-based multi-tab testing (open another tab, run similar code in console)
@@ -2460,7 +2471,19 @@ function updateAdminWalletUI() {
  */
 function submitAdminWalletTransaction() {
   if (!net || !net.userId) {
-    showToastNotification('Hub not ready yet', 'error');
+    window._pendingAdminTx = {
+      to: ($('#recipientAddress').val() || '').trim(),
+      amount: parseFloat($('#transactionAmount').val())
+    };
+    showToastNotification('Hub is connecting — send will retry automatically', 'info');
+    setTimeout(function () {
+      if (window._pendingAdminTx && net && net.userId) {
+        $('#recipientAddress').val(window._pendingAdminTx.to);
+        $('#transactionAmount').val(window._pendingAdminTx.amount);
+        window._pendingAdminTx = null;
+        submitAdminWalletTransaction();
+      }
+    }, 600);
     return;
   }
   if (relayState && relayState.networkPaused) {

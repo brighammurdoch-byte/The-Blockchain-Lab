@@ -225,6 +225,7 @@ function requestHubResync(reason) {
     remineOnCanonicalTip({ force: true });
   }
   try { net.send('request-state', { from: userId }); } catch (e) {}
+  requestHistoryFill();
   if (hubResyncTimer) clearTimeout(hubResyncTimer);
   hubResyncTimer = setTimeout(function () {
     if (!lastHubChainAt || Date.now() - lastHubChainAt > 5000) {
@@ -232,6 +233,48 @@ function requestHubResync(reason) {
       requestHubResync('forced');
     }
   }, 7000);
+}
+
+function requestHistoryFill() {
+  if (!net) return;
+  const chain = window.lastRelayedChain || [];
+  const have = new Set();
+  let tipIdx = 0;
+  chain.forEach(function (b) {
+    if (!b || b.index == null) return;
+    const n = Number(b.index);
+    have.add(n);
+    if (n > tipIdx) tipIdx = n;
+  });
+  let missingFrom = null;
+  for (let i = 0; i <= tipIdx && i < 500; i++) {
+    if (!have.has(i)) { missingFrom = i; break; }
+  }
+  if (missingFrom == null) return;
+  try {
+    net.send('request-chain-slice', {
+      from: userId,
+      fromIndex: missingFrom,
+      toIndex: missingFrom + 24,
+      limit: 25
+    });
+  } catch (e) {}
+}
+
+window.LabOnArchiveOpen = requestHistoryFill;
+
+function applyHistorySlice(blocks) {
+  if (!blocks || !blocks.length) return;
+  const Merge = window.RelayBlockchainState && RelayBlockchainState.mergeHistorySlice;
+  if (typeof Merge === 'function') {
+    window.lastRelayedChain = Merge(window.lastRelayedChain || [], blocks).chain;
+  }
+  if (typeof updatePersonalBlockchainView === 'function') {
+    try { updatePersonalBlockchainView(); } catch (e) {}
+  }
+  if (typeof refreshSharedNetworkView === 'function') {
+    try { refreshSharedNetworkView(); } catch (e2) {}
+  }
 }
 
 /** Hub classic tip — must match the hub's tip hash, not just a local height. */
@@ -2469,6 +2512,12 @@ function initClientSideNetworkingForParticipant(mode) {
     if (net) net.send('request-state', { from: userId });
   });
 
+  net.on('chain-slice', (msg) => {
+    const payload = msg.payload || msg;
+    applyHistorySlice(payload.blocks || payload.chain || []);
+    if (payload.more) requestHistoryFill();
+  });
+
   net.on('initial-state', (msg) => {
     const state = msg.payload || msg;
     markHubSeen();
@@ -2484,7 +2533,7 @@ function initClientSideNetworkingForParticipant(mode) {
       lastKnownAdminSettings = normalizeAdminSettings(state.adminSettings);
 
       $('#difficultyLevel').text(
-        (state.adminSettings.difficultyLeading || 4) + ' + 0x' +
+        (state.adminSettings.difficultyLeading || 3) + ' + 0x' +
         (state.adminSettings.difficultySecondary != null ? state.adminSettings.difficultySecondary : 8).toString(16)
       );
     }
@@ -2506,6 +2555,7 @@ function initClientSideNetworkingForParticipant(mode) {
         chainHeight: state.chainHeight
       });
       debugLog('Relayed chain length:', state.chain.length, 'height', state.chainHeight);
+      if (state.chainTruncated) requestHistoryFill();
 
       try {
         const pend = state.pendingTransactions || [];
@@ -2767,7 +2817,9 @@ function setupEventHandlers() {
       showToastNotification('Mining switch OFF — will not auto-resume', 'info');
       return;
     }
-    stopMining();
+    persistMiningIntent(false);
+    stopMining({ preserveIntent: false });
+    updateMiningControlsUI();
   });
 
   // Initial control labels
@@ -3355,7 +3407,11 @@ function handleTeamAttackStarted(data) {
 }
 
 function startMining() {
-  if (isMining) return;
+  if (isMining) {
+    // Half-stopped worker leftover: treat a second Start as a hard reset.
+    if (miningWorker && miningWorkerReady) return;
+    stopMining({ preserveIntent: true });
+  }
   persistMiningIntent(true);
   setupBackgroundMiningGuards();
   startMiningKeepalive();
@@ -3391,11 +3447,11 @@ function seedLocalGenesisChain() {
   window.lastRelayedChain = [genesis];
   rememberSeenBlock(genesis.hash);
   lastKnownAdminSettings = normalizeAdminSettings({
-    difficultyLeading: 4,
+    difficultyLeading: 3,
     difficultySecondary: 8,
     miningRewardCoins: 10
   });
-  $('#difficultyLevel').text('3 + 0xF');
+  $('#difficultyLevel').text('3 + 0x8');
   $('#blockchainView').append(
     '<div class="alert alert-warning">Local genesis ready. Start mining — blocks will sync when the instructor hub connects.</div>'
   );
@@ -3775,19 +3831,30 @@ function sendTransaction(recipientAddress, amount) {
     showToastNotification('Network is paused by admin — transactions blocked', 'warning');
     return;
   }
-  if (net) {
-    const tx = {
-      from: userId,
-      to: recipientAddress,
-      amount: amount,
-      timestamp: Date.now()
-    };
-    net.send('transaction-submitted', { transaction: tx });
-    $('#transactionForm')[0].reset();
-    showToastNotification(`✅ Transaction submitted via relay to ${recipientAddress.substring(0, 8)}... for ${amount} coins`, 'success');
-  } else {
-    showToastNotification('No relay connection for transaction', 'error');
+  if (window._txSendInFlight) return;
+  if (!net || !userId) {
+    window._pendingMinerTx = { to: recipientAddress, amount: amount };
+    showToastNotification('Connecting to hub — send will retry automatically', 'info');
+    setTimeout(function () {
+      if (window._pendingMinerTx && net && userId) {
+        const p = window._pendingMinerTx;
+        window._pendingMinerTx = null;
+        sendTransaction(p.to, p.amount);
+      }
+    }, 600);
+    return;
   }
+  window._txSendInFlight = true;
+  const tx = {
+    from: userId,
+    to: recipientAddress,
+    amount: amount,
+    timestamp: Date.now()
+  };
+  net.send('transaction-submitted', { transaction: tx });
+  if ($('#transactionForm').length && $('#transactionForm')[0]) $('#transactionForm')[0].reset();
+  showToastNotification(`✅ Transaction submitted via relay to ${recipientAddress.substring(0, 8)}... for ${amount} coins`, 'success');
+  setTimeout(function () { window._txSendInFlight = false; }, 400);
 }
 
 function normalizeValidatorSource(code) {

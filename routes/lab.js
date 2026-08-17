@@ -26,8 +26,12 @@ router.get('/bitcoin', function(req, res) {
   res.render('lab/bitcoin', { page: 'bitcoin', title: 'Bitcoin Lab', sessionId: '', bodyClass: 'lab-app' });
 });
 
+router.get('/ethereum/rules', function(req, res) {
+  res.render('lab/ethereum-rules', { page: 'ethereum', title: 'Ethereum-like Solidity rules', sessionId: '', bodyClass: 'lab-app' });
+});
+
 router.get('/ethereum', function(req, res) {
-  res.render('lab/ethereum', { page: 'ethereum', title: 'Ethereum rules lab', sessionId: '', bodyClass: 'lab-app' });
+  res.render('lab/ethereum', { page: 'ethereum', title: 'Ethereum Lab', sessionId: '', bodyClass: 'lab-app' });
 });
 
 router.get('/admin/:sessionId', function(req, res, next) {
