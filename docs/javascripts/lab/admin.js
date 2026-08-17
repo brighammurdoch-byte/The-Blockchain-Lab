@@ -560,7 +560,7 @@ function initClientSideNetworking(mode, roomCode) {
 
         // Re-apply restored settings to the UI sliders
         if (restored.settings) {
-          $('#difficultyLeading').val(restored.settings.difficultyLeading != null ? restored.settings.difficultyLeading : 1);
+          $('#difficultyLeading').val(restored.settings.difficultyLeading != null ? restored.settings.difficultyLeading : 3);
           $('#difficultySecondary').val(restored.settings.difficultySecondary != null ? restored.settings.difficultySecondary : 8);
           $('#miningReward').val(restored.settings.miningRewardCoins || 10);
           if (restored.settings.targetBlockTimeSec != null) {
@@ -591,7 +591,7 @@ function initClientSideNetworking(mode, roomCode) {
       $('#miningReward').val(50);
     }
     const initialSettings = {
-      difficultyLeading: parseInt($('#difficultyLeading').val(), 10) || 1,
+      difficultyLeading: parseInt($('#difficultyLeading').val(), 10) || 3,
       difficultySecondary: (function () {
         var s = parseInt($('#difficultySecondary').val(), 10);
         return isNaN(s) ? 8 : s;
@@ -1142,7 +1142,7 @@ function setupEventHandlers() {
     }
 
     const newSettings = {
-      difficultyLeading: parseInt($('#difficultyLeading').val(), 10) || 1,
+      difficultyLeading: parseInt($('#difficultyLeading').val(), 10) || 3,
       difficultySecondary: (function () {
         var s = parseInt($('#difficultySecondary').val(), 10);
         return isNaN(s) ? 8 : s;

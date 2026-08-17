@@ -3996,7 +3996,14 @@ function renderParticipantBlockchainViewNow(chainData, participants) {
   const windowed = (CD && typeof CD.windowBlocksForDisplay === 'function')
     ? CD.windowBlocksForDisplay(blocks, personalCap)
     : { blocks: blocks, omitted: 0, keptGenesis: false };
-  if (windowed.omitted > 0) {
+  if (windowed.omitted > 0 && CD && typeof CD.renderHiddenBlocksControl === 'function') {
+    html += CD.renderHiddenBlocksControl(
+      windowed.omitted,
+      (typeof CD.collectOmittedBlocks === 'function') ? CD.collectOmittedBlocks(blocks, windowed) : [],
+      nameLookup,
+      openTxPanels
+    );
+  } else if (windowed.omitted > 0) {
     html +=
       '<p class="small text-muted" style="margin-bottom:8px;">Showing genesis + recent blocks (' +
       windowed.omitted +
@@ -4236,7 +4243,7 @@ function updateNetworkStats(blockchain) {
 }
 
 function updateDifficultyInfo(settings) {
-  const zeros = (settings.difficultyLeading != null ? settings.difficultyLeading : 1);
+  const zeros = (settings.difficultyLeading != null ? settings.difficultyLeading : 3);
   const secondary = (settings.difficultySecondary != null ? settings.difficultySecondary : 8).toString(16).toUpperCase();
   let label = zeros + ' + 0x' + secondary;
   if (settings.targetBlockTimeSec) {

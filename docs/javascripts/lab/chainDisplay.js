@@ -169,17 +169,222 @@
     return { blocks: out, omitted: omitted, keptGenesis: genesis.length > 0 };
   }
 
-  function omittedRowHtml(omitted) {
-    if (!(omitted > 0)) return '';
+  var archiveOpen = false;
+  var archiveSelected = '';
+  var lastArchiveLookup = Object.create(null);
+  var lastNameLookup = null;
+  var lastOpenTxPanels = null;
+
+  function collectOmittedBlocks(rawMain, windowed) {
+    var keep = Object.create(null);
+    var shown = (windowed && windowed.blocks) || [];
+    for (var i = 0; i < shown.length; i++) {
+      if (shown[i] && shown[i].hash) keep[String(shown[i].hash)] = true;
+    }
+    var out = [];
+    var list = Array.isArray(rawMain) ? rawMain : [];
+    for (var j = 0; j < list.length; j++) {
+      var b = list[j];
+      if (b && b.hash && !keep[String(b.hash)]) out.push(b);
+    }
+    out.sort(function (a, b) {
+      return Number(a.index) - Number(b.index);
+    });
+    return out;
+  }
+
+  function renderOneArchiveCard(block, nameLookup, openTxPanels) {
+    if (!block) return '';
+    var fmtAddr = function (addr) {
+      return formatChainParticipantHtml(addr, nameLookup);
+    };
+    var hashFull = String(block.hash || '');
+    var prevFull = String(block.previousHash || '');
+    var hashShort = hashFull.length > 16 ? hashFull.substring(0, 16) + '…' : hashFull;
+    var prevShort = prevFull.length > 16 ? prevFull.substring(0, 16) + '…' : prevFull;
+    var timeStr = block.timestamp ? new Date(block.timestamp).toLocaleTimeString() : '';
+    var txHtml = String(block.transactions ? block.transactions.length : 0);
+    if (block.transactions && block.transactions.length > 0) {
+      var txId = 'tx_archive_' + hashFull;
+      var open = openTxPanels && typeof openTxPanels.has === 'function' && openTxPanels.has(txId);
+      txHtml +=
+        ' <button class="btn btn-xs btn-default" type="button" onclick="toggleTransactions(\'' +
+        escapeAttr(txId) +
+        '\')">View Details</button>';
+      txHtml +=
+        '<div id="txDetails_' +
+        escapeAttr(txId) +
+        '" style="display:' +
+        (open ? 'block' : 'none') +
+        ';margin-top:10px;max-height:150px;overflow-y:auto;">';
+      txHtml +=
+        '<table class="table table-condensed"><thead><tr><th>From</th><th>To</th><th>Amt</th></tr></thead><tbody>';
+      var txLimit = Math.min(block.transactions.length, MAX_TX_ROWS);
+      for (var t = 0; t < txLimit; t++) {
+        var tx = block.transactions[t];
+        txHtml +=
+          '<tr><td>' +
+          fmtAddr(tx.from) +
+          '</td><td>' +
+          fmtAddr(tx.to) +
+          '</td><td>' +
+          escapeHtml(tx.amount) +
+          '</td></tr>';
+      }
+      if (block.transactions.length > txLimit) {
+        txHtml +=
+          '<tr><td colspan="3" class="text-muted small">+' +
+          (block.transactions.length - txLimit) +
+          ' more</td></tr>';
+      }
+      txHtml += '</tbody></table></div>';
+    }
     return (
-      '<div class="chain-omitted text-muted" style="text-align:center;padding:10px 8px;margin:4px 0 10px;border:1px dashed #c5d0d6;border-radius:4px;font-size:12px;">' +
-      '… ' +
-      omitted +
-      ' earlier block' +
-      (omitted === 1 ? '' : 's') +
-      ' hidden to keep this tab responsive …' +
-      '</div>'
+      '<div class="panel panel-default chain-archive-card" style="margin:10px 0 0;">' +
+      '<div class="panel-heading" style="padding:8px 15px;">' +
+      '<strong>Block #' +
+      escapeHtml(block.index) +
+      '</strong>' +
+      '<div class="pull-right text-muted small" style="margin-top:2px;">' +
+      escapeHtml(timeStr) +
+      '</div></div>' +
+      '<div class="panel-body" style="padding:10px 15px;">' +
+      '<dl class="dl-horizontal chain-block-dl" style="margin-bottom:0;">' +
+      '<dt>Hash</dt><dd><code class="chain-hash" title="' +
+      escapeAttr(hashFull) +
+      '">' +
+      escapeHtml(hashShort) +
+      '</code></dd>' +
+      '<dt>Prev</dt><dd><code class="chain-hash" title="' +
+      escapeAttr(prevFull) +
+      '">' +
+      escapeHtml(prevShort) +
+      '</code></dd>' +
+      '<dt>Miner</dt><dd>' +
+      fmtAddr(block.miner) +
+      '</dd>' +
+      '<dt>Nonce</dt><dd>' +
+      escapeHtml(block.nonce) +
+      '</dd>' +
+      '<dt>Txs</dt><dd>' +
+      txHtml +
+      '</dd></dl></div></div>'
     );
+  }
+
+  function renderHiddenBlocksControl(omitted, omittedBlocks, nameLookup, openTxPanels) {
+    if (!(omitted > 0)) return '';
+    bindArchiveDelegation();
+    lastArchiveLookup = Object.create(null);
+    lastNameLookup = nameLookup || null;
+    lastOpenTxPanels = openTxPanels || null;
+    var rows = Array.isArray(omittedBlocks) ? omittedBlocks : [];
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i] && rows[i].hash) lastArchiveLookup[String(rows[i].hash)] = rows[i];
+    }
+    if (archiveSelected && !lastArchiveLookup[archiveSelected]) archiveSelected = '';
+    var btnLabel = archiveOpen
+      ? 'Hide earlier blocks'
+      : 'Browse ' + omitted + ' earlier block' + (omitted === 1 ? '' : 's');
+    var html =
+      '<div class="chain-omitted">' +
+      '<div class="chain-omitted-bar">' +
+      '<button type="button" class="btn btn-xs btn-default" data-chain-archive-toggle="1" data-omitted="' +
+      omitted +
+      '">' +
+      escapeHtml(btnLabel) +
+      '</button>' +
+      '<span class="text-muted small"> Hidden from the live view so this tab stays responsive.</span>' +
+      '</div>' +
+      '<div class="chain-archive-panel" style="display:' +
+      (archiveOpen ? 'block' : 'none') +
+      ';">' +
+      '<p class="small text-muted" style="margin:8px 0 6px;">' +
+      'Earlier blocks are still on the chain. Click a row to inspect it — the live tip stays windowed.</p>' +
+      '<div class="chain-archive-table-wrap"><table class="table table-condensed table-hover chain-archive-table">' +
+      '<thead><tr><th>#</th><th>Time</th><th>Miner</th><th>Hash</th><th>Txs</th></tr></thead><tbody>';
+    for (var r = 0; r < rows.length; r++) {
+      var b = rows[r];
+      if (!b) continue;
+      var h = String(b.hash || '');
+      var miner = String(b.miner || '');
+      var active = archiveSelected && archiveSelected === h ? ' chain-archive-row--active' : '';
+      html +=
+        '<tr class="chain-archive-row' +
+        active +
+        '" data-chain-archive-hash="' +
+        escapeAttr(h) +
+        '">' +
+        '<td>' +
+        escapeHtml(b.index) +
+        '</td>' +
+        '<td>' +
+        escapeHtml(b.timestamp ? new Date(b.timestamp).toLocaleTimeString() : '') +
+        '</td>' +
+        '<td>' +
+        escapeHtml(miner.length > 18 ? miner.slice(0, 8) + '…' + miner.slice(-4) : miner) +
+        '</td>' +
+        '<td><code title="' +
+        escapeAttr(h) +
+        '">' +
+        escapeHtml(h.length > 16 ? h.slice(0, 16) + '…' : h) +
+        '</code></td>' +
+        '<td>' +
+        escapeHtml(b.transactions ? b.transactions.length : 0) +
+        '</td></tr>';
+    }
+    html += '</tbody></table></div><div class="chain-archive-detail">';
+    if (archiveOpen && archiveSelected && lastArchiveLookup[archiveSelected]) {
+      html += renderOneArchiveCard(lastArchiveLookup[archiveSelected], nameLookup, openTxPanels);
+    }
+    html += '</div></div></div>';
+    return html;
+  }
+
+  function omittedRowHtml(omitted, omittedBlocks, nameLookup, openTxPanels) {
+    return renderHiddenBlocksControl(omitted, omittedBlocks, nameLookup, openTxPanels);
+  }
+
+  function bindArchiveDelegation() {
+    if (bindArchiveDelegation._done) return;
+    var doc = (typeof document !== 'undefined') ? document : (window && window.document);
+    if (!doc || typeof doc.addEventListener !== 'function') return;
+    bindArchiveDelegation._done = true;
+    doc.addEventListener('click', function (ev) {
+      var t = ev.target;
+      if (!t || !t.closest) return;
+      var toggle = t.closest('[data-chain-archive-toggle]');
+      if (toggle) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        archiveOpen = !archiveOpen;
+        var root = toggle.closest('.chain-omitted');
+        var panel = root && root.querySelector('.chain-archive-panel');
+        if (panel) panel.style.display = archiveOpen ? 'block' : 'none';
+        var n = Number(toggle.getAttribute('data-omitted')) || 0;
+        toggle.textContent = archiveOpen
+          ? 'Hide earlier blocks'
+          : 'Browse ' + n + ' earlier block' + (n === 1 ? '' : 's');
+        return;
+      }
+      var row = t.closest('[data-chain-archive-hash]');
+      if (!row) return;
+      ev.preventDefault();
+      archiveSelected = row.getAttribute('data-chain-archive-hash') || '';
+      var box = row.closest('.chain-omitted');
+      var detail = box && box.querySelector('.chain-archive-detail');
+      var siblings = box ? box.querySelectorAll('[data-chain-archive-hash]') : [];
+      for (var i = 0; i < siblings.length; i++) {
+        siblings[i].classList.toggle('chain-archive-row--active', siblings[i] === row);
+      }
+      if (detail && lastArchiveLookup[archiveSelected]) {
+        detail.innerHTML = renderOneArchiveCard(
+          lastArchiveLookup[archiveSelected],
+          lastNameLookup,
+          lastOpenTxPanels
+        );
+      }
+    });
   }
 
   /**
@@ -332,8 +537,10 @@
       });
     }
 
+    bindArchiveDelegation();
+    var omittedBlocks = collectOmittedBlocks(rawMain, windowed);
     var html = '<div class="chain-view" style="display:flex;flex-direction:column;width:100%;gap:0;contain:content;">';
-    html += omittedRowHtml(windowed.omitted);
+    html += omittedRowHtml(windowed.omitted, omittedBlocks, nameLookup, openTxPanels);
     var prevLevel = null;
 
     for (var i = 0; i <= maxIndex; i++) {
@@ -542,6 +749,7 @@
    */
   function pinChainPanelToTip(viewEl, opts) {
     opts = opts || {};
+    if (archiveOpen) return;
     var scroller = chainScrollParent(viewEl);
     if (!scroller) return;
     var slack = opts.slack != null ? opts.slack : 96;
@@ -556,6 +764,8 @@
     formatChainParticipantHtml: formatChainParticipantHtml,
     renderChainHtml: renderChainHtml,
     windowBlocksForDisplay: windowBlocksForDisplay,
+    renderHiddenBlocksControl: renderHiddenBlocksControl,
+    collectOmittedBlocks: collectOmittedBlocks,
     pinChainPanelToTip: pinChainPanelToTip,
     chainScrollParent: chainScrollParent,
     sideChainLabel: sideChainLabel,

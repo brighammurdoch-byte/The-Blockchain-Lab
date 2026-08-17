@@ -114,6 +114,41 @@ input {
 .chain-view {
   width: 100%;
 }
+.chain-omitted {
+  margin: 4px 0 10px;
+}
+.chain-omitted-bar {
+  text-align: center;
+  padding: 10px 8px;
+  border: 1px dashed #c5d0d6;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.chain-archive-panel {
+  margin-top: 8px;
+}
+.chain-archive-table-wrap {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid #d5dee3;
+  border-radius: 4px;
+  background: #fff;
+}
+.chain-archive-table {
+  margin-bottom: 0;
+  font-size: 12px;
+}
+.chain-archive-table th,
+.chain-archive-table td {
+  white-space: nowrap;
+}
+.chain-archive-row {
+  cursor: pointer;
+}
+.chain-archive-row--active,
+.chain-archive-row--active td {
+  background: #e7f4f2 !important;
+}
 .chain-level {
   display: flex;
   justify-content: flex-start;

@@ -104,6 +104,41 @@ const ChainDisplay = loadChainDisplay();
   }
 })();
 
+// --- 2b. Hidden earlier blocks stay listed in the archive control ---
+(function () {
+  const main = [];
+  for (let i = 0; i <= 200; i++) main.push(makeBlock(i, 'h' + i, i === 0 ? '0' : 'h' + (i - 1)));
+  const html = ChainDisplay.renderChainHtml({
+    mainChain: main,
+    orphans: [],
+    participants: [],
+    maxVisible: 24
+  });
+  const hasBrowse = /Browse \d+ earlier block/.test(html);
+  const hasArchiveRow = /data-chain-archive-hash="h50"/.test(html);
+  const midAsCard = /<strong>Block #50<\/strong>/.test(html);
+  const cards = (html.match(/<strong>Block #/g) || []).length;
+  const cap = ChainDisplay.MAX_TOTAL_CARDS || 14;
+  if (hasBrowse && hasArchiveRow && !midAsCard && cards <= cap) {
+    pass('omitted heights stay browseable without extra live cards',
+      'browse=' + hasBrowse + ' archive#50=' + hasArchiveRow + ' cards=' + cards);
+  } else {
+    fail('omitted heights stay browseable without extra live cards',
+      'browse=' + hasBrowse + ' archive#50=' + hasArchiveRow + ' midCard=' + midAsCard + ' cards=' + cards);
+  }
+  const lab = new Relay();
+  if (lab.settings.difficultyLeading === 3 && lab.settings.difficultySecondary === 8) {
+    pass('default difficulty is 3 leading zeros + 0x8',
+      lab.settings.difficultyLeading + '+0x' + lab.settings.difficultySecondary.toString(16));
+  } else {
+    fail('default difficulty is 3 leading zeros + 0x8',
+      JSON.stringify({
+        L: lab.settings.difficultyLeading,
+        S: lab.settings.difficultySecondary
+      }));
+  }
+})();
+
 // --- 3. compactChainForTransport does not stringify a 90-block chain ---
 (function () {
   const lab = new Relay();
@@ -204,7 +239,7 @@ const ChainDisplay = loadChainDisplay();
   }
 })();
 
-// --- 8. Cache-bust p4fix10 on every edited referenced script ---
+// --- 8. Cache-bust p4fix11 on changed assets; held p4fix10 on the rest ---
 (function () {
   const adminPug = loadFile('views/lab/admin.pug');
   const partPug = loadFile('views/lab/participate.pug');
@@ -212,15 +247,15 @@ const ChainDisplay = loadChainDisplay();
   const indexPug = loadFile('views/lab/index.pug');
   const btcPug = loadFile('views/lab/bitcoin.pug');
   const ok =
-    /chainDisplay\.js\?v=p4fix10/.test(adminPug + partPug + obsPug) &&
+    /chainDisplay\.js\?v=p4fix11/.test(adminPug + partPug + obsPug) &&
     /observe\.js\?v=p4fix10/.test(obsPug) &&
-    /admin\.js\?v=p4fix10/.test(adminPug) &&
-    /participate\.js\?v=p4fix10/.test(partPug) &&
+    /admin\.js\?v=p4fix11/.test(adminPug) &&
+    /participate\.js\?v=p4fix11/.test(partPug) &&
     /networkVisualization\.js\?v=p4fix10/.test(adminPug) &&
     /AdminRelayCoordinator\.js\?v=p4fix10/.test(adminPug + partPug + obsPug + indexPug + btcPug) &&
-    /RelayBlockchainState\.js\?v=p4fix10/.test(adminPug + partPug + obsPug + indexPug + btcPug);
-  if (ok) pass('Edited scripts cache-bust p4fix10', '');
-  else fail('Edited scripts cache-bust p4fix10', 'stale ?v=');
+    /RelayBlockchainState\.js\?v=p4fix11/.test(adminPug + partPug + obsPug + indexPug + btcPug);
+  if (ok) pass('Edited scripts cache-bust p4fix11', '');
+  else fail('Edited scripts cache-bust p4fix11', 'stale ?v=');
 })();
 
 const failed = results.filter(function (r) { return !r.ok; });

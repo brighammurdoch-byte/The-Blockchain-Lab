@@ -20,8 +20,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     this.participants = new Map(); // userId -> { userId, role, name, hashrate, blocksMined, balance, joinedAt }
     this.pendingTransactions = [];
     this.settings = {
-      // Start easy; auto-difficulty climbs toward targetBlockTimeSec
-      difficultyLeading: 1,
+      // Start at 3 + 0x8; auto-difficulty still climbs toward targetBlockTimeSec
+      difficultyLeading: 3,
       difficultySecondary: 8,
       miningRewardCoins: 10,
       chainFlavor: 'classic',
@@ -86,7 +86,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       this.settings.autoDifficulty = !!this.settings.autoDifficulty;
     }
     // Always expose a miner-friendly difficulty object
-    const leading = this.settings.difficultyLeading != null ? this.settings.difficultyLeading : 1;
+    const leading = this.settings.difficultyLeading != null ? this.settings.difficultyLeading : 3;
     const secondary = this.settings.difficultySecondary !== undefined ? this.settings.difficultySecondary : 8;
     this.settings.difficultyLeading = leading;
     this.settings.difficultySecondary = secondary;
@@ -1408,7 +1408,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     }
 
     // PoW check: leading zeros + secondary hex nibble (matches miner isValidHash)
-    const leading = (this.settings.difficultyLeading != null) ? this.settings.difficultyLeading : 1;
+    const leading = (this.settings.difficultyLeading != null) ? this.settings.difficultyLeading : 3;
     const secondary = (this.settings.difficultySecondary != null) ? this.settings.difficultySecondary : 8;
     const meetsNow = this.hashMeetsDifficulty(block.hash, leading, secondary);
     const prev = this.networkStats && this.networkStats.prevDifficulty;
