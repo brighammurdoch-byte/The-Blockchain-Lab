@@ -58,6 +58,7 @@ let forkChoiceLockedKey = null;
 let lastKnownOrphans = []; // Competing / hard-fork tips from hub
 /** Cached roster so chain re-renders keep miner names (mobile often re-renders without a payload). */
 let lastKnownParticipants = [];
+let lastKnownTeamAttack = null;
 /** Best known tip on the NEW hard-fork branch (miners on "new" stick to this). */
 let localNewForkTip = null;
 /** Best known tip on the CLASSIC side after activation (miners on "classic" stick to this). */
@@ -2222,6 +2223,7 @@ function initClientSideNetworkingForParticipant(mode) {
     const data = msg.payload || msg;
     debugLog('Team attack started via relay', data);
     handleTeamAttackStarted(data);
+    if (typeof paintMinerForkRoster === 'function') paintMinerForkRoster();
   });
   // Legacy alias
   net.on('start-team-attack', (msg) => {
@@ -2470,6 +2472,11 @@ function initClientSideNetworkingForParticipant(mode) {
 
   net.on('participants-roster', (msg) => {
     const payload = msg.payload || msg;
+    if (payload.pendingFork && payload.pendingFork.height != null) {
+      pendingForkHeight = Number(payload.pendingFork.height);
+      pendingForkName = payload.pendingFork.name || pendingForkName || 'Hard Fork';
+    }
+    if (payload.teamAttack) lastKnownTeamAttack = payload.teamAttack;
     const parts = payload.participants || [];
     if (!parts.length) return;
     rememberParticipants(parts, { replace: true });
@@ -2484,6 +2491,7 @@ function initClientSideNetworkingForParticipant(mode) {
     } catch (e) {}
     try { refreshSharedNetworkView(lastKnownParticipants); } catch (e) {}
     restoreNodeNameInput();
+    if (typeof paintMinerForkRoster === 'function') paintMinerForkRoster();
   });
 
   net.on('participant-updated', (msg) => {
@@ -2579,6 +2587,8 @@ function initClientSideNetworkingForParticipant(mode) {
       // Resync only — never re-popup if student already saw/chose this fork
       showForkProposalModal(pendingForkName, pendingForkHeight, { source: 'resync' });
     }
+    if (state.teamAttack) lastKnownTeamAttack = state.teamAttack;
+    if (typeof paintMinerForkRoster === 'function') paintMinerForkRoster();
     if (Array.isArray(state.orphans)) {
       mergeKnownOrphans(state.orphans);
     }
@@ -3009,6 +3019,7 @@ executeDoubleSpendAttack(target1, target2, amount);
     localNewForkTip = null;
     lockForkChoice('classic');
     if (net) net.send('hard-fork-vote', { choice: 'classic' });
+    if (typeof paintMinerForkRoster === 'function') paintMinerForkRoster();
     try { $('#forkChoiceModal').modal('hide'); } catch (e) {}
     showToastNotification(
       'You chose Classic. Blocks stay classic until activation' +
@@ -3023,6 +3034,7 @@ executeDoubleSpendAttack(target1, target2, amount);
     localClassicForkTip = null;
     lockForkChoice('new');
     if (net) net.send('hard-fork-vote', { choice: 'new' });
+    if (typeof paintMinerForkRoster === 'function') paintMinerForkRoster();
     try { $('#forkChoiceModal').modal('hide'); } catch (e) {}
     showToastNotification(
       'You chose New Chain. You still mine classic until block ' +
@@ -3039,6 +3051,7 @@ executeDoubleSpendAttack(target1, target2, amount);
     localNewForkTip = null;
     lockForkChoice('classic');
     if (net) net.send('hard-fork-vote', { choice: 'classic' });
+    if (typeof paintMinerForkRoster === 'function') paintMinerForkRoster();
     showToastNotification('Switched to Classic Chain.', 'info');
     if (isMining) remineOnCanonicalTip();
   });
@@ -3047,6 +3060,7 @@ executeDoubleSpendAttack(target1, target2, amount);
     localClassicForkTip = null;
     lockForkChoice('new');
     if (net) net.send('hard-fork-vote', { choice: 'new' });
+    if (typeof paintMinerForkRoster === 'function') paintMinerForkRoster();
     showToastNotification(
       'Switched to New Chain (active at block ' +
       (pendingForkHeight != null ? pendingForkHeight : '?') +
@@ -3320,6 +3334,7 @@ function showForkProposalModal(name, height, opts) {
     ' — choose a side (mining stays classic until then)',
     'warning'
   );
+  if (typeof paintMinerForkRoster === 'function') paintMinerForkRoster();
 }
 
 /** Sticky collusion banner (outside #miningActivity so mine loop HTML won't wipe it). */
@@ -3357,6 +3372,19 @@ function handleTeamAttackStarted(data) {
     forkBlock: forkBlock,
     userId: userId
   };
+  lastKnownTeamAttack = {
+    active: true,
+    colluders: colluders.slice(),
+    honest: honest.slice(),
+    forkBlock: forkBlock
+  };
+  if (colluders.length || honest.length) {
+    rememberParticipants(colluders.map(function (id) {
+      return { userId: id, role: 'miner', isAttacker: true, isColluding: true };
+    }).concat(honest.map(function (id) {
+      return { userId: id, role: 'miner', isAttacker: false, isColluding: false };
+    })));
+  }
 
   if (onTeam) {
     isColluding = true;
@@ -3404,6 +3432,7 @@ function handleTeamAttackStarted(data) {
       showToastNotification('Team 51% attack simulation active on the network', 'warning');
     }
   }
+  if (typeof paintMinerForkRoster === 'function') paintMinerForkRoster();
 }
 
 function startMining() {
@@ -4203,6 +4232,22 @@ function toggleTransactions(blockIndex) {
 // Legacy sync functions removed (no server in client-relay mode; chain sync handled via relayed state from admin)
 
 
+function paintMinerForkRoster() {
+  if (typeof window.ForkRoster === 'undefined' || !window.ForkRoster.paint) return;
+  const pending = (pendingForkHeight != null)
+    ? { height: pendingForkHeight, name: pendingForkName || 'Hard Fork' }
+    : null;
+  window.ForkRoster.paint({
+    participants: lastKnownParticipants || [],
+    pendingFork: pending,
+    teamAttack: lastKnownTeamAttack,
+    selfId: userId,
+    viewRole: 'miner',
+    localForkChoice: myForkChoice,
+    localColluding: !!isColluding
+  });
+}
+
 function updateParticipantList(blockchain) {
   if (blockchain && Array.isArray(blockchain.participants) && blockchain.participants.length) {
     rememberParticipants(blockchain.participants);
@@ -4268,6 +4313,7 @@ function updateParticipantList(blockchain) {
   if ($('#participantList').length && $('#participantList')[0] !== $('#participantDirectory')[0]) {
     $('#participantList').html(html);
   }
+  if (typeof paintMinerForkRoster === 'function') paintMinerForkRoster();
 }
 
 function updatePendingTransactions(blockchain) {

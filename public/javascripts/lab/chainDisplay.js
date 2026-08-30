@@ -778,4 +778,273 @@
     MAX_ORPHAN_CARDS: MAX_ORPHAN_CARDS,
     MAX_TOTAL_CARDS: MAX_TOTAL_CARDS
   };
+
+  /**
+   * Classroom fork roster: who is on Canonical vs Attack (51%),
+   * or Classic vs the proposed hard-fork flavor. Simple lists, no viz.
+   */
+  function rosterParticipants(raw) {
+    var out = [];
+    if (!raw) return out;
+    var arr;
+    if (Array.isArray(raw)) arr = raw;
+    else if (typeof raw.forEach === 'function') {
+      arr = [];
+      raw.forEach(function (p) { arr.push(p); });
+    } else arr = [];
+    arr.forEach(function (p) {
+      if (!p) return;
+      var id = p.userId || p.id || p.address || '';
+      if (!id || String(id).indexOf('probe-') === 0) return;
+      out.push(p);
+    });
+    return out;
+  }
+
+  function rosterId(p) {
+    return p ? String(p.userId || p.id || p.address || '') : '';
+  }
+
+  function rosterRole(p) {
+    var r = String((p && p.role) || 'miner').toLowerCase();
+    if (r === 'wallet' || r === 'observer') return 'Wallet';
+    if (r === 'admin' || r === 'hub') return 'Admin';
+    return 'Miner';
+  }
+
+  function rosterIsMiner(p) {
+    return rosterRole(p) === 'Miner';
+  }
+
+  function rosterIsAttacker(p) {
+    return !!(p && (p.isAttacker || p.isColluding));
+  }
+
+  function rosterForkChoice(p) {
+    var c = String((p && p.forkChoice) || '').toLowerCase();
+    if (c === 'new' || c === 'new-chain' || c === 'newchain') return 'new';
+    if (c === 'classic') return 'classic';
+    return '';
+  }
+
+  function rosterInIdList(list, id) {
+    if (!Array.isArray(list) || !id) return false;
+    for (var i = 0; i < list.length; i++) {
+      if (String(list[i]) === String(id)) return true;
+    }
+    return false;
+  }
+
+  function rosterAttackActive(parts, teamAttack) {
+    if (teamAttack && teamAttack.active !== false &&
+        ((teamAttack.colluders && teamAttack.colluders.length) || teamAttack.forkBlock)) {
+      return true;
+    }
+    for (var i = 0; i < parts.length; i++) {
+      if (rosterIsAttacker(parts[i])) return true;
+    }
+    return false;
+  }
+
+  function rosterHardForkActive(pendingFork) {
+    return !!(pendingFork && pendingFork.height != null);
+  }
+
+  function rosterAttackBucket(p, teamAttack) {
+    var id = rosterId(p);
+    if (teamAttack) {
+      if (rosterInIdList(teamAttack.colluders, id)) return 'attack';
+      if (rosterInIdList(teamAttack.honest, id)) return 'canonical';
+    }
+    return rosterIsAttacker(p) ? 'attack' : 'canonical';
+  }
+
+  function rosterHardForkBucket(p) {
+    var choice = rosterForkChoice(p);
+    if (choice === 'new') return 'new';
+    if (choice === 'classic') return 'classic';
+    if (rosterIsMiner(p)) return 'undecided';
+    return 'classic';
+  }
+
+  function rosterPersonLabel(p, all) {
+    var raw = participantDisplayName(p);
+    var id = rosterId(p);
+    if (!raw) return id || 'unknown';
+    var clash = false;
+    for (var i = 0; i < (all || []).length; i++) {
+      var o = all[i];
+      if (o === p) continue;
+      if (participantDisplayName(o) === raw) { clash = true; break; }
+    }
+    if (!clash) return raw;
+    return raw + ' · ' + id.replace(/^user[-_]/i, '').slice(-4);
+  }
+
+  function rosterYouAreOn(opts) {
+    opts = opts || {};
+    var parts = rosterParticipants(opts.participants);
+    var selfId = opts.selfId ? String(opts.selfId) : '';
+    var me = null;
+    for (var i = 0; i < parts.length; i++) {
+      if (rosterId(parts[i]) === selfId) { me = parts[i]; break; }
+    }
+    var viewRole = String(opts.viewRole || '').toLowerCase();
+    if (!viewRole) viewRole = me ? rosterRole(me).toLowerCase() : 'admin';
+    var viewing = (viewRole === 'miner');
+    var prefix = viewing ? 'You are on ' : 'You are viewing ';
+    var bits = [];
+    var attackOn = rosterAttackActive(parts, opts.teamAttack);
+    var forkOn = rosterHardForkActive(opts.pendingFork);
+    if (attackOn) {
+      var onAttack = !!opts.localColluding;
+      if (!onAttack && me) onAttack = rosterIsAttacker(me);
+      if (viewRole === 'admin' || viewRole === 'wallet') bits.push('Canonical');
+      else bits.push(onAttack ? 'Attack' : 'Canonical');
+    }
+    if (forkOn) {
+      var forkName = String((opts.pendingFork && opts.pendingFork.name) || 'New chain').trim() || 'New chain';
+      var choice = opts.localForkChoice || (me && rosterForkChoice(me)) || '';
+      if (viewRole === 'admin' || viewRole === 'wallet') bits.push('Classic');
+      else if (choice === 'new') bits.push(forkName);
+      else if (choice === 'classic') bits.push('Classic');
+      else bits.push('Classic (haven’t chosen yet)');
+    }
+    return bits.length ? (prefix + bits.join(' / ')) : '';
+  }
+
+  function rosterRowHtml(p, all, selfId) {
+    var id = rosterId(p);
+    var name = rosterPersonLabel(p, all);
+    var role = rosterRole(p);
+    var you = selfId && id === String(selfId);
+    return (
+      '<li style="margin:2px 0;">' +
+        '<strong>' + escapeHtml(name) + '</strong>' +
+        ' <span class="label label-default">' + escapeHtml(role) + '</span>' +
+        (you ? ' <span class="label label-primary">you</span>' : '') +
+      '</li>'
+    );
+  }
+
+  function rosterGroupHtml(title, rows, isYou) {
+    var empty = rows.length
+      ? '<ul style="margin:4px 0 10px 18px;padding:0;">' + rows.join('') + '</ul>'
+      : '<p class="text-muted" style="margin:4px 0 10px 0;">Nobody yet</p>';
+    return (
+      '<div class="fork-roster-group' + (isYou ? ' is-you' : '') + '"' +
+        ' style="margin-bottom:8px;padding:6px 8px;border-left:4px solid ' +
+        (isYou ? '#31708f' : '#ddd') + ';' +
+        (isYou ? 'background:#f4f8fb;' : '') + '">' +
+        '<h5 style="margin:0 0 4px 0;">' + escapeHtml(title) +
+          (isYou ? ' <small class="text-info">this view</small>' : '') +
+        '</h5>' +
+        empty +
+      '</div>'
+    );
+  }
+
+  function rosterRenderHtml(opts) {
+    opts = opts || {};
+    var parts = rosterParticipants(opts.participants);
+    var selfId = opts.selfId ? String(opts.selfId) : '';
+    var youLine = rosterYouAreOn(opts);
+    var attackOn = rosterAttackActive(parts, opts.teamAttack);
+    var forkOn = rosterHardForkActive(opts.pendingFork);
+    if (!attackOn && !forkOn) return '';
+
+    var html = '';
+    if (youLine) {
+      html += '<p id="forkRosterYouAreOn" class="alert alert-info" style="margin-bottom:10px;padding:8px 12px;">' +
+        '<strong>' + escapeHtml(youLine) + '</strong></p>';
+    }
+
+    if (attackOn) {
+      var canonical = [];
+      var attack = [];
+      parts.forEach(function (p) {
+        var row = rosterRowHtml(p, parts, selfId);
+        if (rosterAttackBucket(p, opts.teamAttack) === 'attack') attack.push(row);
+        else canonical.push(row);
+      });
+      var youAttack = /You are (on|viewing) Attack/.test(youLine) ||
+        (youLine.indexOf('Attack') >= 0 && youLine.indexOf('Canonical') < 0);
+      if (attackOn && forkOn) html += '<h4 style="margin-top:0;">51% attack</h4>';
+      html += rosterGroupHtml('Canonical', canonical, !youAttack);
+      html += rosterGroupHtml('Attack', attack, youAttack);
+    }
+
+    if (forkOn) {
+      var forkName = String((opts.pendingFork && opts.pendingFork.name) || 'New chain').trim() || 'New chain';
+      var classic = [];
+      var neu = [];
+      var undecided = [];
+      parts.forEach(function (p) {
+        var row = rosterRowHtml(p, parts, selfId);
+        var bucket = rosterHardForkBucket(p);
+        if (bucket === 'new') neu.push(row);
+        else if (bucket === 'undecided') undecided.push(row);
+        else classic.push(row);
+      });
+      var youNew = youLine.indexOf(forkName) >= 0;
+      if (attackOn && forkOn) html += '<h4>Hard fork</h4>';
+      html += rosterGroupHtml('Classic', classic, !youNew && youLine.indexOf('haven’t chosen') < 0);
+      html += rosterGroupHtml(forkName, neu, youNew);
+      if (undecided.length) {
+        html += rosterGroupHtml('Haven’t chosen yet', undecided, youLine.indexOf('haven’t chosen') >= 0);
+      }
+    }
+    return html;
+  }
+
+  function rosterEnsurePanel() {
+    var existing = (typeof document !== 'undefined') && document.getElementById('forkRosterPanel');
+    if (existing) return existing;
+    if (typeof document === 'undefined') return null;
+    var panel = document.createElement('div');
+    panel.id = 'forkRosterPanel';
+    panel.className = 'panel panel-warning';
+    panel.style.display = 'none';
+    panel.innerHTML =
+      '<div class="panel-heading"><h3 class="panel-title">Who is on which fork</h3></div>' +
+      '<div class="panel-body" style="padding-bottom:8px;"><div id="forkRoster"></div></div>';
+    var chainView = document.getElementById('blockchainView');
+    var chainPanel = chainView && chainView.closest ? chainView.closest('.panel') : null;
+    if (chainPanel && chainPanel.parentNode) {
+      chainPanel.parentNode.insertBefore(panel, chainPanel);
+    } else if (chainView && chainView.parentNode) {
+      chainView.parentNode.insertBefore(panel, chainView);
+    } else if (document.body) {
+      document.body.appendChild(panel);
+    }
+    return panel;
+  }
+
+  function rosterPaint(opts) {
+    opts = opts || {};
+    var html = rosterRenderHtml(opts);
+    var panel = rosterEnsurePanel();
+    var host = (typeof document !== 'undefined') && document.getElementById('forkRoster');
+    if (!panel || !host) return html;
+    if (!html) {
+      panel.style.display = 'none';
+      host.innerHTML = '';
+      return '';
+    }
+    host.innerHTML = html;
+    panel.style.display = '';
+    return html;
+  }
+
+  window.ForkRoster = {
+    participants: rosterParticipants,
+    isAttackActive: rosterAttackActive,
+    isHardForkActive: rosterHardForkActive,
+    attackBucket: rosterAttackBucket,
+    hardForkBucket: rosterHardForkBucket,
+    youAreOn: rosterYouAreOn,
+    renderHtml: rosterRenderHtml,
+    paint: rosterPaint,
+    ensurePanel: rosterEnsurePanel
+  };
 })(typeof window !== 'undefined' ? window : this);

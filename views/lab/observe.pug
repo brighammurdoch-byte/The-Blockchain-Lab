@@ -120,6 +120,12 @@ block content
                 span.label.label-success Unlocked
 
       .col-md-9
+        #forkRosterPanel.panel.panel-warning(style="display:none")
+          .panel-heading
+            h3.panel-title Who is on which fork
+          .panel-body(style="padding-bottom: 8px;")
+            #forkRoster
+
         .panel.panel-default
           .panel-heading
             h3.panel-title Blockchain
@@ -153,8 +159,8 @@ block content
   script(src="/javascripts/network/P2PAdminRelayTransport.js?v=tiphb1")
   script(src="/javascripts/network/AdminRelayCoordinator.js?v=p4fix12")
   script(src="/javascripts/network/Persistence.js?v=p4fix9")
-  script(src="/javascripts/network/RelayBlockchainState.js?v=p4fix12")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=forkroster1")
   script(src="/javascripts/network/NetworkManager.js?v=p4fix5")
   script(src="/javascripts/lab/sessionProbe.js?v=p1fix1")
-  script(src="/javascripts/lab/chainDisplay.js?v=p4fix12")
-  script(src="/javascripts/lab/observe.js?v=p4fix12")
+  script(src="/javascripts/lab/chainDisplay.js?v=forkroster1")
+  script(src="/javascripts/lab/observe.js?v=forkroster1")
