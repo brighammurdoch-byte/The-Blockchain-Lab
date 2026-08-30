@@ -145,6 +145,50 @@ const Eth = loadEth();
   }
 })();
 
+// --- 6b. Retarget interval window is 12 (buffer still 20) ---
+(function () {
+  if (Relay.RETARGET_INTERVAL_WINDOW !== 12) {
+    fail('RETARGET_INTERVAL_WINDOW is 12', String(Relay.RETARGET_INTERVAL_WINDOW));
+    return;
+  }
+  pass('RETARGET_INTERVAL_WINDOW is 12', '');
+
+  const lab = new Relay('WIN12');
+  lab.ensureGenesis();
+  lab.updateSettings({
+    autoDifficulty: true,
+    targetBlockTimeSec: 10,
+    difficultyLeading: 3,
+    difficultySecondary: 8
+  });
+  const now = Date.now();
+  lab.networkStats.lastBlockTime = now;
+  lab.networkStats._lastTipWallClock = now;
+  lab.networkStats._stallWatchAt = now;
+  lab.networkStats.totalHashrate = 0;
+  // 8 older on-target samples + 6 fast 0.3s samples. Last-6 median is 300ms;
+  // last-12 median is 5150ms. Window 12 must use 5150 for pace and retarget.
+  lab.networkStats.blockIntervals = [
+    10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000,
+    300, 300, 300, 300, 300, 300
+  ];
+  const pace = lab.observedPaceMs();
+  if (pace === 5150) pass('Displayed pace uses last-12 median', String(pace) + 'ms');
+  else fail('Displayed pace uses last-12 median', String(pace));
+
+  const s = lab.maybeRetargetDifficulty();
+  const avg = lab.networkStats.lastRetarget && lab.networkStats.lastRetarget.avgMs;
+  if (s && avg === 5150) pass('Retarget median uses last-12 window', String(avg) + 'ms');
+  else if (!s) fail('Retarget median uses last-12 window', 'no retarget (avg would be ' + String(avg) + ')');
+  else fail('Retarget median uses last-12 window', String(avg));
+
+  const cap = new Relay('WIN20');
+  for (let i = 0; i < 25; i++) cap._pushBlockInterval(1000);
+  const n = cap.networkStats.blockIntervals.length;
+  if (n === 20) pass('Interval buffer still caps at 20', String(n));
+  else fail('Interval buffer still caps at 20', String(n));
+})();
+
 // --- 12. 0xPeer rejected ---
 (function () {
   if (!Eth || !Eth.Chain) {

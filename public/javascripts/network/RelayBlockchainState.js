@@ -13,6 +13,9 @@
  */
 
 if (typeof window.RelayBlockchainState === 'undefined') {
+  /** Median lookback for retarget, displayed pace, and stall-ease. Buffer still stores 20. */
+  const RETARGET_INTERVAL_WINDOW = 12;
+
   class RelayBlockchainState {
   constructor(roomCode) {
     this.roomCode = roomCode;
@@ -250,7 +253,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     const intervals = Array.isArray(this.networkStats && this.networkStats.blockIntervals)
       ? this.networkStats.blockIntervals
       : [];
-    const median = this._medianMs(intervals.slice(-6));
+    const median = this._medianMs(intervals.slice(-RETARGET_INTERVAL_WINDOW));
     const stored = Number(this.networkStats && this.networkStats.averageBlockTimeMs);
     const lastBlk = Number(this.networkStats && this.networkStats.lastBlockTime) || 0;
     const tipWall = Number(this.networkStats && this.networkStats._lastTipWallClock) || 0;
@@ -338,7 +341,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     // next step measures the new difficulty, not the pre-retarget burst.
     if (intervals.length < 2) return null;
 
-    const recent = intervals.slice(-6);
+    const recent = intervals.slice(-RETARGET_INTERVAL_WINDOW);
     const avg = this._medianMs(recent);
     if (!(avg > 0)) return null;
 
@@ -518,7 +521,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     if (!sinceTs && this.chain && this.chain.length <= 1) return null;
 
     const recent = Array.isArray(this.networkStats && this.networkStats.blockIntervals)
-      ? this.networkStats.blockIntervals.slice(-6)
+      ? this.networkStats.blockIntervals.slice(-RETARGET_INTERVAL_WINDOW)
       : [];
     const recentMedian = this._medianMs(recent);
     const tipAge = tipWall
@@ -1999,4 +2002,5 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 }
 
 window.RelayBlockchainState = RelayBlockchainState;
+RelayBlockchainState.RETARGET_INTERVAL_WINDOW = RETARGET_INTERVAL_WINDOW;
   } // end guard
