@@ -1862,7 +1862,8 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       networkStats: { ...this.networkStats },
       pendingTransactions: this.pendingTransactions.slice(0, 20),
       networkPaused: !!this.networkPaused,
-      pendingFork: this.pendingFork ? { ...this.pendingFork } : null
+      pendingFork: this.pendingFork ? { ...this.pendingFork } : null,
+      teamAttack: this.teamAttack ? { ...this.teamAttack } : null
     };
   }
 
@@ -1879,6 +1880,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       pendingTransactions: [...this.pendingTransactions],
       networkPaused: !!this.networkPaused,
       pendingFork: this.pendingFork ? { ...this.pendingFork } : null,
+      teamAttack: this.teamAttack ? { ...this.teamAttack } : null,
       timestamp: Date.now()
     };
   }
@@ -1914,6 +1916,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     if (persisted.pendingTransactions) this.pendingTransactions = persisted.pendingTransactions;
     if (typeof persisted.networkPaused === 'boolean') this.networkPaused = persisted.networkPaused;
     if (persisted.pendingFork) this.pendingFork = persisted.pendingFork;
+    if (persisted.teamAttack) this.teamAttack = persisted.teamAttack;
 
     // Rebuild allBlocks: prefer persisted orphans + chain
     this.allBlocks = new Map();

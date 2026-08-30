@@ -17,6 +17,8 @@ let networkMode = null;
 let net = null;
 let socket = null; // prevent any stray legacy references
 let _nameBroadcastTimer = null;
+let lastObserverPendingFork = null;
+let lastObserverTeamAttack = null;
 
 function showToastNotification(message, type = 'info', durationMs) {
   const now = Date.now();
@@ -367,11 +369,40 @@ function initClientSideNetworkingForObserver(mode) {
       adoptObserverHubChain(state.chain, state);
     }
     if (typeof state.networkPaused === 'boolean') networkPaused = state.networkPaused;
+    if (state.pendingFork) lastObserverPendingFork = state.pendingFork;
+    if (state.teamAttack) lastObserverTeamAttack = state.teamAttack;
     populateObserverUIFromState(Object.assign({}, state, {
       chain: window._observerChain || state.chain,
       orphans: [],
       hubHeight: state.tipIndex != null ? state.tipIndex : state.chainHeight
     }));
+  });
+
+  net.on('hard-fork-proposed', function (msg) {
+    const p = msg.payload || msg;
+    if (p && p.height != null) {
+      lastObserverPendingFork = { height: p.height, name: p.name || 'Hard Fork' };
+      if (typeof paintWalletForkRoster === 'function') paintWalletForkRoster();
+    }
+  });
+
+  net.on('team-attack-started', function (msg) {
+    const p = msg.payload || msg;
+    lastObserverTeamAttack = {
+      active: true,
+      colluders: (p && p.colluders) || [],
+      honest: (p && p.honest) || [],
+      forkBlock: p && p.forkBlock
+    };
+    const stamps = [];
+    (lastObserverTeamAttack.colluders || []).forEach(function (id) {
+      stamps.push({ userId: id, role: 'miner', isAttacker: true, isColluding: true });
+    });
+    (lastObserverTeamAttack.honest || []).forEach(function (id) {
+      stamps.push({ userId: id, role: 'miner', isAttacker: false, isColluding: false });
+    });
+    if (stamps.length) rememberObserverParticipants(stamps);
+    if (typeof paintWalletForkRoster === 'function') paintWalletForkRoster();
   });
 
   net.on('transport-reconnected', function () {
@@ -442,6 +473,8 @@ function initClientSideNetworkingForObserver(mode) {
 
   net.on('participants-roster', function (msg) {
     const payload = msg.payload || msg;
+    if (payload.pendingFork) lastObserverPendingFork = payload.pendingFork;
+    if (payload.teamAttack) lastObserverTeamAttack = payload.teamAttack;
     const parts = payload.participants || [];
     if (!parts.length) return;
     populateObserverUIFromState({
@@ -715,6 +748,7 @@ function populateObserverUIFromState(state) {
     if (typeof updateParticipantList === 'function') {
       updateParticipantList({ participants: participants });
     }
+    if (typeof paintWalletForkRoster === 'function') paintWalletForkRoster();
 
     if (typeof updatePendingTransactions === 'function') {
       updatePendingTransactions({
@@ -856,6 +890,17 @@ function updateNetworkStats(blockchain) {
     const secondsAgo = Math.floor((Date.now() - stats.lastBlockTime) / 1000);
     $('#lastBlockTime').text(secondsAgo + 's ago');
   }
+}
+
+function paintWalletForkRoster() {
+  if (typeof window.ForkRoster === 'undefined' || !window.ForkRoster.paint) return;
+  window.ForkRoster.paint({
+    participants: window._observerParticipants || [],
+    pendingFork: lastObserverPendingFork,
+    teamAttack: lastObserverTeamAttack,
+    selfId: userId,
+    viewRole: 'wallet'
+  });
 }
 
 var _observerRosterKey = '';

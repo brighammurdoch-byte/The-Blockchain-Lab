@@ -731,6 +731,7 @@ function initClientSideNetworking(mode, roomCode) {
       relayState.addOrUpdateParticipant(uid, 'miner', { forkChoice: choice });
       if (typeof scheduleRenderClientParticipants === 'function') scheduleRenderClientParticipants();
       else if (typeof renderClientParticipants === 'function') renderClientParticipants();
+      if (typeof broadcastParticipantsRoster === 'function') broadcastParticipantsRoster();
     }
   });
 
@@ -1775,6 +1776,14 @@ function startTeamCollusionAttack(blocksBack) {
     relayState.addOrUpdateParticipant(id, 'miner', { isAttacker: false, isColluding: false });
   });
 
+  relayState.teamAttack = {
+    active: true,
+    colluders: colluders.slice(),
+    honest: honest.slice(),
+    forkBlock: { hash: forkBlock.hash, index: forkIndex },
+    blocksBack: blocksBack
+  };
+
   const payload = {
     colluders: colluders,
     honest: honest,
@@ -1785,6 +1794,7 @@ function startTeamCollusionAttack(blocksBack) {
 
   // Event name miners actually listen for
   net.send('team-attack-started', payload);
+  if (typeof broadcastParticipantsRoster === 'function') broadcastParticipantsRoster();
 
   // Hashrate stats for projector
   let honestHr = 0;
@@ -1865,6 +1875,8 @@ function proposeHardFork(name, height) {
   }
 
   net.send('hard-fork-proposed', { height: h, name: n });
+  if (typeof broadcastParticipantsRoster === 'function') broadcastParticipantsRoster();
+  if (typeof paintAdminForkRoster === 'function') paintAdminForkRoster();
 
   const $st = $('#adminForkStatus');
   if ($st.length) {
@@ -2569,6 +2581,31 @@ function submitAdminWalletTransaction() {
   } catch (e) {}
 }
 
+function broadcastParticipantsRoster() {
+  if (!net || !relayState) return;
+  try {
+    net.send('participants-roster', {
+      participants: Array.from(relayState.participants.values()),
+      pendingFork: relayState.pendingFork || null,
+      teamAttack: relayState.teamAttack || null
+    });
+  } catch (e) {}
+}
+
+function paintAdminForkRoster() {
+  if (typeof window.ForkRoster === 'undefined' || !window.ForkRoster.paint) return;
+  const parts = relayState
+    ? Array.from(relayState.participants.values())
+    : [];
+  window.ForkRoster.paint({
+    participants: parts,
+    pendingFork: relayState && relayState.pendingFork,
+    teamAttack: relayState && relayState.teamAttack,
+    selfId: net && net.userId,
+    viewRole: 'admin'
+  });
+}
+
 // Render participants list from relayState (client-relay mode)
 function renderClientParticipants() {
   if (!relayState) return;
@@ -2627,6 +2664,7 @@ function renderClientParticipants() {
 
   $('#participantsList').html(html);
   updateAdminWalletUI();
+  if (typeof paintAdminForkRoster === 'function') paintAdminForkRoster();
 
   // Keep Node Names table in sync too
   let namesHtml = '';
