@@ -2007,7 +2007,9 @@ $(document).ready(function() {
     });
   }
   
-  // Set up event handlers
+  // Panel must exist before any leftover #forkControlPanel bindings, and
+  // clicks are delegated from document so late injection still works.
+  ensureForkControlPanel();
   setupEventHandlers();
   
   // Note: Auto-refresh now happens via WebSocket block-broadcast events only
@@ -2020,18 +2022,6 @@ $(document).ready(function() {
 
   // Display user info (already set above)
   // $('#yourAddress').text(userId);
-
-  // Add fork control panel placeholder
-  $('#blockchainView').before(`
-    <div id="forkControlPanel" style="display:none; margin-bottom: 15px; padding: 15px; background-color: #fff8e1; border: 1px solid #ffecb3; border-radius: 4px;">
-      <h4><i class="glyphicon glyphicon-random"></i> Fork Control</h4>
-      <p>A network fork is active. Choose which chain to follow:</p>
-      <div class="btn-group" role="group">
-        <button type="button" id="btnFollowClassic" class="btn btn-primary">Classic Chain</button>
-        <button type="button" id="btnFollowNew" class="btn btn-default">New Chain</button>
-      </div>
-    </div>
-  `);
 
   // No server polling in client-relay mode
 
@@ -3013,62 +3003,19 @@ executeDoubleSpendAttack(target1, target2, amount);
     showToastNotification('Recipient set — enter an amount and send', 'info');
   });
   
-  // Hard fork voting handlers
-  $('#btnRejectFork').click(function() {
-    myForkChoice = 'classic';
-    localNewForkTip = null;
-    lockForkChoice('classic');
-    if (net) net.send('hard-fork-vote', { choice: 'classic' });
-    if (typeof paintMinerForkRoster === 'function') paintMinerForkRoster();
-    try { $('#forkChoiceModal').modal('hide'); } catch (e) {}
-    showToastNotification(
-      'You chose Classic. Blocks stay classic until activation' +
-      (pendingForkHeight != null ? ' at #' + pendingForkHeight : '') + '.',
-      'info'
-    );
-    if (isMining) remineOnCanonicalTip();
-  });
-
-  $('#btnAcceptFork').click(function() {
-    myForkChoice = 'new';
-    localClassicForkTip = null;
-    lockForkChoice('new');
-    if (net) net.send('hard-fork-vote', { choice: 'new' });
-    if (typeof paintMinerForkRoster === 'function') paintMinerForkRoster();
-    try { $('#forkChoiceModal').modal('hide'); } catch (e) {}
-    showToastNotification(
-      'You chose New Chain. You still mine classic until block ' +
-      (pendingForkHeight != null ? pendingForkHeight : '?') +
-      ', then split off and stay on the NEW tip.',
-      'warning'
-    );
-    if (isMining) remineOnCanonicalTip();
-  });
-
-  // Fork toggling handlers
-  $('#forkControlPanel').on('click', '#btnFollowClassic', function() {
-    myForkChoice = 'classic';
-    localNewForkTip = null;
-    lockForkChoice('classic');
-    if (net) net.send('hard-fork-vote', { choice: 'classic' });
-    if (typeof paintMinerForkRoster === 'function') paintMinerForkRoster();
-    showToastNotification('Switched to Classic Chain.', 'info');
-    if (isMining) remineOnCanonicalTip();
-  });
-  $('#forkControlPanel').on('click', '#btnFollowNew', function() {
-    myForkChoice = 'new';
-    localClassicForkTip = null;
-    lockForkChoice('new');
-    if (net) net.send('hard-fork-vote', { choice: 'new' });
-    if (typeof paintMinerForkRoster === 'function') paintMinerForkRoster();
-    showToastNotification(
-      'Switched to New Chain (active at block ' +
-      (pendingForkHeight != null ? pendingForkHeight : '?') +
-      '). You will stick to the NEW tip after activation.',
-      'warning'
-    );
-    if (isMining) remineOnCanonicalTip();
-  });
+  // Document-delegated: #forkControlPanel used to be injected *after* this
+  // bind, so $('#forkControlPanel').on(...) attached to an empty set and
+  // New Chain clicks never persisted or broadcast a vote.
+  $(document)
+    .off('click.labForkChoice', '#btnRejectFork, #btnFollowClassic')
+    .on('click.labForkChoice', '#btnRejectFork, #btnFollowClassic', function () {
+      applyLocalForkChoice('classic', this.id === 'btnFollowClassic' ? 'panel' : 'modal');
+    });
+  $(document)
+    .off('click.labForkChoiceNew', '#btnAcceptFork, #btnFollowNew')
+    .on('click.labForkChoiceNew', '#btnAcceptFork, #btnFollowNew', function () {
+      applyLocalForkChoice('new', this.id === 'btnFollowNew' ? 'panel' : 'modal');
+    });
 }
 
 /**
@@ -3247,6 +3194,92 @@ function lockForkChoice(choice) {
   } catch (e) {}
 }
 
+function explicitForkChoice() {
+  if (forkChoiceLockedKey) return myForkChoice === 'new' ? 'new' : 'classic';
+  return myForkChoice === 'new' ? 'new' : '';
+}
+
+function syncForkControlButtons() {
+  const chosen = explicitForkChoice();
+  const $classic = $('#btnFollowClassic');
+  const $neu = $('#btnFollowNew');
+  if (!$classic.length && !$neu.length) return;
+  $classic.removeClass('btn-primary btn-success btn-warning btn-default active');
+  $neu.removeClass('btn-primary btn-success btn-warning btn-default active');
+  if (chosen === 'new') {
+    $classic.addClass('btn-default');
+    $neu.addClass('btn-success').addClass('active');
+  } else if (chosen === 'classic') {
+    $classic.addClass('btn-success').addClass('active');
+    $neu.addClass('btn-default');
+  } else {
+    $classic.addClass('btn-default');
+    $neu.addClass('btn-default');
+  }
+}
+
+function ensureForkControlPanel() {
+  if (!$('#forkControlPanel').length && $('#blockchainView').length) {
+    $('#blockchainView').before(
+      '<div id="forkControlPanel" style="display:none; margin-bottom: 15px; padding: 15px; background-color: #fff8e1; border: 1px solid #ffecb3; border-radius: 4px;">' +
+        '<h4><i class="glyphicon glyphicon-random"></i> Fork Control</h4>' +
+        '<p>A network fork is active. Choose which chain to follow:</p>' +
+        '<div class="btn-group" role="group">' +
+          '<button type="button" id="btnFollowClassic" class="btn btn-default">Classic Chain</button>' +
+          '<button type="button" id="btnFollowNew" class="btn btn-default">New Chain</button>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+  syncForkControlButtons();
+}
+
+/** Persist + broadcast a miner fork vote. Safe after activation; height is not a gate. */
+function applyLocalForkChoice(choice, source) {
+  const next = choice === 'new' ? 'new' : 'classic';
+  myForkChoice = next;
+  if (next === 'new') localClassicForkTip = null;
+  else localNewForkTip = null;
+  lockForkChoice(next);
+  if (userId) {
+    rememberParticipants([{
+      userId: userId,
+      address: userId,
+      role: 'miner',
+      forkChoice: next
+    }]);
+  }
+  ensureForkControlPanel();
+  syncForkControlButtons();
+  if (net) net.send('hard-fork-vote', { choice: next, forkChoice: next, userId: userId });
+  try { $('#forkChoiceModal').modal('hide'); } catch (e) {}
+  if (typeof paintMinerForkRoster === 'function') paintMinerForkRoster();
+  if (source === 'panel' && next === 'new') {
+    showToastNotification(
+      'Switched to New Chain (active at block ' +
+      (pendingForkHeight != null ? pendingForkHeight : '?') +
+      '). You will stick to the NEW tip after activation.',
+      'warning'
+    );
+  } else if (source === 'panel') {
+    showToastNotification('Switched to Classic Chain.', 'info');
+  } else if (next === 'new') {
+    showToastNotification(
+      'You chose New Chain. You still mine classic until block ' +
+      (pendingForkHeight != null ? pendingForkHeight : '?') +
+      ', then split off and stay on the NEW tip.',
+      'warning'
+    );
+  } else {
+    showToastNotification(
+      'You chose Classic. Blocks stay classic until activation' +
+      (pendingForkHeight != null ? ' at #' + pendingForkHeight : '') + '.',
+      'info'
+    );
+  }
+  if (isMining) remineOnCanonicalTip();
+}
+
 function restoreForkChoiceFromSession() {
   if (!sessionId) return;
   try {
@@ -3283,9 +3316,11 @@ function showForkProposalModal(name, height, opts) {
   const key = forkProposalKey(n, pendingForkHeight);
 
   // Always keep panel + labels in sync
+  ensureForkControlPanel();
   $('#forkProposalName').text(n);
   $('#forkProposalHeight').text(h);
   $('#forkControlPanel').show();
+  syncForkControlButtons();
   // Clarify: choice only affects blocks at/after activation
   if (!$('#forkActivationNote').length) {
     $('#forkControlPanel').append(
@@ -4243,7 +4278,7 @@ function paintMinerForkRoster() {
     teamAttack: lastKnownTeamAttack,
     selfId: userId,
     viewRole: 'miner',
-    localForkChoice: myForkChoice,
+    localForkChoice: explicitForkChoice(),
     localColluding: !!isColluding
   });
 }

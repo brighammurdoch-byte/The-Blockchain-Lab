@@ -722,13 +722,18 @@ function initClientSideNetworking(mode, roomCode) {
 
   // Presence + initial-state are sent after initAsAdmin resolves (see above)
 
-  // Miner hard-fork votes → show on projector
+  // Miner hard-fork votes → show on projector. Accept after activation too;
+  // a late join is still a valid side pick.
   net.on('hard-fork-vote', (msg) => {
     const payload = msg.payload || msg;
-    const uid = msg.from || payload.userId;
-    const choice = payload.choice || 'classic';
-    if (relayState && uid) {
+    const uid = msg.from || payload.userId || payload.from;
+    const raw = String((payload && (payload.choice || payload.forkChoice)) || '').toLowerCase();
+    const choice = (raw === 'new' || raw === 'new-chain' || raw === 'newchain')
+      ? 'new'
+      : (raw === 'classic' ? 'classic' : '');
+    if (relayState && uid && choice) {
       relayState.addOrUpdateParticipant(uid, 'miner', { forkChoice: choice });
+      if (typeof paintAdminForkRoster === 'function') paintAdminForkRoster();
       if (typeof scheduleRenderClientParticipants === 'function') scheduleRenderClientParticipants();
       else if (typeof renderClientParticipants === 'function') renderClientParticipants();
       if (typeof broadcastParticipantsRoster === 'function') broadcastParticipantsRoster();
@@ -1844,6 +1849,10 @@ function refreshForkHeightDefault(force) {
   if (!$el.length) return;
   if (!force && $el.is(':focus')) return;
   if (!force && $el.data('userEdited')) return;
+  if (!force && relayState && relayState.pendingFork && relayState.pendingFork.height != null) {
+    $el.val(relayState.pendingFork.height);
+    return;
+  }
   const suggested = defaultForkActivationHeight();
   $el.val(suggested);
   const tip = getHubBlockHeight();
@@ -1872,6 +1881,12 @@ function proposeHardFork(name, height) {
 
   if (relayState) {
     relayState.pendingFork = { height: h, name: n };
+  }
+  // Freeze the field on the live proposal so tip+10 auto-advance cannot
+  // rewrite the target after Propose (or look like the fork already passed).
+  const $height = $('#forkHeight');
+  if ($height.length) {
+    $height.val(h).data('userEdited', true);
   }
 
   net.send('hard-fork-proposed', { height: h, name: n });
