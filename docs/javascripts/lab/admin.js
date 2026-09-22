@@ -875,6 +875,39 @@ function initClientSideNetworking(mode, roomCode) {
     }
     const n = pending.length;
     showToastNotification('Transaction in mempool (' + n + ' pending)', 'info');
+    if (window.TxVerify) {
+      const vReason = payload.verification && payload.verification.reason;
+      TxVerify.note({
+        ok: true,
+        reason: (vReason && vReason !== 'Verified') ? vReason : 'Verified — structure, address, balance, and replay',
+        tx: tx
+      });
+    }
+  });
+
+  net.on('transaction-rejected', (msg) => {
+    const payload = msg.payload || msg;
+    const reason = (payload && payload.reason) || 'Transaction rejected';
+    const pending = (payload && Array.isArray(payload.pendingTransactions))
+      ? payload.pendingTransactions
+      : (relayState && Array.isArray(relayState.pendingTransactions) ? relayState.pendingTransactions : []);
+    if (typeof updatePendingTransactions === 'function') {
+      updatePendingTransactions({
+        pendingTransactions: pending,
+        participants: relayState ? Array.from(relayState.participants.values()) : []
+      });
+    }
+    if (window.TxVerify) {
+      const dropped = (payload && payload.droppedTransactions) || [];
+      if (dropped.length) {
+        dropped.forEach(function (d) {
+          TxVerify.note({ ok: false, reason: (d && d.reason) || reason, tx: d && d.transaction });
+        });
+      } else {
+        TxVerify.note({ ok: false, reason: reason, tx: payload && payload.transaction });
+      }
+    }
+    showToastNotification(reason, 'error');
   });
 
   // Basic hashrate reporting (from test peers or future real participants)
@@ -1070,6 +1103,24 @@ function initClientSideNetworking(mode, roomCode) {
         );
       }
       if (typeof renderClientRelayChain === 'function') renderClientRelayChain();
+    } else if (result && !result.accepted && !result.duplicate && result.txVerificationFailed) {
+      net.send('block-rejected', {
+        reason: result.reason || 'Transaction failed verification',
+        blockHash: block && block.hash,
+        droppedTransactions: result.droppedTransactions || [],
+        pendingTransactions: result.pendingTransactions ||
+          (Array.isArray(relayState.pendingTransactions) ? relayState.pendingTransactions.slice() : []),
+        chain: result.chain || relayState.chain.slice(),
+        newHeight: result.newHeight
+      }, minerId);
+      net.send('transaction-rejected', {
+        reason: result.reason || 'Transaction failed verification',
+        transaction: (result.droppedTransactions && result.droppedTransactions[0] &&
+          result.droppedTransactions[0].transaction) || null,
+        droppedTransactions: result.droppedTransactions || [],
+        pendingTransactions: result.pendingTransactions ||
+          (Array.isArray(relayState.pendingTransactions) ? relayState.pendingTransactions.slice() : [])
+      });
     }
   });
 
@@ -2463,11 +2514,12 @@ function updatePendingTransactions(blockchain) {
         <td>${fmtAddr(tx.to)}</td>
         <td><strong>${tx.amount}</strong></td>
         <td>${tx.timestamp ? new Date(tx.timestamp).toLocaleTimeString() : '—'}</td>
+        <td><span class="label label-success">Pass</span></td>
       </tr>
     `;
   });
   if (transactions.length === 0) {
-    html = '<tr><td colspan="4" class="text-center text-muted">No pending transactions</td></tr>';
+    html = '<tr><td colspan="5" class="text-center text-muted">No pending transactions</td></tr>';
   }
   $('#pendingTransactions').html(html);
   const $badge = $('#mempoolCountBadge');
@@ -2547,10 +2599,15 @@ function submitAdminWalletTransaction() {
 
   let result = { accepted: false };
   if (relayState && typeof relayState.tryAddTransaction === 'function') {
-    result = relayState.tryAddTransaction(tx) || result;
+    result = relayState.tryAddTransaction(tx, {
+      requireSubmitter: true,
+      submittedBy: net.userId
+    }) || result;
   }
   if (!result.accepted) {
-    showToastNotification((result && result.reason) || 'Transaction rejected', 'error');
+    const why = (result && result.reason) || 'Transaction rejected';
+    if (window.TxVerify) TxVerify.note({ ok: false, reason: why, tx: tx });
+    showToastNotification(why, 'error');
     return;
   }
   if (result.duplicate) {
@@ -2568,7 +2625,8 @@ function submitAdminWalletTransaction() {
   net.send('transaction-accepted', {
     transaction: result.transaction || tx,
     pendingTransactions: pending,
-    participants: participants
+    participants: participants,
+    verification: result.verification || { valid: true, reason: 'Verified' }
   });
 
   // Local projector refresh

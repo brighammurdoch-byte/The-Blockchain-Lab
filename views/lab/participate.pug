@@ -71,10 +71,10 @@ block content
           .panel-body
             .form-group
               label Mine with:
-              input.form-control(type="range", id="cpuUsage", min="10", max="100", value="50", step="10")
+              input.form-control(type="range", id="cpuUsage", min="10", max="100", value="30", step="10")
               small.form-text.text-muted
-                span#cpuUsageValue 50
-                | % CPU usage
+                span#cpuUsageValue 30
+                | % of this tab’s hash cap
             #miningSwitchStatus.text-center(style="margin-bottom: 10px;")
               span.label.label-default#miningIntentBadge Mining switch: OFF
               |  
@@ -85,7 +85,7 @@ block content
             button.btn.btn-warning.btn-block.btn-lg#stopMineBtn(style="display: none;") Stop Mining
             p#miningControlHint.small.text-muted.text-center(style="margin-top:8px;margin-bottom:0;")
             .alert.alert-warning.mt-3
-              small Limit CPU usage to prevent system strain. Recommended: 50%
+              small Each miner tab is rate-limited so a classroom of laptops stays usable. Default is about 225 hashes/sec. 100% and background tabs still cannot exceed 750 hashes/sec. Recommended: 30%.
 
         .panel.panel-default
           .panel-heading
@@ -156,7 +156,7 @@ block content
                   |  
                   span.label.label-default#mempoolCountBadge 0
               .panel-body(style="max-height: 280px; overflow-y: auto;")
-                p.small.text-muted(style="margin-top:0;") Pending transactions shared with the whole class — include these when you mine.
+                p.small.text-muted(style="margin-top:0;") Pending transactions shared with the whole class — include these when you mine. Nodes verify structure, your own address, balance, and replay before a transfer is accepted.
                 table.table.table-striped.table-hover(style="margin-bottom:0;")
                   thead
                     tr
@@ -164,9 +164,12 @@ block content
                       th To
                       th Amount
                       th Time
+                      th Check
                   tbody#pendingTransactions
                     tr
-                      td(colspan="4").text-center.text-muted No pending transactions
+                      td(colspan="5").text-center.text-muted No pending transactions
+                #txVerificationLog.small(style="margin-top:6px;")
+                  #txVerificationEvents
 
             .panel.panel-default
               .panel-heading
@@ -320,13 +323,13 @@ block content
   script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=fixrelay")
   script(src="/javascripts/network/MqttAdminRelayTransport.js?v=p2fix1")
   script(src="/javascripts/network/P2PAdminRelayTransport.js?v=tiphb1")
-  script(src="/javascripts/network/AdminRelayCoordinator.js?v=p4fix12")
+  script(src="/javascripts/network/AdminRelayCoordinator.js?v=p4fix13")
   script(src="/javascripts/network/Persistence.js?v=p4fix9")
-  script(src="/javascripts/network/RelayBlockchainState.js?v=forkroster1")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=p4fix13")
   script(src="/javascripts/network/NetworkManager.js?v=p4fix5")
   script(src="/javascripts/lab/sessionProbe.js?v=p1fix1")
-  script(src="/javascripts/lab/chainDisplay.js?v=forkroster1")
-  script(src="/javascripts/lab/participate.js?v=hardfork1")
+  script(src="/javascripts/lab/chainDisplay.js?v=p4fix13")
+  script(src="/javascripts/lab/participate.js?v=p4fix14")
   
   script.
     // Do not redeclare sessionId — participate.js already owns that binding.
