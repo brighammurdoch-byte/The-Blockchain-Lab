@@ -71,10 +71,10 @@ block content
           .panel-body
             .form-group
               label Mine with:
-              input.form-control(type="range", id="cpuUsage", min="10", max="100", value="50", step="10")
+              input.form-control(type="range", id="cpuUsage", min="10", max="100", value="30", step="10")
               small.form-text.text-muted
-                span#cpuUsageValue 50
-                | % CPU usage
+                span#cpuUsageValue 30
+                | % of this tab’s hash cap
             #miningSwitchStatus.text-center(style="margin-bottom: 10px;")
               span.label.label-default#miningIntentBadge Mining switch: OFF
               |  
@@ -85,7 +85,7 @@ block content
             button.btn.btn-warning.btn-block.btn-lg#stopMineBtn(style="display: none;") Stop Mining
             p#miningControlHint.small.text-muted.text-center(style="margin-top:8px;margin-bottom:0;")
             .alert.alert-warning.mt-3
-              small Limit CPU usage to prevent system strain. Recommended: 50%
+              small Each miner tab is rate-limited so a classroom of laptops stays usable. Default is about 225 hashes/sec. 100% and background tabs still cannot exceed 750 hashes/sec. Recommended: 30%.
 
         .panel.panel-default
           .panel-heading
@@ -329,7 +329,7 @@ block content
   script(src="/javascripts/network/NetworkManager.js?v=p4fix5")
   script(src="/javascripts/lab/sessionProbe.js?v=p1fix1")
   script(src="/javascripts/lab/chainDisplay.js?v=p4fix13")
-  script(src="/javascripts/lab/participate.js?v=p4fix13")
+  script(src="/javascripts/lab/participate.js?v=p4fix14")
   
   script.
     // Do not redeclare sessionId — participate.js already owns that binding.

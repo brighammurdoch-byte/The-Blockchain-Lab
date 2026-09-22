@@ -74,10 +74,10 @@ if (/pendingFork = \{ height: h, name: n \}/.test(admin) &&
   fail('Propose Hard Fork freezes the activation-height field', 'userEdited freeze missing');
 }
 
-if (/participate\.js\?v=p4fix13/.test(partPug) && /admin\.js\?v=p4fix13/.test(adminPug)) {
-  pass('Edited scripts cache-bust p4fix13');
+if (/participate\.js\?v=p4fix14/.test(partPug) && /admin\.js\?v=p4fix13/.test(adminPug)) {
+  pass('Edited scripts cache-bust p4fix14');
 } else {
-  fail('Edited scripts cache-bust p4fix13', 'stale ?v=');
+  fail('Edited scripts cache-bust p4fix14', 'stale ?v=');
 }
 
 const src = fs.readFileSync(path.join(ROOT, 'public/javascripts/lab/chainDisplay.js'), 'utf8');

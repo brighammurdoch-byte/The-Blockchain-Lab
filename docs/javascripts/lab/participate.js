@@ -7,7 +7,7 @@ let sessionId = null;
 let userId = null;
 let isMining = false;
 let networkPaused = false;
-let cpuLimitPercent = 20;
+let cpuLimitPercent = 30;
 let miningWorker = null;
 let miningWorkerReady = false;
 let miningWorkerFailed = false; // after hard failure, stay on main-thread mining
@@ -449,9 +449,22 @@ function isValidHash(hash, difficulty){
   }
   return true;
 }
+var TAB_HASH_CAP = 750;
+function clampPace(delay, batchSize){
+  var batch = batchSize > 0 ? Math.floor(batchSize) : 40;
+  if (batch > 80) batch = 80;
+  if (batch < 1) batch = 1;
+  var minDelay = Math.ceil((batch / TAB_HASH_CAP) * 1000);
+  if (minDelay < 20) minDelay = 20;
+  var d = Number(delay);
+  if (!(d >= minDelay)) d = minDelay;
+  return { delay: d, batchSize: batch };
+}
 function mineBatch(){
   if (!running || !job || !job.block) return;
-  var block = job.block, difficulty = job.difficulty, batchSize = job.batchSize > 0 ? job.batchSize : 2000, i, hash;
+  var pace = clampPace(job.delay, job.batchSize);
+  job.delay = pace.delay; job.batchSize = pace.batchSize;
+  var block = job.block, difficulty = job.difficulty, batchSize = pace.batchSize, i, hash;
   for (i = 0; i < batchSize; i++) {
     if (!running) return;
     hash = sha256Hex(JSON.stringify(canonicalizeObject({
@@ -470,7 +483,7 @@ function mineBatch(){
   var elapsed = Math.max(0.1, (Date.now() - startTime) / 1000);
   self.postMessage({ type: 'progress', gen: job.gen, nonce: nonce, totalIterations: totalIterations, hashrate: Math.max(1, Math.floor(totalIterations / elapsed)), startTime: startTime });
   if (!running) return;
-  timer = setTimeout(mineBatch, job.delay != null ? job.delay : 0);
+  timer = setTimeout(mineBatch, job.delay);
 }
 self.onmessage = function(e){
   var d = e.data || {}, cmd = d.command;
@@ -482,14 +495,18 @@ self.onmessage = function(e){
   if (cmd === 'start') {
     ensureCrypto(d.sha256Url).then(function(){
       clearTimer(); running = true;
-      job = { gen: d.gen, block: d.block, difficulty: d.difficulty, delay: d.delay != null ? d.delay : 0, batchSize: d.batchSize != null ? d.batchSize : 2000 };
+      var pace = clampPace(d.delay, d.batchSize);
+      job = { gen: d.gen, block: d.block, difficulty: d.difficulty, delay: pace.delay, batchSize: pace.batchSize };
       nonce = d.nonce || 0; totalIterations = d.totalIterations || 0; startTime = d.startTime || Date.now();
       mineBatch();
     }).catch(function(err){ self.postMessage({ type: 'error', message: (err && err.message) || String(err) }); });
     return;
   }
   if (cmd === 'setPace') {
-    if (job) { if (d.delay != null) job.delay = d.delay; if (d.batchSize != null) job.batchSize = d.batchSize; }
+    if (job) {
+      var pace = clampPace(d.delay != null ? d.delay : job.delay, d.batchSize != null ? d.batchSize : job.batchSize);
+      job.delay = pace.delay; job.batchSize = pace.batchSize;
+    }
     return;
   }
   if (cmd === 'stop') { running = false; clearTimer(); job = null; }
@@ -509,13 +526,31 @@ function canUseWorkerMining() {
   return true;
 }
 
+/** Absolute per-tab hash ceiling. Slider 100% is this many H/s, not a pinned core. */
+const TAB_HASH_CAP = 750;
+
+/**
+ * Pace one miner tab so hashing yields to the event loop.
+ * Target H/s = TAB_HASH_CAP * (slider/100) * (0.6 when the tab is hidden).
+ * The delay is the gap after a small batch: a fast laptop cannot exceed the
+ * target, and a slow laptop simply hashes slower.
+ */
+function classroomMiningPace(percent, hidden) {
+  var pct = Number(percent);
+  if (!(pct >= 10)) pct = 30;
+  if (pct > 100) pct = 100;
+  var factor = hidden ? 0.6 : 1;
+  var targetHps = Math.max(40, Math.round(TAB_HASH_CAP * (pct / 100) * factor));
+  var batchSize = hidden ? 24 : 40;
+  var delay = Math.ceil((batchSize / targetHps) * 1000);
+  var minDelay = hidden ? 40 : 25;
+  if (delay < minDelay) delay = minDelay;
+  return { delay: delay, batchSize: batchSize, targetHps: targetHps };
+}
+
 function miningPaceForVisibility() {
   const hidden = typeof document !== 'undefined' && document.hidden;
-  // Background: max throughput in the worker. Foreground: honor CPU slider.
-  return {
-    delay: hidden ? 0 : getMineCpuDelay(),
-    batchSize: hidden ? 8000 : 2000
-  };
+  return classroomMiningPace(cpuLimitPercent, hidden);
 }
 
 function ensureMiningWorker() {
@@ -776,7 +811,7 @@ function updateMiningActivityUi(blockIndex) {
       '<p><strong>Mining in progress' + label + '…</strong></p>' +
       '<p>Nonce attempts: <span id="nonceCount">0</span></p>' +
       '<p>Current hashrate: <span id="currentHashrate">' + Number(shown).toLocaleString() + '</span> H/s</p>' +
-      '<p class="small text-muted" id="bgMineNote" style="margin-top:6px;">Mining runs in a Web Worker so it continues if you switch apps/tabs. On phones, keep the screen on (or disable battery optimization for the browser) for best results.</p>' +
+      '<p class="small text-muted" id="bgMineNote" style="margin-top:6px;">Mining runs in a Web Worker and stays capped per tab (default about 225 H/s, 750 H/s max) so this page stays usable with several miner tabs. On phones, keep the screen on (or disable battery optimization for the browser) for best results.</p>' +
       '<div class="progress" style="margin-top: 10px;">' +
         '<div id="miningProgress" class="progress-bar progress-bar-striped active" style="width: 100%"></div>' +
       '</div>' +
@@ -970,7 +1005,7 @@ function setupBackgroundMiningGuards() {
         if (!isMining && hasTrustedHubChain()) startMining();
       }
     } else if (isMining) {
-      // Backgrounded: switch to max-pace worker hashing
+      // Backgrounded: keep hashing at 60% of this tab's cap (never uncapped)
       syncMiningWorkerPace();
     }
   });
@@ -2852,7 +2887,7 @@ function broadcastViaWebRTC(block, minerId) {
 function setupEventHandlers() {
   // CPU usage slider
   $('#cpuUsage').on('input', function() {
-    cpuLimitPercent = parseInt($(this).val(), 10) || 20;
+    cpuLimitPercent = parseInt($(this).val(), 10) || 30;
     $('#cpuUsageValue').text(cpuLimitPercent);
     // Live-adjust worker pace while hashing
     syncMiningWorkerPace();
@@ -3784,7 +3819,8 @@ function mineBlockOnMainThread(block, adminSettings) {
       return;
     }
 
-    const batchSize = document.hidden ? 500 : 1000;
+    const pace = classroomMiningPace(cpuLimitPercent, document.hidden);
+    const batchSize = Math.min(20, pace.batchSize);
     for (let i = 0; i < batchSize; i++) {
       const blockObj = {
         index: block.index,
@@ -3856,8 +3892,8 @@ function mineBlockOnMainThread(block, adminSettings) {
       if (nc) nc.textContent = nonce.toLocaleString();
     } catch (e) {}
 
-    // When hidden, browsers throttle setTimeout heavily — use shortest delay
-    const delay = document.hidden ? 0 : getMineCpuDelay();
+    // Short batches plus a real gap so CryptoJS on the UI thread cannot pin the tab.
+    const delay = Math.max(40, Math.ceil((batchSize / pace.targetHps) * 1000));
     mainThreadMineTimer = setTimeout(tick, delay);
   }
 
@@ -3865,10 +3901,8 @@ function mineBlockOnMainThread(block, adminSettings) {
 }
 
 function getMineCpuDelay() {
-  // Map CPU percentage to delay
-  // 100% = 0ms (max speed), 50% = 25ms delay, 10% = 225ms delay
-  const delayMs = Math.max(0, (100 - cpuLimitPercent) * 2.5);
-  return delayMs;
+  const hidden = typeof document !== 'undefined' && document.hidden;
+  return classroomMiningPace(cpuLimitPercent, hidden).delay;
 }
 
 function submitMinedBlock(block, startTime, totalIterations) {

@@ -102,12 +102,29 @@ function isValidHash(hash, difficulty) {
   return true;
 }
 
+var TAB_HASH_CAP = 750;
+
+function clampPace(delay, batchSize) {
+  var batch = batchSize > 0 ? Math.floor(batchSize) : 40;
+  if (batch > 80) batch = 80;
+  if (batch < 1) batch = 1;
+  var minDelay = Math.ceil((batch / TAB_HASH_CAP) * 1000);
+  if (minDelay < 20) minDelay = 20;
+  var d = Number(delay);
+  if (!(d >= minDelay)) d = minDelay;
+  return { delay: d, batchSize: batch };
+}
+
 function mineBatch() {
   if (!running || !job || !job.block) return;
 
+  var pace = clampPace(job.delay, job.batchSize);
+  job.delay = pace.delay;
+  job.batchSize = pace.batchSize;
+
   var block = job.block;
   var difficulty = job.difficulty;
-  var batchSize = job.batchSize > 0 ? job.batchSize : 2000;
+  var batchSize = pace.batchSize;
   var i;
   var blockObj;
   var hash;
@@ -169,9 +186,8 @@ function mineBatch() {
 
   if (!running) return;
 
-  var delay = job.delay != null ? job.delay : 0;
-  // Prefer setTimeout(0) over busy-loop so the worker can receive stop/setPace
-  timer = setTimeout(mineBatch, delay);
+  // Gap after each small batch so this worker cannot pin a core.
+  timer = setTimeout(mineBatch, job.delay);
 }
 
 self.onmessage = function (e) {
@@ -197,12 +213,13 @@ self.onmessage = function (e) {
       .then(function () {
         clearTimer();
         running = true;
+        var pace = clampPace(d.delay, d.batchSize);
         job = {
           gen: d.gen,
           block: d.block,
           difficulty: d.difficulty,
-          delay: d.delay != null ? d.delay : 0,
-          batchSize: d.batchSize != null ? d.batchSize : 2000
+          delay: pace.delay,
+          batchSize: pace.batchSize
         };
         nonce = d.nonce || 0;
         totalIterations = d.totalIterations || 0;
@@ -220,8 +237,12 @@ self.onmessage = function (e) {
 
   if (cmd === 'setPace') {
     if (job) {
-      if (d.delay != null) job.delay = d.delay;
-      if (d.batchSize != null) job.batchSize = d.batchSize;
+      var pace = clampPace(
+        d.delay != null ? d.delay : job.delay,
+        d.batchSize != null ? d.batchSize : job.batchSize
+      );
+      job.delay = pace.delay;
+      job.batchSize = pace.batchSize;
     }
     return;
   }
