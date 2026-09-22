@@ -1078,10 +1078,25 @@ function pruneLocalMempool(extraBlocks) {
   return confirmed;
 }
 
-/** Mempool slice safe to mine — never re-include confirmed transfers. */
+/** Mempool slice safe to mine — skip confirmed transfers and ones this node can already tell are unspendable. */
 function mempoolForNextBlock() {
   pruneLocalMempool();
-  return localPendingTxs.slice(0, 20);
+  const txs = localPendingTxs.slice(0, 20);
+  if (!window.RelayBlockchainState || typeof RelayBlockchainState.screenMempool !== 'function') {
+    return txs;
+  }
+  const screened = RelayBlockchainState.screenMempool(txs, function (id) {
+    const parts = lastKnownParticipants || [];
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i];
+      if (!p) continue;
+      if ((p.userId || p.address) === id && p.balance != null && Number.isFinite(Number(p.balance))) {
+        return Number(p.balance);
+      }
+    }
+    return null;
+  });
+  return (screened.kept || txs).slice(0, 20);
 }
 
 function pushOptimisticTip(block) {
@@ -2267,7 +2282,13 @@ function initClientSideNetworkingForParticipant(mode) {
       if (payload.requeuedTransactions && payload.requeuedTransactions.length) {
         showToastNotification('Chain reorg — transfer returned to mempool', 'warning');
       } else if (payload.droppedTransactions && payload.droppedTransactions.length) {
-        showToastNotification('Chain reorg — transfer dropped (invalid on new tip)', 'warning');
+        const why = payload.droppedTransactions[0] && payload.droppedTransactions[0].reason;
+        showToastNotification(why ? ('Transfer dropped: ' + why) : 'Chain reorg — transfer dropped (invalid on new tip)', 'warning');
+        if (window.TxVerify) {
+          payload.droppedTransactions.forEach(function (d) {
+            TxVerify.note({ ok: false, reason: (d && d.reason) || 'Transfer dropped', tx: d && d.transaction });
+          });
+        }
       } else if (payload.reorg) {
         showToastNotification('Chain reorg — following longest chain', 'warning');
       } else if (payload.isFork && block && isNewForkId(block.forkId)) {
@@ -2396,6 +2417,16 @@ function initClientSideNetworkingForParticipant(mode) {
       return;
     }
     debugWarn('Block rejected by hub', reason);
+    if (payload && Array.isArray(payload.pendingTransactions)) {
+      localPendingTxs = payload.pendingTransactions.slice();
+      pruneLocalMempool();
+      try {
+        updatePendingTransactions({
+          pendingTransactions: localPendingTxs,
+          participants: lastKnownParticipants || []
+        });
+      } catch (e) {}
+    }
     if (payload && (payload.difficultyLeading != null || payload.difficultySecondary != null)) {
       lastKnownAdminSettings = normalizeAdminSettings(Object.assign({}, lastKnownAdminSettings || {}, {
         difficultyLeading: payload.difficultyLeading,
@@ -2455,9 +2486,44 @@ function initClientSideNetworkingForParticipant(mode) {
       pendingTransactions: localPendingTxs,
       participants: payload.participants || []
     });
+    if (window.TxVerify) {
+      const vReason = payload.verification && payload.verification.reason;
+      TxVerify.note({
+        ok: true,
+        reason: (vReason && vReason !== 'Verified') ? vReason : 'Verified — structure, address, balance, and replay',
+        tx: tx
+      });
+    }
     showToastNotification('Transaction added to mempool', 'success');
     // Fold new mempool txs into the next block — debounced to avoid mid-submit races
     scheduleRemineForMempool();
+  });
+
+  net.on('transaction-rejected', (msg) => {
+    const payload = msg.payload || msg;
+    const reason = (payload && payload.reason) || 'Transaction rejected';
+    if (payload && Array.isArray(payload.pendingTransactions)) {
+      localPendingTxs = payload.pendingTransactions.slice();
+      pruneLocalMempool();
+    }
+    const dropped = (payload && payload.droppedTransactions) || [];
+    if (window.TxVerify) {
+      if (dropped.length) {
+        dropped.forEach(function (d) {
+          TxVerify.note({ ok: false, reason: (d && d.reason) || reason, tx: d && d.transaction });
+        });
+      } else {
+        TxVerify.note({ ok: false, reason: reason, tx: payload && payload.transaction });
+      }
+    }
+    try {
+      updatePendingTransactions({
+        pendingTransactions: localPendingTxs,
+        participants: (payload && payload.participants) || lastKnownParticipants || []
+      });
+    } catch (e) {}
+    showToastNotification(reason, 'error');
+    if (isMining) scheduleRemineForMempool();
   });
 
   net.on('participants-roster', (msg) => {
@@ -3915,9 +3981,22 @@ function sendTransaction(recipientAddress, amount) {
     amount: amount,
     timestamp: Date.now()
   };
+  if (window.RelayBlockchainState && typeof RelayBlockchainState.precheckSend === 'function') {
+    const preview = RelayBlockchainState.precheckSend(tx, {
+      submittedBy: userId,
+      participants: lastKnownParticipants || [],
+      pending: localPendingTxs || []
+    });
+    if (!preview.ok) {
+      window._txSendInFlight = false;
+      if (window.TxVerify) TxVerify.note({ ok: false, reason: preview.reason, tx: tx });
+      showToastNotification(preview.reason || 'Transaction rejected', 'error');
+      return;
+    }
+  }
   net.send('transaction-submitted', { transaction: tx });
   if ($('#transactionForm').length && $('#transactionForm')[0]) $('#transactionForm')[0].reset();
-  showToastNotification(`✅ Transaction submitted via relay to ${recipientAddress.substring(0, 8)}... for ${amount} coins`, 'success');
+  showToastNotification('Verifying transaction with the hub…', 'info');
   setTimeout(function () { window._txSendInFlight = false; }, 400);
 }
 
@@ -4365,12 +4444,13 @@ function updatePendingTransactions(blockchain) {
         <td>${fmtAddr(tx.to)}</td>
         <td><strong>${tx.amount}</strong></td>
         <td>${tx.timestamp ? new Date(tx.timestamp).toLocaleTimeString() : '—'}</td>
+        <td><span class="label label-success">Pass</span></td>
       </tr>
     `;
   });
 
   if (transactions.length === 0) {
-    html = '<tr><td colspan="4" class="text-center text-muted">No pending transactions</td></tr>';
+    html = '<tr><td colspan="5" class="text-center text-muted">No pending transactions</td></tr>';
   }
 
   $('#pendingTransactions').html(html);

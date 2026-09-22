@@ -184,8 +184,21 @@ function setupEventHandlers() {
       amount: amount,
       timestamp: Date.now()
     };
+    if (window.RelayBlockchainState && typeof RelayBlockchainState.precheckSend === 'function') {
+      const preview = RelayBlockchainState.precheckSend(tx, {
+        submittedBy: userId,
+        participants: window._observerParticipants || [],
+        pending: window._observerPending || []
+      });
+      if (!preview.ok) {
+        window._txSendInFlight = false;
+        if (window.TxVerify) TxVerify.note({ ok: false, reason: preview.reason, tx: tx });
+        showToastNotification(preview.reason || 'Transaction rejected', 'error');
+        return;
+      }
+    }
     net.send('transaction-submitted', { transaction: tx });
-    showToastNotification('Transaction submitted via relay (no server)!', 'success');
+    showToastNotification('Verifying transaction with the hub…', 'info');
     $('#recipientAddress').val('');
     $('#transactionAmount').val('');
     setTimeout(function () { window._txSendInFlight = false; }, 400);
@@ -296,7 +309,13 @@ function initClientSideNetworkingForObserver(mode) {
       if (state.requeuedTransactions && state.requeuedTransactions.length) {
         showToastNotification('Transfer returned to mempool after a reorg', 'warning');
       } else if (state.droppedTransactions && state.droppedTransactions.length) {
-        showToastNotification('Transfer dropped after a reorg (no longer valid on this chain)', 'warning');
+        const why = state.droppedTransactions[0] && state.droppedTransactions[0].reason;
+        showToastNotification(why ? ('Transfer dropped: ' + why) : 'Transfer dropped after a reorg (no longer valid on this chain)', 'warning');
+        if (window.TxVerify) {
+          state.droppedTransactions.forEach(function (d) {
+            TxVerify.note({ ok: false, reason: (d && d.reason) || 'Transfer dropped', tx: d && d.transaction });
+          });
+        }
       }
       return;
     }
@@ -452,6 +471,7 @@ function initClientSideNetworkingForObserver(mode) {
   net.on('transaction-accepted', function (msg) {
     const payload = msg.payload || msg;
     const pending = payload.pendingTransactions;
+    const tx = payload.transaction || payload;
     if (Array.isArray(pending)) {
       populateObserverUIFromState({
         chain: window._observerChain || [],
@@ -459,7 +479,6 @@ function initClientSideNetworkingForObserver(mode) {
         participants: payload.participants || []
       });
     } else if (payload.transaction || (payload.from && payload.to)) {
-      const tx = payload.transaction || payload;
       const current = (window._observerPending || []).slice();
       current.push(tx);
       window._observerPending = current;
@@ -469,6 +488,39 @@ function initClientSideNetworkingForObserver(mode) {
         participants: []
       });
     }
+    if (window.TxVerify) {
+      const vReason = payload.verification && payload.verification.reason;
+      TxVerify.note({
+        ok: true,
+        reason: (vReason && vReason !== 'Verified') ? vReason : 'Verified — structure, address, balance, and replay',
+        tx: tx
+      });
+    }
+    showToastNotification('Transaction added to mempool', 'success');
+  });
+
+  net.on('transaction-rejected', function (msg) {
+    const payload = msg.payload || msg;
+    const reason = (payload && payload.reason) || 'Transaction rejected';
+    if (payload && Array.isArray(payload.pendingTransactions)) {
+      window._observerPending = payload.pendingTransactions.slice();
+      populateObserverUIFromState({
+        chain: window._observerChain || [],
+        pendingTransactions: window._observerPending,
+        participants: window._observerParticipants || []
+      });
+    }
+    if (window.TxVerify) {
+      const dropped = (payload && payload.droppedTransactions) || [];
+      if (dropped.length) {
+        dropped.forEach(function (d) {
+          TxVerify.note({ ok: false, reason: (d && d.reason) || reason, tx: d && d.transaction });
+        });
+      } else {
+        TxVerify.note({ ok: false, reason: reason, tx: payload && payload.transaction });
+      }
+    }
+    showToastNotification(reason, 'error');
   });
 
   net.on('participants-roster', function (msg) {
@@ -978,12 +1030,13 @@ function updatePendingTransactions(blockchain) {
         <td>${fmtAddr(tx.to)}</td>
         <td><strong>${tx.amount}</strong></td>
         <td>${tx.timestamp ? new Date(tx.timestamp).toLocaleTimeString() : '—'}</td>
+        <td><span class="label label-success">Pass</span></td>
       </tr>
     `;
   });
 
   if (transactions.length === 0) {
-    html = '<tr><td colspan="4" class="text-center text-muted">No pending transactions</td></tr>';
+    html = '<tr><td colspan="5" class="text-center text-muted">No pending transactions</td></tr>';
   }
 
   $('#pendingTransactions').html(html);

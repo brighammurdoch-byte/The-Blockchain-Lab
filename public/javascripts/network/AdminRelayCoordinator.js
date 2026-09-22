@@ -264,8 +264,25 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
         tipIndex: result.tipIndex != null ? result.tipIndex : result.newHeight,
         newHeight: result.newHeight,
         difficultyLeading: result.difficultyLeading,
-        difficultySecondary: result.difficultySecondary
+        difficultySecondary: result.difficultySecondary,
+        droppedTransactions: result.droppedTransactions || [],
+        pendingTransactions: result.pendingTransactions ||
+          ((this.lab && Array.isArray(this.lab.pendingTransactions))
+            ? this.lab.pendingTransactions.slice()
+            : [])
       }, from);
+      if (result.txVerificationFailed) {
+        this.net.send('transaction-rejected', {
+          reason: result.reason || 'Transaction failed verification',
+          transaction: (result.droppedTransactions && result.droppedTransactions[0] &&
+            result.droppedTransactions[0].transaction) || null,
+          droppedTransactions: result.droppedTransactions || [],
+          pendingTransactions: result.pendingTransactions ||
+            ((this.lab && Array.isArray(this.lab.pendingTransactions))
+              ? this.lab.pendingTransactions.slice()
+              : [])
+        });
+      }
       if (this.lab && typeof this.lab.maybeEaseDifficultyIfStalled === 'function') {
         const eased = this.lab.maybeEaseDifficultyIfStalled();
         if (eased && !eased.difficultyUnchanged) {
@@ -281,12 +298,34 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
   _handleTransactionSubmitted(msg) {
     const tx = msg.payload?.transaction || msg.transaction || msg.payload;
     if (this.lab && this.lab.networkPaused) {
+      this.net.send('transaction-rejected', {
+        reason: 'Network is paused by admin — transactions blocked',
+        transaction: tx
+      }, msg.from);
       return;
     }
     let result = { accepted: false };
 
     if (this.lab && typeof this.lab.tryAddTransaction === 'function') {
-      result = this.lab.tryAddTransaction(tx) || { accepted: false };
+      const submittedBy = msg.from || (msg.payload && msg.payload.from) || '';
+      result = this.lab.tryAddTransaction(tx, {
+        requireSubmitter: true,
+        submittedBy: submittedBy
+      }) || { accepted: false };
+    }
+
+    if (result.duplicate) return;
+
+    if (!result.accepted) {
+      this.net.send('transaction-rejected', {
+        reason: result.reason || 'Transaction rejected',
+        transaction: result.transaction || tx,
+        verification: result.verification || { valid: false, reason: result.reason || 'Transaction rejected' },
+        pendingTransactions: (this.lab && Array.isArray(this.lab.pendingTransactions))
+          ? this.lab.pendingTransactions.slice()
+          : []
+      });
+      return;
     }
 
     if (result.accepted) {
@@ -299,7 +338,8 @@ if (typeof window.AdminRelayCoordinator === 'undefined') {
       this.net.send('transaction-accepted', {
         transaction: result.transaction || tx,
         pendingTransactions: pending,
-        participants: participants
+        participants: participants,
+        verification: result.verification || { valid: true, reason: 'Verified' }
       });
     }
   }

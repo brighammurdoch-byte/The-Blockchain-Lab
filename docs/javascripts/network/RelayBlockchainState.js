@@ -16,6 +16,25 @@ if (typeof window.RelayBlockchainState === 'undefined') {
   /** Median lookback for retarget, displayed pace, and stall-ease. Buffer still stores 20. */
   const RETARGET_INTERVAL_WINDOW = 12;
 
+  function txFundsCover(have, need) {
+    return (Number(have) + 1e-9) >= Number(need);
+  }
+
+  function txFmtCoins(n) {
+    const x = Number(n);
+    if (!Number.isFinite(x)) return '0';
+    if (Math.abs(x - Math.round(x)) < 1e-9) return String(Math.round(x));
+    return String(Math.round(x * 100) / 100);
+  }
+
+  /**
+   * The classroom chain has no keypairs and no account nonce.
+   * Authenticity is the session id you joined with (`submittedBy` must equal `tx.from`).
+   * Replay is the existing transfer id + content fingerprint.
+   * Spendability is confirmed balance minus other pending sends from the same address.
+   * Fees are not part of this model.
+   */
+
   class RelayBlockchainState {
   constructor(roomCode) {
     this.roomCode = roomCode;
@@ -1388,6 +1407,173 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     });
   }
 
+  /**
+   * Structural normalize. Does not check balance or identity.
+   * Returns { ok, reason?, tx? } with the fields the lab actually stores.
+   */
+  static normalizeTransaction(tx) {
+    if (!tx || typeof tx !== 'object') {
+      return { ok: false, reason: 'Empty transaction' };
+    }
+    const from = typeof tx.from === 'string' ? tx.from.trim() : '';
+    const to = typeof tx.to === 'string' ? tx.to.trim() : '';
+    if (!from || !to) {
+      return { ok: false, reason: 'Missing sender or recipient' };
+    }
+    if (from === to) {
+      return { ok: false, reason: 'Cannot send to yourself' };
+    }
+    let amount = NaN;
+    if (typeof tx.amount === 'number') amount = tx.amount;
+    else if (typeof tx.amount === 'string' && tx.amount.trim() !== '') amount = Number(tx.amount);
+    if (!Number.isFinite(amount) || !(amount > 0)) {
+      return { ok: false, reason: 'Amount must be a positive number' };
+    }
+    let timestamp = tx.timestamp;
+    if (timestamp == null || timestamp === '') timestamp = Date.now();
+    else timestamp = Number(timestamp);
+    if (!Number.isFinite(timestamp) || !(timestamp > 0)) {
+      return { ok: false, reason: 'Timestamp must be a positive number' };
+    }
+    let id = tx.id;
+    if (id != null && typeof id !== 'string' && typeof id !== 'number') {
+      return { ok: false, reason: 'Transaction id must be text' };
+    }
+    if (id != null) id = String(id).trim();
+    if (!id) id = from + ':' + to + ':' + String(timestamp);
+    return {
+      ok: true,
+      tx: { from: from, to: to, amount: amount, timestamp: timestamp, id: id }
+    };
+  }
+
+  /**
+   * One transaction, student-readable pass/fail.
+   * ctx.skipBalance — structure / identity / replay only
+   * ctx.requireSubmitter — session id must match tx.from (mempool admission)
+   * ctx.balance — confirmed coins available to the sender
+   * ctx.pendingHeld — other mempool spends already reserved from that sender
+   * ctx.alreadyConfirmed — same transfer is already on the canonical chain
+   */
+  static inspectTransaction(tx, ctx) {
+    ctx = ctx || {};
+    const norm = RelayBlockchainState.normalizeTransaction(tx);
+    const checks = [];
+    if (!norm.ok) {
+      checks.push({ name: 'Structure', pass: false, detail: norm.reason });
+      return { valid: false, reason: norm.reason, checks: checks };
+    }
+    checks.push({ name: 'Structure', pass: true });
+    if (ctx.requireSubmitter) {
+      if (!ctx.submittedBy) {
+        const reason = 'Missing peer identity — this lab ties a transfer to the address you joined with';
+        checks.push({ name: 'Address', pass: false, detail: reason });
+        return { valid: false, reason: reason, transaction: norm.tx, checks: checks };
+      }
+      if (String(ctx.submittedBy) !== norm.tx.from) {
+        const reason = 'You can only spend your own address (this lab has no separate keys — your session id is the account)';
+        checks.push({ name: 'Address', pass: false, detail: reason });
+        return { valid: false, reason: reason, transaction: norm.tx, checks: checks };
+      }
+    }
+    checks.push({ name: 'Address', pass: true });
+    if (ctx.alreadyConfirmed) {
+      const reason = 'Transaction already confirmed (replay)';
+      checks.push({ name: 'Replay', pass: false, detail: reason });
+      return { valid: false, reason: reason, transaction: norm.tx, checks: checks };
+    }
+    checks.push({ name: 'Replay', pass: true });
+    if (ctx.skipBalance) {
+      checks.push({ name: 'Balance', pass: true });
+      return { valid: true, reason: 'Verified', transaction: norm.tx, checks: checks };
+    }
+    const have = Number(ctx.balance);
+    const held = Number(ctx.pendingHeld) || 0;
+    const available = (Number.isFinite(have) ? have : 0) - held;
+    if (!txFundsCover(available, norm.tx.amount)) {
+      let reason = 'Insufficient balance (have ' + txFmtCoins(Number.isFinite(have) ? have : 0) +
+        ', need ' + txFmtCoins(norm.tx.amount);
+      if (held > 0) reason += ', ' + txFmtCoins(held) + ' already waiting in the mempool';
+      reason += ')';
+      checks.push({ name: 'Balance', pass: false, detail: reason });
+      return { valid: false, reason: reason, transaction: norm.tx, checks: checks };
+    }
+    checks.push({ name: 'Balance', pass: true });
+    return { valid: true, reason: 'Verified', transaction: norm.tx, checks: checks };
+  }
+
+  /**
+   * Local miner/wallet preview. Unknown balance skips the spend check
+   * (the hub still re-checks) so a stale roster cannot block a real send.
+   */
+  static precheckSend(tx, ctx) {
+    ctx = ctx || {};
+    const norm = RelayBlockchainState.normalizeTransaction(tx);
+    if (!norm.ok) return { ok: false, reason: norm.reason };
+    let balance = null;
+    (ctx.participants || []).forEach(function (p) {
+      if (!p) return;
+      const id = p.userId || p.address;
+      if (id && id === norm.tx.from && p.balance != null && Number.isFinite(Number(p.balance))) {
+        balance = Number(p.balance);
+      }
+    });
+    let pendingHeld = 0;
+    if (balance != null) {
+      (ctx.pending || []).forEach(function (t) {
+        if (t && t.from === norm.tx.from) pendingHeld += Number(t.amount) || 0;
+      });
+    }
+    const verdict = RelayBlockchainState.inspectTransaction(norm.tx, {
+      requireSubmitter: true,
+      submittedBy: ctx.submittedBy || norm.tx.from,
+      alreadyConfirmed: false,
+      skipBalance: balance == null,
+      balance: balance == null ? 0 : balance,
+      pendingHeld: pendingHeld
+    });
+    return { ok: !!verdict.valid, reason: verdict.reason, transaction: verdict.transaction || norm.tx, checks: verdict.checks };
+  }
+
+  /**
+   * Drop mempool txs the next block should not include.
+   * balanceOf(id) returns a number, or null when the roster has no balance yet
+   * (those txs are kept — the hub re-verifies on inclusion).
+   * Original tx objects are preserved so block hashes match the hub mempool.
+   */
+  static screenMempool(txs, balanceOf) {
+    const running = new Map();
+    const kept = [];
+    const dropped = [];
+    (txs || []).forEach(function (raw) {
+      const norm = RelayBlockchainState.normalizeTransaction(raw);
+      if (!norm.ok) {
+        dropped.push({ transaction: raw, reason: norm.reason });
+        return;
+      }
+      const tx = norm.tx;
+      if (!running.has(tx.from)) {
+        const b = typeof balanceOf === 'function' ? balanceOf(tx.from) : null;
+        running.set(tx.from, (b == null || !Number.isFinite(Number(b))) ? null : Number(b));
+      }
+      const have = running.get(tx.from);
+      if (have == null) {
+        kept.push(raw);
+        return;
+      }
+      if (!txFundsCover(have, tx.amount)) {
+        dropped.push({
+          transaction: tx,
+          reason: 'Insufficient balance (have ' + txFmtCoins(have) + ', need ' + txFmtCoins(tx.amount) + ')'
+        });
+        return;
+      }
+      running.set(tx.from, have - tx.amount);
+      kept.push(raw);
+    });
+    return { kept: kept, dropped: dropped };
+  }
+
   // Main entry point: a miner submitted a block via the relay
   // Returns { accepted, reason?, newHeight?, isFork?, reorg?, tipChanged?, chain? }
   tryAddBlock(block, fromUserId) {
@@ -1483,31 +1669,29 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       }
     }
 
-    // Reject blocks that re-include transfers already confirmed on the *same fork side*.
-    // During a hard fork, classic and NEW are permanent parallel histories — a transfer
-    // on classic must not block the same transfer on NEW (and vice versa).
-    const confirmed = this._confirmedTxIdsForBlock(block);
+    // Re-verify every included transfer (structure, replay, spendability).
+    // The block hash commits to the tx list, so a bad transfer rejects the block.
     const blockTxs = Array.isArray(block.transactions) ? block.transactions : [];
-    const seenInBlock = new Set();
-    for (let i = 0; i < blockTxs.length; i++) {
-      const tx = blockTxs[i];
-      if (this._txMatchesSet(tx, confirmed)) {
+    if (blockTxs.length) {
+      const txCheck = this._verifyIncludedTransactions(block);
+      if (!txCheck.ok) {
+        if (txCheck.dropped && txCheck.dropped.length) {
+          const dropKeys = new Set();
+          txCheck.dropped.forEach((d) => this._addTxKeys(dropKeys, d.transaction));
+          this.pendingTransactions = (this.pendingTransactions || []).filter(
+            (t) => !this._txMatchesSet(t, dropKeys)
+          );
+        }
         return {
           accepted: false,
-          reason: 'Duplicate transaction already on chain',
+          reason: txCheck.reason,
+          txVerificationFailed: true,
+          droppedTransactions: txCheck.dropped || [],
+          pendingTransactions: (this.pendingTransactions || []).slice(),
           chain: this.chain.slice(),
           newHeight: Math.max(0, this.chain.length - 1)
         };
       }
-      if (this._txMatchesSet(tx, seenInBlock)) {
-        return {
-          accepted: false,
-          reason: 'Duplicate transaction within block',
-          chain: this.chain.slice(),
-          newHeight: Math.max(0, this.chain.length - 1)
-        };
-      }
-      this._addTxKeys(seenInBlock, tx);
     }
 
     const oldTip = this.chain[this.chain.length - 1] || null;
@@ -1633,7 +1817,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       droppedTransactions = rq.dropped || [];
     }
 
-    // Drop confirmed mempool txs whenever the canonical tip moves
+    // Drop confirmed mempool txs whenever the canonical tip moves.
+    // Do this before the spendability sweep so a transfer that just confirmed
+    // is not reported as an insufficient-balance drop.
     if (onBest) {
       if (typeof this.clearIncludedTransactions === 'function') {
         this.clearIncludedTransactions(block);
@@ -1641,6 +1827,10 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       if (typeof this.purgeConfirmedFromMempool === 'function') {
         this.purgeConfirmedFromMempool();
       }
+    }
+    const purgedPending = this._dropUnspendablePending();
+    if (purgedPending.length) {
+      droppedTransactions = droppedTransactions.concat(purgedPending);
     }
 
     // Classroom pacing: retarget difficulty toward target block time
@@ -1721,30 +1911,226 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     if (size <= maxBytes) return Object.assign({ chain: chain, chainTruncated: false }, meta);
     return Object.assign({ chain: chain.slice(-20), chainTruncated: true }, meta);
   }
-  tryAddTransaction(tx) {
-    if (!tx) return { accepted: false, reason: 'Empty transaction' };
-    // Normalize shape
-    const normalized = {
-      from: tx.from,
-      to: tx.to,
-      amount: Number(tx.amount),
-      timestamp: tx.timestamp || Date.now(),
-      id: tx.id || (String(tx.from || '') + ':' + String(tx.to || '') + ':' + String(tx.timestamp || Date.now()))
+  /** Confirmed balance, or the wallet endowment for a not-yet-seen address. */
+  _accountBalance(userId, unknownIsWallet) {
+    const p = this.participants.get(userId);
+    if (p) {
+      const b = Number(p.balance);
+      return Number.isFinite(b) ? b : 0;
+    }
+    return unknownIsWallet ? RelayBlockchainState.defaultEndowmentForRole('wallet') : 0;
+  }
+
+  _pendingReserved(fromUserId) {
+    let sum = 0;
+    (this.pendingTransactions || []).forEach(function (t) {
+      if (!t || t.from !== fromUserId) return;
+      const n = Number(t.amount);
+      if (n > 0) sum += n;
+    });
+    return sum;
+  }
+
+  /**
+   * Replay balances the same way `_recomputeMiningRewards` does, without
+   * writing participant rows. Endowment is applied at the end.
+   */
+  _balancesForChain(blocks) {
+    const bal = new Map();
+    const endow = new Map();
+
+    const seed = (id, asRole) => {
+      if (bal.has(id)) return;
+      bal.set(id, 0);
+      endow.set(id, RelayBlockchainState.defaultEndowmentForRole(asRole));
     };
-    if (!normalized.from || !normalized.to || !(normalized.amount > 0)) {
-      return { accepted: false, reason: 'Invalid transaction' };
+
+    this.participants.forEach((p, id) => {
+      bal.set(id, 0);
+      const r = p.role || 'miner';
+      let e = Number(p.endowment) || 0;
+      if (!e) e = RelayBlockchainState.defaultEndowmentForRole(r);
+      endow.set(id, e);
+    });
+
+    const seen = new Set();
+    (blocks || []).forEach((block) => {
+      if (!block) return;
+      if (block.miner && block.miner !== 'genesis') {
+        const minerId = block.miner;
+        if (!bal.has(minerId)) seed(minerId, 'miner');
+        const height = block.index != null ? Number(block.index) : 0;
+        bal.set(minerId, (bal.get(minerId) || 0) + this.blockSubsidyAt(height));
+      }
+      const txs = Array.isArray(block.transactions) ? block.transactions : [];
+      txs.forEach((tx) => {
+        if (!tx) return;
+        const from = tx.from;
+        const to = tx.to;
+        const amount = Number(tx.amount);
+        if (!from || !to || !(amount > 0)) return;
+        if (this._txMatchesSet(tx, seen)) return;
+        this._addTxKeys(seen, tx);
+        if (!bal.has(from)) seed(from, 'wallet');
+        if (!bal.has(to)) seed(to, 'wallet');
+        bal.set(from, (bal.get(from) || 0) - amount);
+        bal.set(to, (bal.get(to) || 0) + amount);
+      });
+    });
+
+    endow.forEach((e, id) => {
+      if (e > 0) bal.set(id, (bal.get(id) || 0) + e);
+    });
+    return bal;
+  }
+
+  /** Balances just before `block`'s transactions, including its own subsidy. */
+  _balancesBeforeBlock(block) {
+    let parentBlocks = [];
+    if (block && block.previousHash && block.previousHash !== '0') {
+      const parentPath = this._pathToGenesis(block.previousHash);
+      parentBlocks = parentPath || (this.chain || []);
+    } else if (this.chain && this.chain[0]) {
+      parentBlocks = [this.chain[0]];
     }
-    // Already confirmed on chain — never re-enter mempool
+    const running = this._balancesForChain(parentBlocks);
+    if (block && block.miner && block.miner !== 'genesis') {
+      const height = block.index != null ? Number(block.index) : parentBlocks.length;
+      const cur = running.has(block.miner) ? running.get(block.miner) : 0;
+      running.set(block.miner, cur + this.blockSubsidyAt(height));
+    }
+    return running;
+  }
+
+  /**
+   * Full check of transactions inside a block. Replay order matches chain
+   * recompute: subsidy first, then each transfer in order (a later tx may
+   * spend coins received earlier in the same block).
+   */
+  _verifyIncludedTransactions(block) {
+    const blockTxs = Array.isArray(block.transactions) ? block.transactions : [];
+    const confirmed = this._confirmedTxIdsForBlock(block);
+    const seenInBlock = new Set();
+    const normalized = [];
+    for (let i = 0; i < blockTxs.length; i++) {
+      const inspected = RelayBlockchainState.inspectTransaction(blockTxs[i], { skipBalance: true });
+      if (!inspected.valid) {
+        return {
+          ok: false,
+          reason: 'Transaction ' + (i + 1) + ' failed verification: ' + inspected.reason,
+          dropped: [{ transaction: blockTxs[i], reason: inspected.reason }]
+        };
+      }
+      const tx = inspected.transaction;
+      if (this._txMatchesSet(tx, confirmed)) {
+        return {
+          ok: false,
+          reason: 'Duplicate transaction already on chain',
+          dropped: [{ transaction: tx, reason: 'Transaction already confirmed (replay)' }]
+        };
+      }
+      if (this._txMatchesSet(tx, seenInBlock)) {
+        return {
+          ok: false,
+          reason: 'Duplicate transaction within block',
+          dropped: []
+        };
+      }
+      this._addTxKeys(seenInBlock, tx);
+      normalized.push(tx);
+    }
+
+    const balances = this._balancesBeforeBlock(block);
+    for (let i = 0; i < normalized.length; i++) {
+      const tx = normalized[i];
+      if (!balances.has(tx.from)) {
+        balances.set(tx.from, RelayBlockchainState.defaultEndowmentForRole('wallet'));
+      }
+      const have = balances.get(tx.from);
+      if (!txFundsCover(have, tx.amount)) {
+        const reason = 'Insufficient balance (have ' + txFmtCoins(have) + ', need ' + txFmtCoins(tx.amount) + ')';
+        return {
+          ok: false,
+          reason: 'Transaction ' + (i + 1) + ' failed verification: ' + reason,
+          dropped: [{ transaction: tx, reason: reason }]
+        };
+      }
+      balances.set(tx.from, have - tx.amount);
+      if (!balances.has(tx.to)) {
+        balances.set(tx.to, RelayBlockchainState.defaultEndowmentForRole('wallet'));
+      }
+      balances.set(tx.to, (balances.get(tx.to) || 0) + tx.amount);
+    }
+    return { ok: true };
+  }
+
+  /** Remove mempool txs that no longer fit confirmed balances (in list order). */
+  _dropUnspendablePending() {
+    const dropped = [];
+    const kept = [];
+    const used = {};
+    (this.pendingTransactions || []).forEach((tx) => {
+      if (!tx || !tx.from) {
+        dropped.push({ transaction: tx, reason: 'Empty transaction' });
+        return;
+      }
+      const have = this._accountBalance(tx.from, false);
+      const held = used[tx.from] || 0;
+      if (txFundsCover(have - held, Number(tx.amount))) {
+        kept.push(tx);
+        used[tx.from] = held + Number(tx.amount);
+      } else {
+        dropped.push({
+          transaction: tx,
+          reason: 'Insufficient balance (have ' + txFmtCoins(have) + ', need ' + txFmtCoins(tx.amount) + ')'
+        });
+      }
+    });
+    this.pendingTransactions = kept;
+    return dropped;
+  }
+
+  tryAddTransaction(tx, opts) {
+    opts = opts || {};
+    const draft = RelayBlockchainState.normalizeTransaction(tx);
+    if (!draft.ok) {
+      return {
+        accepted: false,
+        reason: draft.reason,
+        verification: { valid: false, reason: draft.reason, checks: [{ name: 'Structure', pass: false, detail: draft.reason }] }
+      };
+    }
+    const normalized = draft.tx;
     if (this._txMatchesSet(normalized, this._confirmedTxIds())) {
-      return { accepted: false, reason: 'Transaction already confirmed' };
+      const reason = 'Transaction already confirmed (replay)';
+      return {
+        accepted: false,
+        reason: reason,
+        transaction: normalized,
+        verification: { valid: false, reason: reason, checks: [{ name: 'Replay', pass: false, detail: reason }] }
+      };
     }
-    // Dedupe in mempool
     if (this.pendingTransactions.some((t) => this._txMatchesSet(normalized, new Set(this._txAllKeys(t))))) {
-      return { accepted: true, duplicate: true };
+      return { accepted: true, duplicate: true, transaction: normalized };
     }
-    this.pendingTransactions.push(normalized);
+    const verdict = RelayBlockchainState.inspectTransaction(normalized, {
+      requireSubmitter: !!opts.requireSubmitter,
+      submittedBy: opts.submittedBy,
+      alreadyConfirmed: this._txMatchesSet(normalized, this._confirmedTxIds()),
+      balance: this._accountBalance(normalized.from, !opts.requireSubmitter),
+      pendingHeld: this._pendingReserved(normalized.from)
+    });
+    if (!verdict.valid) {
+      return {
+        accepted: false,
+        reason: verdict.reason,
+        transaction: verdict.transaction || normalized,
+        verification: verdict
+      };
+    }
+    this.pendingTransactions.push(verdict.transaction);
     this.networkStats.totalTransactions = (this.networkStats.totalTransactions || 0) + 1;
-    return { accepted: true, transaction: normalized };
+    return { accepted: true, transaction: verdict.transaction, verification: verdict };
   }
 
   /** Remove mempool txs that were included in a newly accepted block */
@@ -1820,14 +2206,14 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       const sender = this.participants.get(tx.from);
       const bal = sender ? (Number(sender.balance) || 0) : 0;
       const used = reserved[tx.from] || 0;
-      if (bal - used >= tx.amount) {
+      if (txFundsCover(bal - used, tx.amount)) {
         this.pendingTransactions.push(tx);
         reserved[tx.from] = used + tx.amount;
         restored.push(tx);
       } else {
         dropped.push({
           transaction: tx,
-          reason: 'insufficient-balance'
+          reason: 'Insufficient balance (have ' + txFmtCoins(bal - used) + ', need ' + txFmtCoins(tx.amount) + ')'
         });
       }
     });

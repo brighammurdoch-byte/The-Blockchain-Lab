@@ -780,6 +780,65 @@
   };
 
   /**
+   * Mempool verification log shared by admin, miner, and wallet pages.
+   * Pass rows live in the mempool table; this list is the latest pass/fail.
+   */
+  var txVerifyEvents = [];
+  var txVerifySeen = {};
+
+  function txVerifyEnsureHost() {
+    if (typeof document === 'undefined') return null;
+    var host = document.getElementById('txVerificationLog');
+    if (host) return host;
+    var body = document.getElementById('pendingTransactions');
+    var panel = body && body.closest ? body.closest('.panel-body') : null;
+    if (!panel) return null;
+    host = document.createElement('div');
+    host.id = 'txVerificationLog';
+    host.className = 'small';
+    host.style.marginTop = '8px';
+    host.innerHTML = '<p class="text-muted" id="txVerificationHint" style="margin:0;">Nodes check structure, your own address, balance, and replay before a transaction is accepted.</p><div id="txVerificationEvents"></div>';
+    panel.appendChild(host);
+    return host;
+  }
+
+  function txVerifyPaint() {
+    txVerifyEnsureHost();
+    var list = typeof document !== 'undefined' && document.getElementById('txVerificationEvents');
+    if (!list) return;
+    if (!txVerifyEvents.length) {
+      list.innerHTML = '';
+      return;
+    }
+    list.innerHTML = txVerifyEvents.map(function (e) {
+      var cls = e.ok ? 'label-success' : 'label-danger';
+      var label = e.ok ? 'Pass' : 'Fail';
+      return '<div style="margin-top:4px;"><span class="label ' + cls + '">' + label + '</span> ' +
+        escapeHtml(e.reason || (e.ok ? 'Verified' : 'Rejected')) + '</div>';
+    }).join('');
+  }
+
+  function txVerifyNote(entry) {
+    entry = entry || {};
+    var reason = entry.reason || (entry.ok ? 'Verified' : 'Transaction rejected');
+    var tx = entry.tx || {};
+    var key = (entry.ok ? '1' : '0') + '|' + reason + '|' + (tx.id || '') + '|' + (tx.from || '') + '|' + (tx.amount || '');
+    var now = Date.now();
+    if (txVerifySeen[key] && now - txVerifySeen[key] < 8000) return false;
+    txVerifySeen[key] = now;
+    txVerifyEvents.unshift({ ok: !!entry.ok, reason: reason });
+    if (txVerifyEvents.length > 6) txVerifyEvents.length = 6;
+    txVerifyPaint();
+    return true;
+  }
+
+  window.TxVerify = {
+    note: txVerifyNote,
+    paint: txVerifyPaint,
+    ensureHost: txVerifyEnsureHost
+  };
+
+  /**
    * Classroom fork roster: who is on Canonical vs Attack (51%),
    * or Classic vs the proposed hard-fork flavor. Simple lists, no viz.
    */

@@ -418,9 +418,15 @@ const Relay = loadRelay();
   lab.updateSettings({ difficultyLeading: 1, difficultySecondary: 15, autoDifficulty: false });
   lab.addOrUpdateParticipant('broke', 'miner', { endowment: 0, balance: 0 });
   const genesis = lab.chain[0];
+  // The spend is valid only because this block's subsidy pays for it.
+  // A longer fork removes that reward, so the transfer must come back with a reason.
   const tx = { id: 'tx-broke', from: 'broke', to: 'miner-2', amount: 5, timestamp: 5000 };
-  const b1 = makeBlock(1, '0000d1', genesis.hash, { miner: 'miner-3', transactions: [tx] });
-  lab.tryAddBlock(b1, 'miner-3');
+  const b1 = makeBlock(1, '0000d1', genesis.hash, { miner: 'broke', transactions: [tx] });
+  const included = lab.tryAddBlock(b1, 'broke');
+  if (!included.accepted) {
+    fail('Unspendable reorged tx is dropped with a reason', 'including block rejected: ' + included.reason);
+    return;
+  }
   const c1 = makeBlock(1, '0000e1', genesis.hash, { miner: 'miner-1', transactions: [] });
   lab.tryAddBlock(c1, 'miner-1');
   const c2 = makeBlock(2, '0000e2', c1.hash, { miner: 'miner-1', transactions: [] });

@@ -156,7 +156,7 @@ block content
                   |  
                   span.label.label-default#mempoolCountBadge 0
               .panel-body(style="max-height: 280px; overflow-y: auto;")
-                p.small.text-muted(style="margin-top:0;") Pending transactions shared with the whole class — include these when you mine.
+                p.small.text-muted(style="margin-top:0;") Pending transactions shared with the whole class — include these when you mine. Nodes verify structure, your own address, balance, and replay before a transfer is accepted.
                 table.table.table-striped.table-hover(style="margin-bottom:0;")
                   thead
                     tr
@@ -164,9 +164,12 @@ block content
                       th To
                       th Amount
                       th Time
+                      th Check
                   tbody#pendingTransactions
                     tr
-                      td(colspan="4").text-center.text-muted No pending transactions
+                      td(colspan="5").text-center.text-muted No pending transactions
+                #txVerificationLog.small(style="margin-top:6px;")
+                  #txVerificationEvents
 
             .panel.panel-default
               .panel-heading
@@ -320,13 +323,13 @@ block content
   script(src="/javascripts/network/SimulatedAdminRelayTransport.js?v=fixrelay")
   script(src="/javascripts/network/MqttAdminRelayTransport.js?v=p2fix1")
   script(src="/javascripts/network/P2PAdminRelayTransport.js?v=tiphb1")
-  script(src="/javascripts/network/AdminRelayCoordinator.js?v=p4fix12")
+  script(src="/javascripts/network/AdminRelayCoordinator.js?v=p4fix13")
   script(src="/javascripts/network/Persistence.js?v=p4fix9")
-  script(src="/javascripts/network/RelayBlockchainState.js?v=forkroster1")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=p4fix13")
   script(src="/javascripts/network/NetworkManager.js?v=p4fix5")
   script(src="/javascripts/lab/sessionProbe.js?v=p1fix1")
-  script(src="/javascripts/lab/chainDisplay.js?v=forkroster1")
-  script(src="/javascripts/lab/participate.js?v=hardfork1")
+  script(src="/javascripts/lab/chainDisplay.js?v=p4fix13")
+  script(src="/javascripts/lab/participate.js?v=p4fix13")
   
   script.
     // Do not redeclare sessionId — participate.js already owns that binding.
