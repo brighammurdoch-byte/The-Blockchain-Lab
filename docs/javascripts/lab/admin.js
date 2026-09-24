@@ -1225,7 +1225,11 @@ function setupEventHandlers() {
       halvingInterval: (relayState && relayState.settings && relayState.settings.halvingInterval) || 21
     };
 
+    var priorNetworkMode = networkMode;
     networkMode = selectedMode;
+    if (selectedMode === 'p2p' && priorNetworkMode !== 'p2p' && priorNetworkMode !== 'real-p2p' && priorNetworkMode !== 'mesh') {
+      try { if (window.LabTelemetry) LabTelemetry.event('network_mode_p2p'); } catch (eTel) {}
+    }
     localStorage.setItem('networkingMode_' + (net && net.roomCode ? net.roomCode : sessionId), selectedMode);
     if (net && typeof net.setRoutingMode === 'function') {
       net.setRoutingMode(selectedMode);
@@ -1850,6 +1854,7 @@ function startTeamCollusionAttack(blocksBack) {
 
   // Event name miners actually listen for
   net.send('team-attack-started', payload);
+  try { if (window.LabTelemetry) LabTelemetry.event('attack_51'); } catch (eTel) {}
   if (typeof broadcastParticipantsRoster === 'function') broadcastParticipantsRoster();
 
   // Hashrate stats for projector
@@ -1941,6 +1946,7 @@ function proposeHardFork(name, height) {
   }
 
   net.send('hard-fork-proposed', { height: h, name: n });
+  try { if (window.LabTelemetry) LabTelemetry.event('hard_fork'); } catch (eTel) {}
   if (typeof broadcastParticipantsRoster === 'function') broadcastParticipantsRoster();
   if (typeof paintAdminForkRoster === 'function') paintAdminForkRoster();
 

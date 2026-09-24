@@ -6,6 +6,8 @@
  */
 
 $(document).ready(function () {
+  try { if (window.LabTelemetry) LabTelemetry.event('page_lab_landing'); } catch (eTel) {}
+
   var chainFlavor = (window.LabPaths && LabPaths.getChainFlavor)
     ? LabPaths.getChainFlavor()
     : 'classic';
@@ -145,6 +147,7 @@ $(document).ready(function () {
         persistClassroomItem('adminUserId_' + roomCode, net.userId, roomCode);
       }
       try { net.disconnect(); } catch (e) {}
+      try { if (window.LabTelemetry) LabTelemetry.event('session_created'); } catch (eTel) {}
       go('admin', roomCode);
     }).catch(function (err) {
       console.error(err);
@@ -208,6 +211,13 @@ $(document).ready(function () {
       if (window.LabPaths && LabPaths.persistChainFlavor) {
         LabPaths.persistChainFlavor(code, chainFlavor);
       }
+      try {
+        if (window.LabTelemetry) {
+          LabTelemetry.event('student_joined');
+          if (role === 'wallet') LabTelemetry.event('role_wallet');
+          else if (role === 'miner') LabTelemetry.event('role_miner');
+        }
+      } catch (eTel) {}
       go(role === 'wallet' ? 'observe' : 'participate', code, tabId);
     }).catch(function (err) {
       if (joinAttempt.cancelled || (err && err.cancelled)) {
