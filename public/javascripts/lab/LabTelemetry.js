@@ -1,11 +1,13 @@
 /**
  * Cookieless classroom analytics (GoatCounter).
  *
- * Set GOATCOUNTER_CODE to the site code from https://www.goatcounter.com
- * (the subdomain in https://CODE.goatcounter.com). Leave it '' to send
- * nothing — do not commit a placeholder code.
+ * GOATCOUNTER_CODE is the site code (the subdomain in
+ * https://CODE.goatcounter.com). The current site is brighammurdoch:
+ *   https://brighammurdoch.goatcounter.com/count
+ * Set the constant to '' to send nothing. An empty value does not load
+ * count.js.
  *
- *   public/javascripts/lab/LabTelemetry.js  →  var GOATCOUNTER_CODE = '';
+ *   public/javascripts/lab/LabTelemetry.js  →  var GOATCOUNTER_CODE = 'brighammurdoch';
  *
  * Then run `npm run build:static` so GitHub Pages serves the update.
  *
@@ -13,7 +15,7 @@
  *   ?telemetryDebug=1   remembered for this tab
  *   localStorage.setItem('telemetryDebug', '1')
  */
-var GOATCOUNTER_CODE = '';
+var GOATCOUNTER_CODE = 'brighammurdoch';
 
 (function (global) {
   'use strict';
@@ -214,7 +216,7 @@ var GOATCOUNTER_CODE = '';
 
       var script = global.document.createElement('script');
       script.async = true;
-      script.src = 'https://gc.zgo.at/count.js';
+      script.src = '//gc.zgo.at/count.js';
       script.setAttribute('data-goatcounter', 'https://' + siteCode + '.goatcounter.com/count');
       script.onerror = function () {};
       script.onload = function () {
