@@ -1,5 +1,6 @@
-----
 # The Blockchain Lab - Educational Blockchain Network
+
+**Try it live:** [The Blockchain Lab](https://brighammurdoch-byte.github.io/The-Blockchain-Lab/lab/index.html) — no install needed; instructors click Create Session, students join with the code.
 
 ## Overview
 
@@ -53,7 +54,7 @@ The lab coordinates **in the browser**. Two topologies (switchable on the admin 
 
 **How to use in class (GitHub Pages):**
 1. Build static site: `npm run build:static` → enable Pages from `/docs` (see [INSTRUCTOR_GUIDE.md](INSTRUCTOR_GUIDE.md)).
-2. Open the Pages lab URL on the instructor laptop → **Create Session**.
+2. Open the [Pages lab URL](https://brighammurdoch-byte.github.io/The-Blockchain-Lab/lab/index.html) on the instructor laptop → **Create Session**. Forks can host their own via `npm run build:static`.
 3. Share the 6-character code. Students join as Miner or Wallet.
 4. Keep the instructor tab open. Optional: switch Network Mode to Full P2P.
 
