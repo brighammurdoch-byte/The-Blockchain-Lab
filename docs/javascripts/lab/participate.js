@@ -2907,7 +2907,11 @@ function setupEventHandlers() {
       showToastNotification('Mining switch ON — will start when the network resumes', 'info');
       return;
     }
+    var startingMine = !isMining;
     startMining();
+    if (startingMine) {
+      try { if (window.LabTelemetry) LabTelemetry.event('mining_started'); } catch (eTel) {}
+    }
   });
   
   $('#stopMineBtn').click(function() {

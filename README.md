@@ -60,6 +60,18 @@ The lab coordinates **in the browser**. Two topologies (switchable on the admin 
 
 **Local prep:** `npm start` → `http://localhost:3000/lab` (Express only serves files; simulation stays client-side).
 
+## Analytics / privacy
+
+The live lab records cookieless usage counts with [GoatCounter](https://www.goatcounter.com/). The configured site code is `brighammurdoch`. If `GOATCOUNTER_CODE` is empty, nothing is sent.
+
+**Collected** (counts only): page views on the landing and lab pages, plus `page_lab_landing`, `session_created`, `student_joined`, `role_miner`, `role_wallet`, `mining_started`, `network_mode_p2p`, `attack_51`, and `hard_fork`.
+
+**Never collected**: cookies, join codes, room ids, user ids, names, chain tips, balances, hashes, peer lists, or page URLs that include a session code or student id. Event names outside that list are dropped.
+
+**Site code**: `GOATCOUNTER_CODE` in `public/javascripts/lab/LabTelemetry.js` is currently `brighammurdoch` (endpoint `https://brighammurdoch.goatcounter.com/count`). Set that constant to `''` to send nothing. Run `npm run build:static` after changing it so GitHub Pages serves the update.
+
+**Debug** (prints each event name in the console, even with no site code): open the page with `?telemetryDebug=1` (remembered for that tab), or run `localStorage.setItem('telemetryDebug', '1')`.
+
 ## Getting Started
 
 ### Installation
