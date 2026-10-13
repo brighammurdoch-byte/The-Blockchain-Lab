@@ -115,6 +115,9 @@ function main() {
   fs.writeFileSync(path.join(PUBLIC, 'data', 'demos.json'), demoJson);
   fs.writeFileSync(path.join(PUBLIC, 'data', 'validator-code.json'), JSON.stringify(validatorJson));
 
+  writeFile('attack-sim.html', renderLabPage('attack-sim.pug', { title: '51% Attack Simulator', page: 'attack-sim' }));
+  writeFile('attack-sim/index.html', renderLabPage('attack-sim.pug', { title: '51% Attack Simulator', page: 'attack-sim' }));
+
   writeFile('lab/index.html', renderLabPage('lab/index.pug', { title: 'Blockchain Lab' }));
   writeFile('lab/admin.html', renderLabPage('lab/admin.pug', { title: 'Blockchain Lab - Admin', sessionId: '' }));
   writeFile('lab/participate.html', renderLabPage('lab/participate.pug', { title: 'Blockchain Lab - Miner', sessionId: '' }));
