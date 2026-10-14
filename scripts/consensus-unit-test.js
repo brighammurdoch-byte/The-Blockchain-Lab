@@ -40,6 +40,21 @@ function fail(n, d) { results.push({ ok: false, n, d }); console.log('FAIL  ' + 
 const Relay = loadRelay();
 const Eth = loadEth();
 
+function sealBlock(block) {
+  let nonce = 0;
+  let hash = '';
+  for (; nonce < 200000; nonce++) {
+    block.nonce = nonce;
+    hash = Relay.hashBlock(block);
+    if (Relay.prototype.hashMeetsDifficulty(hash, 1, 15)) break;
+  }
+  if (!Relay.prototype.hashMeetsDifficulty(hash, 1, 15)) {
+    throw new Error('fixture nonce search failed');
+  }
+  block.hash = hash;
+  return block;
+}
+
 // --- 5. Double-include ---
 (function () {
   const lab = new Relay('UNIT');
@@ -48,15 +63,15 @@ const Eth = loadEth();
 
   const tx = { id: 'tx-1', from: 'wallet-a', to: 'miner-b', amount: 5, timestamp: 1000 };
   const genesis = lab.chain[0];
-  const block1 = {
+  const block1 = sealBlock({
     index: 1,
-    hash: '0abc',
     previousHash: genesis.hash,
     timestamp: Date.now(),
-    nonce: 1,
+    nonce: 0,
     transactions: [tx],
-    miner: 'miner-3'
-  };
+    miner: 'miner-3',
+    difficulty: 1
+  });
   const r1 = lab.tryAddBlock(block1, 'miner-3');
   if (!r1.accepted) {
     fail('First include accepted', r1.reason);
@@ -64,15 +79,15 @@ const Eth = loadEth();
   }
   pass('First include accepted', 'height ' + r1.newHeight);
 
-  const block2 = {
+  const block2 = sealBlock({
     index: 2,
-    hash: '0def',
     previousHash: block1.hash,
     timestamp: Date.now() + 10,
-    nonce: 2,
+    nonce: 0,
     transactions: [{ from: 'wallet-a', to: 'miner-b', amount: 5, timestamp: 1000 }],
-    miner: 'miner-2'
-  };
+    miner: 'miner-2',
+    difficulty: 1
+  });
   const r2 = lab.tryAddBlock(block2, 'miner-2');
   if (r2.accepted) fail('Second include rejected (same content, no id)', 'accepted');
   else pass('Second include rejected (same content, no id)', r2.reason);

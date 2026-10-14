@@ -86,24 +86,40 @@ function scripted(values) {
 
 (function hubLimit() {
   const state = new Relay('LIMIT');
-  state.updateSettings({ autoDifficulty: false, difficultyLeading: 4, difficultySecondary: 15 });
+  state.updateSettings({ autoDifficulty: false, difficultyLeading: 1, difficultySecondary: 15 });
   state.ensureGenesis();
   let seq = 1;
+  function seal(fields) {
+    const block = Object.assign({
+      timestamp: seq,
+      nonce: 0,
+      transactions: [],
+      difficulty: 1
+    }, fields);
+    let nonce = 0;
+    let hash = '';
+    for (; nonce < 200000; nonce++) {
+      block.nonce = nonce;
+      hash = Relay.hashBlock(block);
+      if (Relay.prototype.hashMeetsDifficulty(hash, 1, 15)) break;
+    }
+    if (!Relay.prototype.hashMeetsDifficulty(hash, 1, 15)) {
+      throw new Error('fixture nonce search failed');
+    }
+    block.hash = hash;
+    seq += 1;
+    return block;
+  }
   function addHonest() {
     const tip = state.chain[state.chain.length - 1];
-    const block = {
+    return state.tryAddBlock(seal({
       index: tip.index + 1,
       previousHash: tip.hash,
-      hash: '0000' + String(seq++).padStart(60, '0'),
-      timestamp: 1,
-      nonce: seq,
-      transactions: [],
-      miner: 'honest',
-      difficulty: 4
-    };
-    return state.tryAddBlock(block, 'honest');
+      miner: 'honest'
+    }), 'honest');
   }
-  for (let i = 0; i < 8; i++) {
+  // Tip must sit 11 above some parent: the hub rejects tipIndex - parentIndex > 10.
+  for (let i = 0; i < 12; i++) {
     const r = addHonest();
     if (!r.accepted) {
       fail('Honest pre-chain accepted', r.reason);
@@ -113,27 +129,22 @@ function scripted(values) {
   const tip = state.chain[state.chain.length - 1];
   function onParent(behind) {
     const parent = state.chain[state.chain.length - 1 - behind];
-    return state.tryAddBlock({
+    return state.tryAddBlock(seal({
       index: parent.index + 1,
       previousHash: parent.hash,
-      hash: '0000' + String(seq++).padStart(60, '0'),
-      timestamp: 1,
-      nonce: seq,
-      transactions: [],
-      miner: 'attacker',
-      difficulty: 4
-    }, 'attacker');
+      miner: 'attacker'
+    }), 'attacker');
   }
-  const stale = onParent(5);
+  const stale = onParent(11);
   if (!stale.accepted && /stale parent/i.test(stale.reason || '')) {
-    pass('Hub rejects a parent 5 behind', stale.reason);
-  } else fail('Hub rejects a parent 5 behind', JSON.stringify(stale.accepted) + ' ' + stale.reason);
+    pass('Hub rejects a parent 11 behind', stale.reason);
+  } else fail('Hub rejects a parent 11 behind', JSON.stringify(stale.accepted) + ' ' + stale.reason);
 
   const ok = onParent(4);
   if (ok.accepted) pass('Hub still accepts a parent 4 behind', 'tip ' + tip.index);
   else fail('Hub still accepts a parent 4 behind', ok.reason);
 
-  if (Sim.STALE_GAP === 5 && Sim.STALE_PARENT_LIMIT === 4) {
+  if (Sim.STALE_GAP === 11 && Sim.STALE_PARENT_LIMIT === 10) {
     pass('Simulator gap matches the hub rule', 'stop at ' + Sim.STALE_GAP);
   } else fail('Simulator gap matches the hub rule', Sim.STALE_GAP + '/' + Sim.STALE_PARENT_LIMIT);
 })();
@@ -183,17 +194,18 @@ function scripted(values) {
     pass('Smaller give-up quits before the hub wall', early.reason);
   } else fail('Smaller give-up quits before the hub wall', JSON.stringify(early));
 
+  // Gap starts at 1. Ten honest finds reach gap 11, then the loop stops before another draw.
   const deepDraws = [];
-  for (let i = 0; i < 4; i++) deepDraws.push(0.4, 0.99);
+  for (let i = 0; i < 10; i++) deepDraws.push(0.4, 0.99);
   const deep = Sim.runTrial(base({
     share: 0.3,
     back: 1,
     giveUp: 20,
     rnd: scripted(deepDraws)
   }));
-  if (!deep.ok && deep.reason === 'Fell 5 behind' && deep.stopAt === 5 && deep.honestBlocks === 4) {
-    pass('Give-up past 5 still dies on the stale-parent wall', deep.reason);
-  } else fail('Give-up past 5 still dies on the stale-parent wall', JSON.stringify(deep));
+  if (!deep.ok && deep.reason === 'Fell 11 behind' && deep.stopAt === 11 && deep.honestBlocks === 10) {
+    pass('Give-up past the wall still dies on the stale-parent wall', deep.reason);
+  } else fail('Give-up past the wall still dies on the stale-parent wall', JSON.stringify(deep));
 
   // Tie at equal height is not a win (hub keeps the first-seen chain).
   const tie = Sim.runTrial(base({
