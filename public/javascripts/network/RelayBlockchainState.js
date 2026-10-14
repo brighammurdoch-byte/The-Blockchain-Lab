@@ -13,8 +13,203 @@
  */
 
 if (typeof window.RelayBlockchainState === 'undefined') {
+  if (
+    (typeof LabBlockHash === 'undefined' || !LabBlockHash || typeof LabBlockHash.hashBlock !== 'function') &&
+    !(typeof window !== 'undefined' && window.LabBlockHash && typeof window.LabBlockHash.hashBlock === 'function')
+  ) {
+/**
+ * Canonical block digest shared by the miner and the hub.
+ *
+ * mineBatch hashes this field set, with keys sorted recursively, then SHA-256.
+ * Synchronous on purpose: tryAddBlock cannot wait on WebCrypto subtle.digest.
+ * CryptoJS.SHA256 (the classroom miner) when it is already loaded; otherwise
+ * the same UTF-8 SHA-256, so node tests and the hub agree.
+ */
+(function (root) {
+  'use strict';
+
+  function canonicalizeObject(obj) {
+    if (Array.isArray(obj)) {
+      return obj.map(function (item) {
+        return canonicalizeObject(item);
+      });
+    }
+    if (obj !== null && typeof obj === 'object') {
+      var sorted = {};
+      Object.keys(obj).sort().forEach(function (key) {
+        sorted[key] = canonicalizeObject(obj[key]);
+      });
+      return sorted;
+    }
+    return obj;
+  }
+
+  /** Same properties miningWorker.js mineBatch puts in blockObj. */
+  function blockFieldsForHash(block) {
+    block = block || {};
+    return {
+      index: block.index,
+      timestamp: block.timestamp,
+      nonce: block.nonce,
+      previousHash: block.previousHash,
+      transactions: block.transactions,
+      miner: block.miner,
+      difficulty: block.difficulty,
+      forkId: block.forkId
+    };
+  }
+
+  function utf8Bytes(str) {
+    var out = [];
+    var s = String(str);
+    var i;
+    for (i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (c < 0x80) {
+        out.push(c);
+      } else if (c < 0x800) {
+        out.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
+      } else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+        var c2 = s.charCodeAt(++i);
+        var u = 0x10000 + ((c & 0x3ff) << 10) + (c2 & 0x3ff);
+        out.push(
+          0xf0 | (u >> 18),
+          0x80 | ((u >> 12) & 0x3f),
+          0x80 | ((u >> 6) & 0x3f),
+          0x80 | (u & 0x3f)
+        );
+      } else {
+        out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
+      }
+    }
+    return out;
+  }
+
+  function rotr(x, n) {
+    return (x >>> n) | (x << (32 - n));
+  }
+
+  var K = null;
+  var H0 = null;
+
+  function initConstants() {
+    if (K) return;
+    K = new Array(64);
+    H0 = new Array(8);
+    var prime = [];
+    var isComposite = {};
+    var c;
+    for (c = 2; prime.length < 64; c++) {
+      if (isComposite[c]) continue;
+      var m;
+      for (m = c * c; m < 320; m += c) isComposite[m] = 1;
+      prime.push(c);
+    }
+    for (c = 0; c < 8; c++) H0[c] = (Math.pow(prime[c], 0.5) * 4294967296) | 0;
+    for (c = 0; c < 64; c++) K[c] = (Math.pow(prime[c], 1 / 3) * 4294967296) | 0;
+  }
+
+  function sha256HexPure(message) {
+    initConstants();
+    var bytes = utf8Bytes(message);
+    var bitLen = bytes.length * 8;
+    bytes.push(0x80);
+    while ((bytes.length % 64) !== 56) bytes.push(0);
+    var hi = Math.floor(bitLen / 4294967296);
+    var lo = bitLen >>> 0;
+    var shift;
+    for (shift = 24; shift >= 0; shift -= 8) bytes.push((hi >>> shift) & 255);
+    for (shift = 24; shift >= 0; shift -= 8) bytes.push((lo >>> shift) & 255);
+
+    var h = H0.slice();
+    var w = new Array(64);
+    var off;
+    for (off = 0; off < bytes.length; off += 64) {
+      var i;
+      for (i = 0; i < 16; i++) {
+        var p = off + i * 4;
+        w[i] = ((bytes[p] << 24) | (bytes[p + 1] << 16) | (bytes[p + 2] << 8) | bytes[p + 3]) | 0;
+      }
+      for (i = 16; i < 64; i++) {
+        var s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+        var s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+      }
+      var a = h[0], b = h[1], c0 = h[2], d = h[3], e = h[4], f = h[5], g = h[6], hh = h[7];
+      for (i = 0; i < 64; i++) {
+        var S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+        var ch = (e & f) ^ ((~e) & g);
+        var temp1 = (hh + S1 + ch + K[i] + w[i]) | 0;
+        var S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+        var maj = (a & b) ^ (a & c0) ^ (b & c0);
+        var temp2 = (S0 + maj) | 0;
+        hh = g;
+        g = f;
+        f = e;
+        e = (d + temp1) | 0;
+        d = c0;
+        c0 = b;
+        b = a;
+        a = (temp1 + temp2) | 0;
+      }
+      h[0] = (h[0] + a) | 0;
+      h[1] = (h[1] + b) | 0;
+      h[2] = (h[2] + c0) | 0;
+      h[3] = (h[3] + d) | 0;
+      h[4] = (h[4] + e) | 0;
+      h[5] = (h[5] + f) | 0;
+      h[6] = (h[6] + g) | 0;
+      h[7] = (h[7] + hh) | 0;
+    }
+    var hex = '';
+    for (var hiWord = 0; hiWord < 8; hiWord++) {
+      for (shift = 28; shift >= 0; shift -= 4) {
+        hex += ((h[hiWord] >>> shift) & 15).toString(16);
+      }
+    }
+    return hex;
+  }
+
+  function sha256Hex(data) {
+    var text = data == null ? '' : String(data);
+    var cryptoJs = (typeof CryptoJS !== 'undefined') ? CryptoJS : null;
+    if (cryptoJs && typeof cryptoJs.SHA256 === 'function') {
+      return cryptoJs.SHA256(text).toString();
+    }
+    return sha256HexPure(text);
+  }
+
+  function hashFields(fields) {
+    return sha256Hex(JSON.stringify(canonicalizeObject(fields)));
+  }
+
+  function hashBlock(block) {
+    return hashFields(blockFieldsForHash(block));
+  }
+
+  var api = {
+    canonicalizeObject: canonicalizeObject,
+    blockFieldsForHash: blockFieldsForHash,
+    sha256Hex: sha256Hex,
+    sha256HexPure: sha256HexPure,
+    hashFields: hashFields,
+    hashBlock: hashBlock
+  };
+
+  root.LabBlockHash = api;
+})(typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : this));
+
+  }
   /** Median lookback for retarget, displayed pace, and stall-ease. Buffer still stores 20. */
   const RETARGET_INTERVAL_WINDOW = 12;
+  /**
+   * tipIndex - parentIndex greater than this is rejected ("Stale parent").
+   * Not unlimited: a linear private chain never hits the sibling cap, and each
+   * accepted orphan is broadcast and forces a full fork-choice walk.
+   * pruneDistantOrphans(32) and compactChainForTransport already bound
+   * localStorage and MQTT, so this cap is about flood, not disk.
+   */
+  const STALE_PARENT_LIMIT = 10;
 
   function txFundsCover(have, need) {
     return (Number(have) + 1e-9) >= Number(need);
@@ -183,6 +378,26 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       if (nextChar && nextChar.toLowerCase() > secHex) return false;
     }
     return true;
+  }
+
+  /**
+   * SHA-256 over the same canonical field set mineBatch hashes
+   * (index, timestamp, nonce, previousHash, transactions, miner, difficulty, forkId).
+   * Sync: CryptoJS when the page loaded it, otherwise the pure helper in blockHash.js.
+   */
+  static hashBlock(block) {
+    var api = null;
+    if (typeof LabBlockHash !== 'undefined' && LabBlockHash && typeof LabBlockHash.hashBlock === 'function') {
+      api = LabBlockHash;
+    } else if (typeof window !== 'undefined' && window.LabBlockHash && typeof window.LabBlockHash.hashBlock === 'function') {
+      api = window.LabBlockHash;
+    }
+    if (!api) return '';
+    try {
+      return api.hashBlock(block);
+    } catch (e) {
+      return '';
+    }
   }
 
   /** Median of positive samples. More stable than the mean for classroom bursts/stalls. */
@@ -1596,6 +1811,25 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       };
     }
 
+    // Recompute SHA-256 over the canonical miner fields, including transactions.
+    // A client-supplied hash with enough leading zeros is not proof of work.
+    const expectedHash = RelayBlockchainState.hashBlock(block);
+    const tipNow = this.chain.length ? this.chain[this.chain.length - 1] : null;
+    const hashReject = (reason) => ({
+      accepted: false,
+      reason: reason,
+      chain: this.chain.slice(),
+      newHeight: Math.max(0, this.chain.length - 1),
+      tipHash: tipNow && tipNow.hash,
+      tipIndex: tipNow && tipNow.index != null ? tipNow.index : Math.max(0, this.chain.length - 1)
+    });
+    if (!expectedHash) {
+      return hashReject('Block hash could not be verified');
+    }
+    if (String(block.hash).toLowerCase() !== String(expectedHash).toLowerCase()) {
+      return hashReject('Block hash does not match block contents');
+    }
+
     // PoW check: leading zeros + secondary hex nibble (matches miner isValidHash)
     const leading = (this.settings.difficultyLeading != null) ? this.settings.difficultyLeading : 3;
     const secondary = (this.settings.difficultySecondary != null) ? this.settings.difficultySecondary : 8;
@@ -1670,7 +1904,9 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     }
 
     // Re-verify every included transfer (structure, replay, spendability).
-    // The block hash commits to the tx list, so a bad transfer rejects the block.
+    // The recomputed block hash commits to this transaction list, so a client
+    // that rewrites transactions without re-mining is rejected above. A list
+    // that was actually mined can still fail replay or balance checks here.
     const blockTxs = Array.isArray(block.transactions) ? block.transactions : [];
     if (blockTxs.length) {
       const txCheck = this._verifyIncludedTransactions(block);
@@ -1701,9 +1937,16 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       console.warn('[RelayState] Block parent not yet known — storing as orphan until parent arrives');
     }
 
-    // Sleeping phones keep hashing a stale parent. Accepting those as orphans
-    // floods the projector and the phone never follows the real tip.
-    // Same-height races and short classroom 51% forks (default 2 back) still pass.
+    // Sleeping phones keep hashing a stale parent. Each accepted orphan is
+    // broadcast and kept until pruneDistantOrphans (32 behind the tip), and
+    // a non-tip block runs the full _selectBestChain walk. A linear private
+    // chain does not hit the sibling cap, so removing this check lets one
+    // background tab flood the room for as long as it hashes. localStorage
+    // (getFullState → _blocksForPersist) and compactChainForTransport already
+    // bound memory and the MQTT body, which is why the cap is 10 rather than
+    // the old 4: classroom 51% forks from 5–10 back still fit inside the
+    // prune window, and a phone that missed a long stretch is still rejected.
+    // Same-height races still pass. Hard-fork parent rules are handled above.
     if (
       oldTip &&
       block.previousHash !== '0' &&
@@ -1715,7 +1958,7 @@ if (typeof window.RelayBlockchainState === 'undefined') {
       if (parent) {
         const parentIndex = parent.index != null ? Number(parent.index) : -1;
         const tipIndex = oldTip.index != null ? Number(oldTip.index) : Math.max(0, this.chain.length - 1);
-        if (parentIndex >= 0 && tipIndex - parentIndex > 4) {
+        if (parentIndex >= 0 && tipIndex - parentIndex > STALE_PARENT_LIMIT) {
           return {
             accepted: false,
             reason: 'Stale parent — mine on the current hub tip',
@@ -2392,4 +2635,5 @@ if (typeof window.RelayBlockchainState === 'undefined') {
 
 window.RelayBlockchainState = RelayBlockchainState;
 RelayBlockchainState.RETARGET_INTERVAL_WINDOW = RETARGET_INTERVAL_WINDOW;
+RelayBlockchainState.STALE_PARENT_LIMIT = STALE_PARENT_LIMIT;
   } // end guard

@@ -71,7 +71,7 @@ block content
         |  and
         |
         code _selectBestChain
-        |  in RelayBlockchainState. The longest chain wins, and a tie stays with the chain the hub saw first. The hub also rejects a block whose parent is more than 4 blocks behind the current tip, so a phone that fell asleep cannot flood the class with old work. For an attacker that rule is final. Once their private tip is 5 blocks behind, the next private block is rejected and they cannot catch up. Give-up depth defaults to 5 so a failed trial ends on that wall. A smaller give-up means the attacker quits while the hub would still accept another block. A larger give-up still ends at 5, because the hub will not take the block.
+        |  in RelayBlockchainState. The longest chain wins, and a tie stays with the chain the hub saw first. The hub also rejects a block whose parent is more than 10 blocks behind the current tip, so a phone that fell asleep cannot flood the class with old work. For an attacker that rule is final. Once their private tip is 11 blocks behind, the next private block is rejected and they cannot catch up. Give-up depth defaults to 11 so a failed trial ends on that wall. A smaller give-up means the attacker quits while the hub would still accept another block. A larger give-up still ends at 11, because the hub will not take a parent more than 10 blocks back.
       p(style="margin-bottom:0;")
         | The clock is simulated. The wait between blocks is random, and the average wait is the block time you set (10 seconds is the classroom default). The time column is that chain clock. This page does not mine on a live class session.
 
@@ -110,8 +110,8 @@ block content
             .col-sm-3
               .form-group
                 label(for="atkGiveUp") Give-up depth
-                input.form-control#atkGiveUp(type="number" min="2" max="64" step="1" value="5")
-                p.help-block Attacker stops this far behind. The lab’s stale-parent wall is 5.
+                input.form-control#atkGiveUp(type="number" min="2" max="64" step="1" value="11")
+                p.help-block Attacker stops this far behind. The lab’s stale-parent wall is 11.
             .col-sm-3
               .form-group
                 label(for="atkSeed") Seed (optional)
@@ -159,7 +159,8 @@ block content
           details
             summary How to read a row
             p(style="margin:8px 0 0;")
-              | Win means the attacker’s block became the hub’s canonical tip, listed as “Reorg at block N”. Fail means the public tip pulled that many blocks ahead of the private tip. At 5 behind, the next private block would be rejected as a stale parent, so the attacker cannot recover. Block counts and the clock start when the race starts, after the honest pre-chain is already in place.
+              | Win means the attacker’s block became the hub’s canonical tip, listed as “Reorg at block N”. Fail means the public tip pulled that many blocks ahead of the private tip. At 11 behind, the next private block would be rejected as a stale parent, so the attacker cannot recover. Block counts and the clock start when the race starts, after the honest pre-chain is already in place.
 
-  script(src="/javascripts/network/RelayBlockchainState.js?v=p4fix13")
-  script(src="/javascripts/lab/attackSim.js?v=attacksim1")
+  script(src="/javascripts/lab/blockHash.js?v=hashfix1")
+  script(src="/javascripts/network/RelayBlockchainState.js?v=p4fix15")
+  script(src="/javascripts/lab/attackSim.js?v=attacksim2")

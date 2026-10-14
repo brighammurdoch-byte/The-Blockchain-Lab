@@ -63,6 +63,27 @@ function sha256Hex(data) {
   return CryptoJS.SHA256(data).toString();
 }
 
+function loadBlockHash(blockHashUrl) {
+  if (typeof LabBlockHash !== 'undefined' && LabBlockHash.hashFields) return;
+  var url = blockHashUrl;
+  if (!url) {
+    try {
+      url = new URL('blockHash.js', self.location.href).href;
+    } catch (e) {
+      url = '';
+    }
+  }
+  if (!url) return;
+  try { importScripts(url); } catch (e) {}
+}
+
+function digestFields(fields) {
+  if (typeof LabBlockHash !== 'undefined' && LabBlockHash.hashFields) {
+    return LabBlockHash.hashFields(fields);
+  }
+  return sha256Hex(JSON.stringify(canonicalizeObject(fields)));
+}
+
 function canonicalizeObject(obj) {
   if (Array.isArray(obj)) {
     return obj.map(function (item) {
@@ -145,7 +166,7 @@ function mineBatch() {
       forkId: block.forkId
     };
 
-    hash = sha256Hex(JSON.stringify(canonicalizeObject(blockObj)));
+    hash = digestFields(blockObj);
 
     if (isValidHash(hash, difficulty)) {
       block.hash = hash;
@@ -197,6 +218,7 @@ self.onmessage = function (e) {
   if (cmd === 'init') {
     ensureCrypto(d.sha256Url)
       .then(function () {
+        loadBlockHash(d.blockHashUrl);
         self.postMessage({ type: 'ready' });
       })
       .catch(function (err) {
@@ -211,6 +233,7 @@ self.onmessage = function (e) {
   if (cmd === 'start') {
     ensureCrypto(d.sha256Url)
       .then(function () {
+        loadBlockHash(d.blockHashUrl);
         clearTimer();
         running = true;
         var pace = clampPace(d.delay, d.batchSize);
