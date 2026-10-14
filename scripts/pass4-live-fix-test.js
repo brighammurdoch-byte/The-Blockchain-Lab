@@ -22,16 +22,28 @@ function loadRelay() {
   return ctx.window.RelayBlockchainState;
 }
 
-function makeBlock(index, hash, prev, extra) {
-  return Object.assign({
+function makeBlock(index, _placeholderHash, prev, extra) {
+  const block = Object.assign({
     index: index,
-    hash: hash,
     previousHash: prev || (index === 0 ? '0' : 'h' + (index - 1)),
     miner: index === 0 ? 'genesis' : 'miner-1',
     timestamp: 1000 + index * 1000,
-    nonce: index,
-    transactions: []
+    nonce: 0,
+    transactions: [],
+    difficulty: 1
   }, extra || {});
+  let nonce = 0;
+  let hash = '';
+  for (; nonce < 200000; nonce++) {
+    block.nonce = nonce;
+    hash = Relay.hashBlock(block);
+    if (Relay.prototype.hashMeetsDifficulty(hash, 1, 15)) break;
+  }
+  if (!Relay.prototype.hashMeetsDifficulty(hash, 1, 15)) {
+    throw new Error('fixture nonce search failed');
+  }
+  block.hash = hash;
+  return block;
 }
 
 const Relay = loadRelay();
@@ -241,7 +253,7 @@ const Relay = loadRelay();
   else fail('Wallet balance matches new canonical chain', wAfter ? String(wAfter.balance) : 'missing');
   if (m2 && Number(m2.balance) === 0) pass('Miner 2 is not credited for a vanished transfer', String(m2.balance));
   else fail('Miner 2 is not credited for a vanished transfer', m2 ? String(m2.balance) : 'missing');
-  if (tip && tip.hash === '0000b2' && tipTxs.length === 0) {
+  if (tip && tip.hash === c2.hash && tipTxs.length === 0) {
     pass('Replacement tip has Txs 0 (old #1 is not still showing the transfer)', tip.hash);
   } else {
     fail('Replacement tip has Txs 0 (old #1 is not still showing the transfer)',

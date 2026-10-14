@@ -34,16 +34,28 @@ function labWith() {
   return lab;
 }
 
-function block(index, hash, prev, extra) {
-  return Object.assign({
+function block(index, _placeholderHash, prev, extra) {
+  const built = Object.assign({
     index: index,
-    hash: hash,
     previousHash: prev,
     timestamp: Date.now(),
-    nonce: 1,
+    nonce: 0,
     transactions: [],
-    miner: 'miner-1'
+    miner: 'miner-1',
+    difficulty: 1
   }, extra || {});
+  let nonce = 0;
+  let hash = '';
+  for (; nonce < 200000; nonce++) {
+    built.nonce = nonce;
+    hash = Relay.hashBlock(built);
+    if (Relay.prototype.hashMeetsDifficulty(hash, 1, 15)) break;
+  }
+  if (!Relay.prototype.hashMeetsDifficulty(hash, 1, 15)) {
+    throw new Error('fixture nonce search failed');
+  }
+  built.hash = hash;
+  return built;
 }
 
 (function () {
