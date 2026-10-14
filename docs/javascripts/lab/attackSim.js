@@ -5,15 +5,22 @@
  * hash share (Math.random, or a seedable RNG). Nothing forces a win or a loss.
  *
  * Fork choice is the live hub: RelayBlockchainState.tryAddBlock and
- * _selectBestChain. The hub rejects a parent more than 4 blocks behind the
- * tip (tipIndex - parentIndex > 4), so a private chain 5 behind is finished.
+ * _selectBestChain. The hub rejects a parent more than STALE_PARENT_LIMIT
+ * blocks behind the tip, so a private chain one past that is finished.
  */
 (function (global) {
   'use strict';
 
-  /** Matches tryAddBlock: `tipIndex - parentIndex > 4` is a stale parent. */
-  var STALE_PARENT_LIMIT = 4;
+  /** Matches tryAddBlock: `tipIndex - parentIndex > STALE_PARENT_LIMIT`. */
+  var STALE_PARENT_LIMIT = (function () {
+    var Relay = global.RelayBlockchainState;
+    var n = Relay && Number(Relay.STALE_PARENT_LIMIT);
+    return (isFinite(n) && n >= 0) ? n : 10;
+  })();
   var STALE_GAP = STALE_PARENT_LIMIT + 1;
+  /** Tiny proof-of-work so each simulated block's hash is a real digest. */
+  var SIM_LEADING = 1;
+  var SIM_SECONDARY = 15;
 
   function getRelay(opts) {
     if (opts && opts.Relay) return opts.Relay;
@@ -142,23 +149,29 @@
     return -Math.log(1 - u) * mean;
   }
 
-  function fakeHash(n) {
-    var body = n.toString(16);
-    while (body.length < 60) body = '0' + body;
-    return '0000' + body;
-  }
-
-  function makeBlock(parent, miner, seq) {
-    return {
+  function makeBlock(parent, miner, seq, Relay) {
+    var block = {
       index: parent.index + 1,
       previousHash: parent.hash,
-      hash: fakeHash(seq),
-      timestamp: 1,
-      nonce: seq,
+      timestamp: seq,
+      nonce: 0,
       transactions: [],
       miner: miner,
-      difficulty: 4
+      difficulty: SIM_LEADING
     };
+    var nonce = 0;
+    var hash = '';
+    if (!Relay || typeof Relay.hashBlock !== 'function') {
+      throw new Error('RelayBlockchainState.hashBlock is not loaded');
+    }
+    for (; nonce < 200000; nonce++) {
+      block.nonce = nonce;
+      hash = Relay.hashBlock(block);
+      if (Relay.prototype.hashMeetsDifficulty(hash, SIM_LEADING, SIM_SECONDARY)) break;
+    }
+    block.hash = hash;
+    block.nonce = nonce;
+    return block;
   }
 
   function tipOf(state) {
@@ -175,15 +188,15 @@
     var state = new o.Relay('SIM');
     state.updateSettings({
       autoDifficulty: false,
-      difficultyLeading: 4,
-      difficultySecondary: 15
+      difficultyLeading: SIM_LEADING,
+      difficultySecondary: SIM_SECONDARY
     });
     state.ensureGenesis();
 
     var seq = 1;
     var i;
     for (i = 0; i < o.preChain; i++) {
-      var setup = makeBlock(tipOf(state), 'honest', seq++);
+      var setup = makeBlock(tipOf(state), 'honest', seq++, o.Relay);
       var setupResult = state.tryAddBlock(setup, 'honest');
       if (!setupResult.accepted) {
         return finish(o, state, null, false, 0, 0, 0, 0, 'Rejected: ' + setupResult.reason);
@@ -204,7 +217,7 @@
       events += 1;
       seconds += expoWait(o.rnd, o.avgBlockTime);
       if (o.rnd() < o.share) {
-        var block = makeBlock(atk, 'attacker', seq++);
+        var block = makeBlock(atk, 'attacker', seq++, o.Relay);
         var added = state.tryAddBlock(block, 'attacker');
         if (!added.accepted) {
           var stuck = tipOf(state).index - atk.index;
@@ -222,7 +235,7 @@
           );
         }
       } else {
-        var honest = makeBlock(tipOf(state), 'honest', seq++);
+        var honest = makeBlock(tipOf(state), 'honest', seq++, o.Relay);
         var honestResult = state.tryAddBlock(honest, 'honest');
         if (!honestResult.accepted) {
           return finish(o, state, atk, false, attackerBlocks, honestBlocks, seconds, events, 'Rejected: ' + honestResult.reason);
@@ -508,7 +521,8 @@
           var wallNote = '';
           if (options.giveUp > STALE_GAP) {
             wallNote = ' Give-up was set to ' + options.giveUp +
-              '. Trials still stop at 5 behind, because the hub rejects a parent more than 4 blocks back.';
+              '. Trials still stop at ' + STALE_GAP + ' behind, because the hub rejects a parent more than ' +
+              STALE_PARENT_LIMIT + ' blocks back.';
           }
           if (status) {
             status.textContent = 'Finished ' + study.rows.length + ' trials in ' + browserSec +

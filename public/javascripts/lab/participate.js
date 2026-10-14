@@ -405,6 +405,10 @@ function getSha256ScriptUrl() {
   return getLabAssetAbsoluteUrl('/javascripts/lib/sha256.js');
 }
 
+function getBlockHashScriptUrl() {
+  return getLabAssetAbsoluteUrl('/javascripts/lab/blockHash.js');
+}
+
 /**
  * Build a blob:// worker URL with PoW inlined (importScripts loads CryptoJS).
  * Blob workers avoid path/404 issues on GitHub Pages and survive more reliably.
@@ -428,6 +432,15 @@ function ensureCrypto(sha256Url){
   });
 }
 function sha256Hex(data){ return CryptoJS.SHA256(data).toString(); }
+function loadBlockHash(blockHashUrl){
+  if (typeof LabBlockHash !== 'undefined' && LabBlockHash.hashFields) return;
+  if (!blockHashUrl) return;
+  try { importScripts(blockHashUrl); } catch (e) {}
+}
+function digestFields(fields){
+  if (typeof LabBlockHash !== 'undefined' && LabBlockHash.hashFields) return LabBlockHash.hashFields(fields);
+  return sha256Hex(JSON.stringify(canonicalizeObject(fields)));
+}
 function canonicalizeObject(obj){
   if (Array.isArray(obj)) return obj.map(canonicalizeObject);
   if (obj !== null && typeof obj === 'object') {
@@ -467,10 +480,10 @@ function mineBatch(){
   var block = job.block, difficulty = job.difficulty, batchSize = pace.batchSize, i, hash;
   for (i = 0; i < batchSize; i++) {
     if (!running) return;
-    hash = sha256Hex(JSON.stringify(canonicalizeObject({
+    hash = digestFields({
       index: block.index, timestamp: block.timestamp, nonce: nonce, previousHash: block.previousHash,
       transactions: block.transactions, miner: block.miner, difficulty: block.difficulty, forkId: block.forkId
-    })));
+    });
     if (isValidHash(hash, difficulty)) {
       block.hash = hash; block.nonce = nonce;
       var foundElapsed = Math.max(0.05, (Date.now() - startTime) / 1000);
@@ -488,12 +501,13 @@ function mineBatch(){
 self.onmessage = function(e){
   var d = e.data || {}, cmd = d.command;
   if (cmd === 'init') {
-    ensureCrypto(d.sha256Url).then(function(){ self.postMessage({ type: 'ready' }); })
+    ensureCrypto(d.sha256Url).then(function(){ loadBlockHash(d.blockHashUrl); self.postMessage({ type: 'ready' }); })
       .catch(function(err){ self.postMessage({ type: 'error', message: (err && err.message) || String(err) }); });
     return;
   }
   if (cmd === 'start') {
     ensureCrypto(d.sha256Url).then(function(){
+      loadBlockHash(d.blockHashUrl);
       clearTimer(); running = true;
       var pace = clampPace(d.delay, d.batchSize);
       job = { gen: d.gen, block: d.block, difficulty: d.difficulty, delay: pace.delay, batchSize: pace.batchSize };
@@ -580,7 +594,7 @@ function ensureMiningWorker() {
     }
   };
   try {
-    miningWorker.postMessage({ command: 'init', sha256Url: getSha256ScriptUrl() });
+    miningWorker.postMessage({ command: 'init', sha256Url: getSha256ScriptUrl(), blockHashUrl: getBlockHashScriptUrl() });
   } catch (e) {
     miningWorkerFailed = true;
     try { miningWorker.terminate(); } catch (err) {}
@@ -863,6 +877,7 @@ function startWorkerMiningJob(block) {
     command: 'start',
     gen: gen,
     sha256Url: getSha256ScriptUrl(),
+    blockHashUrl: getBlockHashScriptUrl(),
     block: JSON.parse(JSON.stringify(Object.assign({}, block, { difficulty: difficulty }))),
     difficulty: difficulty,
     delay: pace.delay,
@@ -3836,7 +3851,9 @@ function mineBlockOnMainThread(block, adminSettings) {
         difficulty: block.difficulty,
         forkId: block.forkId
       };
-      const hash = sha256(JSON.stringify(canonicalizeObject(blockObj)));
+      const hash = (window.LabBlockHash && LabBlockHash.hashFields)
+        ? LabBlockHash.hashFields(blockObj)
+        : sha256(JSON.stringify(canonicalizeObject(blockObj)));
       if (isValidHash(hash, block.difficulty)) {
         block.hash = hash;
         block.nonce = nonce;
