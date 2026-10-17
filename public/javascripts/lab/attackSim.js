@@ -18,6 +18,12 @@
     return (isFinite(n) && n >= 0) ? n : 10;
   })();
   var STALE_GAP = STALE_PARENT_LIMIT + 1;
+  /**
+   * Hard stop for one trial. A fair race against a give-up of 11 finishes
+   * far below this. Hitting it means the trial can no longer reach a reorg
+   * or the give-up wall, so the row is "Timed out" rather than a picked winner.
+   */
+  var SAFETY_BLOCK_CAP = 512;
   /** Tiny proof-of-work so each simulated block's hash is a real digest. */
   var SIM_LEADING = 1;
   var SIM_SECONDARY = 15;
@@ -127,7 +133,14 @@
         '). The attack already begins that far behind.'
       );
     }
-    var maxEvents = opts.maxEvents == null ? 4000 : requireInt(opts.maxEvents, 1, 100000, 'Block limit');
+    var safetyCap = SAFETY_BLOCK_CAP;
+    if (opts.safetyCap != null) {
+      safetyCap = requireInt(opts.safetyCap, 1, SAFETY_BLOCK_CAP, 'Safety cap');
+    }
+    var explicitMax = opts.maxEvents != null;
+    var maxEvents = explicitMax
+      ? requireInt(opts.maxEvents, 1, 100000, 'Block limit')
+      : safetyCap;
     var rnd = typeof opts.rnd === 'function' ? opts.rnd : Math.random;
     return {
       share: share,
@@ -137,6 +150,8 @@
       giveUp: giveUp,
       stopAt: Math.min(giveUp, STALE_GAP),
       maxEvents: maxEvents,
+      safetyCap: safetyCap,
+      explicitMax: explicitMax,
       rnd: rnd,
       Relay: getRelay(opts)
     };
@@ -192,6 +207,15 @@
       difficultySecondary: SIM_SECONDARY
     });
     state.ensureGenesis();
+    // The hub drops non-canonical blocks more than 32 behind the tip. A private
+    // chain that stays inside the give-up gap is still anchored at the original
+    // fork, so once the public tip is 33 past that anchor the anchor is deleted.
+    // _selectBestChain then cannot walk the private chain to genesis, a longer
+    // attacker chain never reorgs, and tipIndex - atkIndex goes negative so the
+    // give-up check never fires. The trial used to spin until the block cap and
+    // lock the tab. Keep every block for this in-memory race; the safety cap
+    // bounds how large it can grow. The live hub is unchanged.
+    state.pruneDistantOrphans = function () { return 0; };
 
     var seq = 1;
     var i;
@@ -209,7 +233,8 @@
     var attackerBlocks = 0;
     var honestBlocks = 0;
 
-    while (events < o.maxEvents) {
+    var blockLimit = Math.min(o.maxEvents, o.safetyCap);
+    while (events < blockLimit) {
       var gap = tipOf(state).index - atk.index;
       if (gap >= o.stopAt) {
         return finish(o, state, atk, false, attackerBlocks, honestBlocks, seconds, events, 'Fell ' + gap + ' behind');
@@ -244,7 +269,11 @@
       }
     }
 
-    return finish(o, state, atk, false, attackerBlocks, honestBlocks, seconds, events, 'Reached the block limit');
+    var timedOut = !o.explicitMax || (events >= o.safetyCap && o.safetyCap < o.maxEvents);
+    return finish(
+      o, state, atk, false, attackerBlocks, honestBlocks, seconds, events,
+      timedOut ? 'Timed out' : 'Reached the block limit'
+    );
   }
 
   function finish(o, state, atk, ok, attackerBlocks, honestBlocks, seconds, events, reason) {
@@ -307,6 +336,7 @@
           avgBlockTime: opts.avgBlockTime,
           giveUp: opts.giveUp,
           maxEvents: opts.maxEvents,
+          safetyCap: opts.safetyCap,
           rnd: rnd,
           Relay: opts.Relay
         });
@@ -329,43 +359,44 @@
 
     function tick() {
       if (hooks.isCancelled && hooks.isCancelled()) return;
-      var started = Date.now();
-      try {
-        while (si < shares.length && Date.now() - started < 20) {
-          var row = runTrial({
-            share: shares[si],
-            back: opts.back,
-            preChain: opts.preChain,
-            avgBlockTime: opts.avgBlockTime,
-            giveUp: opts.giveUp,
-            rnd: rnd,
-            Relay: opts.Relay
+      if (si >= shares.length) {
+        if (hooks.onDone) {
+          hooks.onDone({
+            rows: rows,
+            summary: summarize(rows),
+            seedLabel: rnd.label || '',
+            seeded: !!rnd.seeded
           });
-          row.n = rows.length + 1;
-          rows.push(row);
-          ti += 1;
-          if (ti >= trials) {
-            ti = 0;
-            si += 1;
-          }
+        }
+        return;
+      }
+      // One trial per turn. A single race used to run to the block cap inside
+      // this callback, so the 20ms slice never got to yield and the tab locked.
+      try {
+        var row = runTrial({
+          share: shares[si],
+          back: opts.back,
+          preChain: opts.preChain,
+          avgBlockTime: opts.avgBlockTime,
+          giveUp: opts.giveUp,
+          maxEvents: opts.maxEvents,
+          safetyCap: opts.safetyCap,
+          rnd: rnd,
+          Relay: opts.Relay
+        });
+        row.n = rows.length + 1;
+        rows.push(row);
+        ti += 1;
+        if (ti >= trials) {
+          ti = 0;
+          si += 1;
         }
       } catch (err) {
         if (hooks.onError) hooks.onError(err);
         return;
       }
-      if (si < shares.length) {
-        if (hooks.onProgress) hooks.onProgress(rows.length, total);
-        setTimeout(tick, 0);
-        return;
-      }
-      if (hooks.onDone) {
-        hooks.onDone({
-          rows: rows,
-          summary: summarize(rows),
-          seedLabel: rnd.label || '',
-          seeded: !!rnd.seeded
-        });
-      }
+      if (hooks.onProgress) hooks.onProgress(rows.length, total);
+      setTimeout(tick, 0);
     }
 
     if (!total) {
@@ -560,6 +591,7 @@
   global.AttackSim = {
     STALE_PARENT_LIMIT: STALE_PARENT_LIMIT,
     STALE_GAP: STALE_GAP,
+    SAFETY_BLOCK_CAP: SAFETY_BLOCK_CAP,
     parseShares: parseShares,
     createRng: createRng,
     formatShare: formatShare,

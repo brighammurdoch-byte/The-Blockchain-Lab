@@ -293,6 +293,79 @@ function scripted(values) {
   }
 })();
 
+(function prunedForkAnchor() {
+  // Seed 3, 55%, 2 back, give-up 11 — page defaults aside from the share.
+  // Brute force: this seed used to pass the block cap with a negative gap
+  // (still running at 250 blocks, gap -8). pruneDistantOrphans(32) had deleted
+  // the fork anchor, so the longer private chain could not reorg and the
+  // give-up check (tipIndex - atkIndex) never fired. Same draws now reorg.
+  const row = Sim.runTrial({
+    share: 0.55,
+    back: 2,
+    preChain: 10,
+    avgBlockTime: 10,
+    giveUp: 11,
+    rnd: Sim.createRng(3),
+    Relay: Relay
+  });
+  if (row.ok && row.reason === 'Reorg at block 72' && row.attackerBlocks === 64 &&
+      row.honestBlocks === 61 && row.events === 125 && row.tipMiner === 'attacker' &&
+      row.tipIndex === 72 && row.gap === 0 && row.events < Sim.SAFETY_BLOCK_CAP) {
+    pass('Seed 3 at 55% reorgs instead of spinning', row.events + ' events, ' + row.reason);
+  } else {
+    fail('Seed 3 at 55% reorgs instead of spinning', JSON.stringify(row));
+  }
+
+  // Same failure at 45%, which is the share on screen when a 5-trial batch
+  // sits on "trial 10 of 20". This seed was still running at 250 blocks.
+  const fortyFive = Sim.runTrial({
+    share: 0.45,
+    back: 2,
+    preChain: 10,
+    avgBlockTime: 10,
+    giveUp: 11,
+    rnd: Sim.createRng(162),
+    Relay: Relay
+  });
+  if (fortyFive.ok && fortyFive.reason === 'Reorg at block 51' && fortyFive.events === 83 &&
+      fortyFive.attackerBlocks === 43 && fortyFive.honestBlocks === 40 &&
+      fortyFive.tipMiner === 'attacker' && fortyFive.events < Sim.SAFETY_BLOCK_CAP) {
+    pass('Seed 162 at 45% reorgs instead of spinning', fortyFive.events + ' events, ' + fortyFive.reason);
+  } else {
+    fail('Seed 162 at 45% reorgs instead of spinning', JSON.stringify(fortyFive));
+  }
+})();
+
+(function safetyCap() {
+  // Honest, attacker, honest, attacker… gap stays at 2 or 3. No reorg, no give-up.
+  let i = 0;
+  const rnd = function () {
+    const draw = i++;
+    if (draw % 2 === 0) return 0.5;
+    const event = Math.floor(draw / 2);
+    return event % 2 === 0 ? 0.99 : 0.01;
+  };
+  const row = Sim.runTrial({
+    share: 0.45,
+    back: 2,
+    preChain: 10,
+    avgBlockTime: 10,
+    giveUp: 11,
+    safetyCap: 24,
+    rnd: rnd,
+    Relay: Relay
+  });
+  if (!row.ok && row.reason === 'Timed out' && row.events === 24 &&
+      row.attackerBlocks === 12 && row.honestBlocks === 12 && row.gap === 2) {
+    pass('Safety cap reports Timed out', row.reason + ' after ' + row.events);
+  } else {
+    fail('Safety cap reports Timed out', JSON.stringify(row));
+  }
+
+  if (Sim.SAFETY_BLOCK_CAP === 512) pass('Safety cap stays under a second of blocks', String(Sim.SAFETY_BLOCK_CAP));
+  else fail('Safety cap stays under a second of blocks', String(Sim.SAFETY_BLOCK_CAP));
+})();
+
 const failed = results.filter((r) => !r.ok).length;
 console.log('\n==== attack-sim-unit-test: ' + (results.length - failed) + '/' + results.length + ' passed ====');
 process.exit(failed ? 1 : 0);
