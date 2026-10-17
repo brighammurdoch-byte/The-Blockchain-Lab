@@ -206,8 +206,11 @@ if (typeof window.RelayBlockchainState === 'undefined') {
    * tipIndex - parentIndex greater than this is rejected ("Stale parent").
    * Not unlimited: a linear private chain never hits the sibling cap, and each
    * accepted orphan is broadcast and forces a full fork-choice walk.
-   * pruneDistantOrphans(32) and compactChainForTransport already bound
-   * localStorage and MQTT, so this cap is about flood, not disk.
+   * A competing tip inside this window is still live: pruneDistantOrphans
+   * keeps its ancestors so a longer chain can reorg, and drops a dead fork
+   * only after that tip itself falls outside the window. That set is what
+   * _blocksForPersist writes to localStorage. compactChainForTransport
+   * bounds the MQTT body. This cap is about flood, not disk.
    */
   const STALE_PARENT_LIMIT = 10;
 
@@ -1389,9 +1392,23 @@ if (typeof window.RelayBlockchainState === 'undefined') {
    * the NEW side never "wins" via pure length and erases the permanent split.
    */
   /**
-   * Drop race-loser blocks that are far behind the tip so the hub Map and
-   * projector cannot grow without bound (admin Aw Snap at height 264+).
-   * Keeps the canonical chain plus recent orphans for short 51% / reorg demos.
+   * Drop race-loser blocks that are far behind the tip so the hub Map,
+   * localStorage (_blocksForPersist), and the projector cannot grow without
+   * bound (admin Aw Snap at height 264+).
+   *
+   * Never drop an ancestor of a live competing tip: a stored block with no
+   * child whose index is still within STALE_PARENT_LIMIT of the canonical
+   * tip. An even 51% race keeps that tip a few blocks behind for a long
+   * time; deleting the fork's early blocks made _pathToGenesis return null
+   * and _selectBestChain could not reorg onto a longer attacker chain.
+   * A dead fork (its own tip more than STALE_PARENT_LIMIT behind) loses
+   * blocks only once that tip is outside the window, and only the blocks
+   * more than keepBehind behind the canonical tip.
+   *
+   * Bound: the canonical chain, plus at most two extra linear chains (the
+   * sibling cap is 2 per parent/index/fork) while their tips stay inside
+   * the stale-parent window, plus other orphans inside keepBehind.
+   * compactChainForTransport still sends only a canonical suffix on MQTT.
    */
   pruneDistantOrphans(keepBehind) {
     keepBehind = keepBehind == null ? 32 : Math.max(8, Number(keepBehind) || 32);
@@ -1404,9 +1421,34 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     (this.chain || []).forEach(function (b) {
       if (b && b.hash) mainHashes.add(b.hash);
     });
-    const drop = [];
+
+    const childCount = new Map();
+    this.allBlocks.forEach((b) => {
+      if (!b || b.previousHash == null || b.previousHash === '') return;
+      const prev = String(b.previousHash);
+      childCount.set(prev, (childCount.get(prev) || 0) + 1);
+    });
+
+    // Ancestors of every competing tip still inside the stale-parent window.
+    const protectedHashes = new Set();
     this.allBlocks.forEach((b, hash) => {
       if (!b || !hash || mainHashes.has(hash)) return;
+      if ((childCount.get(String(hash)) || 0) > 0) return;
+      const idx = b.index != null ? Number(b.index) : -1;
+      if (!(idx >= 0 && tipIndex - idx <= STALE_PARENT_LIMIT)) return;
+      let cur = b;
+      const seen = new Set();
+      while (cur && cur.hash && !seen.has(cur.hash)) {
+        seen.add(cur.hash);
+        protectedHashes.add(cur.hash);
+        if (mainHashes.has(cur.hash)) break;
+        cur = this.allBlocks.get(cur.previousHash);
+      }
+    });
+
+    const drop = [];
+    this.allBlocks.forEach((b, hash) => {
+      if (!b || !hash || mainHashes.has(hash) || protectedHashes.has(hash)) return;
       if (b.miner === 'genesis' || b.index === 0) return;
       const idx = b.index != null ? Number(b.index) : -1;
       if (idx >= 0 && tipIndex - idx > keepBehind) drop.push(hash);
@@ -1938,14 +1980,15 @@ if (typeof window.RelayBlockchainState === 'undefined') {
     }
 
     // Sleeping phones keep hashing a stale parent. Each accepted orphan is
-    // broadcast and kept until pruneDistantOrphans (32 behind the tip), and
-    // a non-tip block runs the full _selectBestChain walk. A linear private
-    // chain does not hit the sibling cap, so removing this check lets one
-    // background tab flood the room for as long as it hashes. localStorage
-    // (getFullState → _blocksForPersist) and compactChainForTransport already
-    // bound memory and the MQTT body, which is why the cap is 10 rather than
-    // the old 4: classroom 51% forks from 5–10 back still fit inside the
-    // prune window, and a phone that missed a long stretch is still rejected.
+    // broadcast, and a non-tip block runs the full _selectBestChain walk. A
+    // linear private chain does not hit the sibling cap, so removing this
+    // check lets one background tab flood the room for as long as it hashes.
+    // pruneDistantOrphans keeps ancestors of tips still within
+    // STALE_PARENT_LIMIT (a long even race can still reorg) and drops a dead
+    // fork's older blocks once that tip itself is outside the window.
+    // _blocksForPersist writes that set to localStorage, and
+    // compactChainForTransport bounds the MQTT body. The cap stays 10 rather
+    // than the old 4: a phone that missed a long stretch is still rejected.
     // Same-height races still pass. Hard-fork parent rules are handled above.
     if (
       oldTip &&
