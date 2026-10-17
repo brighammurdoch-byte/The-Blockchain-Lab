@@ -207,15 +207,6 @@
       difficultySecondary: SIM_SECONDARY
     });
     state.ensureGenesis();
-    // The hub drops non-canonical blocks more than 32 behind the tip. A private
-    // chain that stays inside the give-up gap is still anchored at the original
-    // fork, so once the public tip is 33 past that anchor the anchor is deleted.
-    // _selectBestChain then cannot walk the private chain to genesis, a longer
-    // attacker chain never reorgs, and tipIndex - atkIndex goes negative so the
-    // give-up check never fires. The trial used to spin until the block cap and
-    // lock the tab. Keep every block for this in-memory race; the safety cap
-    // bounds how large it can grow. The live hub is unchanged.
-    state.pruneDistantOrphans = function () { return 0; };
 
     var seq = 1;
     var i;
